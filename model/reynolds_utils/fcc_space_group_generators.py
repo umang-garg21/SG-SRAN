@@ -8,14 +8,8 @@ quat_matrix_expr = sp.Matrix(
 )
 
 # FCC Symms Matrix
-(
-    h,
-    i,
-) = sp.symbols("half inv_srqt_2")
-
-
+(h, i) = sp.symbols("half inv_srqt_2")
 h = 1 / 2
-
 i = 1 / np.sqrt(2)
 
 fcc_symms = sp.Matrix(

@@ -28,7 +28,7 @@ class QuaternionTransposeConv(Module):
         out_channels,
         kernel_size,
         stride,
-        dilatation=1,
+        dilation=1,
         padding=0,
         output_padding=0,
         groups=1,
@@ -49,7 +49,7 @@ class QuaternionTransposeConv(Module):
         self.padding = padding
         self.output_padding = output_padding
         self.groups = groups
-        self.dilatation = dilatation
+        self.dilation = dilation
         self.init_criterion = init_criterion
         self.weight_init = weight_init
         self.seed = seed if seed is not None else np.random.randint(0, 1234)
@@ -106,7 +106,7 @@ class QuaternionTransposeConv(Module):
                 self.padding,
                 self.output_padding,
                 self.groups,
-                self.dilatation,
+                self.dilation,
                 self.quaternion_format,
             )
         else:
@@ -121,7 +121,7 @@ class QuaternionTransposeConv(Module):
                 self.padding,
                 self.output_padding,
                 self.groups,
-                self.dilatation,
+                self.dilation,
             )
 
     def __repr__(self):
@@ -140,8 +140,8 @@ class QuaternionTransposeConv(Module):
             + str(self.stride)
             + ", padding="
             + str(self.padding)
-            + ", dilatation="
-            + str(self.dilatation)
+            + ", dilation="
+            + str(self.dilation)
             + ", init_criterion="
             + str(self.init_criterion)
             + ", weight_init="
@@ -163,7 +163,7 @@ class QuaternionConv(Module):
         out_channels,
         kernel_size,
         stride,
-        dilatation=1,
+        dilation=1,
         padding=0,
         groups=1,
         bias=True,
@@ -183,7 +183,7 @@ class QuaternionConv(Module):
         self.stride = stride
         self.padding = padding
         self.groups = groups
-        self.dilatation = dilatation
+        self.dilation = dilation
         self.init_criterion = init_criterion
         self.weight_init = weight_init
         self.seed = seed if seed is not None else np.random.randint(0, 1234)
@@ -208,6 +208,11 @@ class QuaternionConv(Module):
         self.i_weight = Parameter(torch.Tensor(*self.w_shape))
         self.j_weight = Parameter(torch.Tensor(*self.w_shape))
         self.k_weight = Parameter(torch.Tensor(*self.w_shape))
+
+        torch.nn.init.normal_(self.r_weight.data, std=0.02)
+        torch.nn.init.normal_(self.i_weight.data, std=0.02)
+        torch.nn.init.normal_(self.j_weight.data, std=0.02)
+        torch.nn.init.normal_(self.k_weight.data, std=0.02)
 
         if self.scale:
             self.scale_param = Parameter(torch.Tensor(self.r_weight.shape))
@@ -241,7 +246,6 @@ class QuaternionConv(Module):
             self.bias.data.zero_()
 
     def forward(self, input):
-
         # import pdb; pdb.set_trace()
         if self.rotation:
             return quaternion_conv_rotation(
@@ -255,7 +259,7 @@ class QuaternionConv(Module):
                 self.stride,
                 self.padding,
                 self.groups,
-                self.dilatation,
+                self.dilation,
                 self.quaternion_format,
                 self.scale_param,
             )
@@ -270,7 +274,7 @@ class QuaternionConv(Module):
                 self.stride,
                 self.padding,
                 self.groups,
-                self.dilatation,
+                self.dilation,
             )
 
     def __repr__(self):

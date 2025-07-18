@@ -62,9 +62,6 @@ class conv2d(nn.Module):
         torch.nn.init.normal_(self.conv.j_weight.data, std=0.02)
         torch.nn.init.normal_(self.conv.k_weight.data, std=0.02)
 
-        if spectral_normed:
-            self.conv = Qspectral_norm(self.conv)
-
     def forward(self, input):
         out = self.conv(input)
         return out

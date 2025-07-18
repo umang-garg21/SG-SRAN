@@ -4,48 +4,18 @@ import math
 import torch.nn.functional as F
 import numpy as np
 from model.quat_utils.Qops_with_QSN import conv2d, Residual_SA
+from model.quat_utils.quaternion_layers import QuaternionConv
 
 # from einops import rearrange
 # ─── requirements ───────────────────────────────────────────────────────────────
 # pip install torch e3nn==0.7.4              # e3nn just for rotation utilities
 # ────────────────────────────────────────────────────────────────────────────────
 import torch, torch.nn as nn
-
-
-def icnr(x, scale=2, init=nn.init.kaiming_normal_):
-    ni, nf, h, w = x.shape
-    k = init(torch.zeros([ni // (scale**2), nf, h, w]))
-    k = k.repeat_interleave(scale, dim=0).repeat_interleave(scale, dim=1)
-    x.data.copy_(k)
+from torchinfo import summary
 
 
 def make_model(args):
-    return QRBSA_1D(args)
-
-
-class TransposedConvUpsampler1D(nn.Module):
-    def __init__(
-        self,
-        in_ch,
-        out_ch,
-        kernel_size=(3, 3),
-        stride=(1, 2),
-        padding=(0, 0),
-        output_padding=(0, 1),
-    ):
-        super().__init__()
-        self.transposed_conv = nn.ConvTranspose2d(
-            in_channels=in_ch,
-            out_channels=out_ch,
-            kernel_size=kernel_size,
-            stride=stride,
-            padding=padding,
-            output_padding=output_padding,
-            bias=True,
-        )
-
-    def forward(self, x):
-        return self.transposed_conv(x)
+    return Reynolds_QSR(args)
 
 
 class PixelShuffle1D(torch.nn.Module):
@@ -337,47 +307,147 @@ class Upsampler1D_quaternion_interp(nn.Module):
         return x
 
 
-class QRBSA_1D(nn.Module):
+### TRANSPOSE CONV BASED UPSAMPLER ####
+class Upsampler2DQuaternionTransposeConv(nn.Module):
+    def __init__(
+        self,
+        kernel_size,
+        scale,
+        n_feats,
+        bn=False,
+        act=False,
+        bias=True,
+        dropout_prob=0.2,
+    ):
+        super(Upsampler2DQuaternionTransposeConv, self).__init__()
+
+        self.conv_layer = QuaternionConv(
+            n_feats,
+            scale * scale * n_feats,
+            kernel_size=kernel_size,
+            stride=1,
+            padding=kernel_size // 2,
+        )
+
+        # Adding dropout layer after the convolution layer
+        self.dropout = nn.Dropout(p=dropout_prob)  # Dropout with specified probability
+
+        self.transposed_conv = nn.ConvTranspose2d(
+            in_channels=scale * scale * n_feats,  # e.g., 1024
+            out_channels=n_feats,  # e.g., 256
+            kernel_size=(scale, scale),  # upsampling only in width
+            stride=(scale, scale),
+            padding=(1, 1),  # pad width by 1, height unchanged
+            output_padding=(2, 2),  # add 2 more pixels in width
+            bias=True,
+        )
+
+        self.post_conv_layer = QuaternionConv(
+            n_feats,
+            n_feats,
+            kernel_size=kernel_size,
+            stride=1,
+            padding=kernel_size // 2,
+        )
+
+        # self.up_sample = nn.Upsample(scale_factor=2, mode='linear', align_corners=True)
+        self.scale = scale
+        self.n_feat = n_feats
+
+    def forward(self, x):
+        try:
+            print("Input:", x.shape)
+
+            # x = x.permute(0, 1, 3, 2)
+            # print("Permuted Input:", x.shape)
+            x = self.conv_layer(x)
+            print("After conv:", x.shape)
+            x = self.transposed_conv(x)
+            print("After transpose:", x.shape)
+            x = self.post_conv_layer(x)
+            print("After post_conv:", x.shape)
+            # x = x.permute(0, 1, 3, 2)
+            # print("Permuted Output:", x.shape)
+            return x
+        except Exception as e:
+            print("Error in Upsampler2DQuaternionTransposeConv:", e)
+            # import pdb
+
+            # pdb.set_trace()
+            # raise NotImplementedError
+        # try:
+        #     x = x.permute(0, 1, 3, 2)
+        #     x = self.conv_layer(x)
+        #     x = self.transposed_conv(x)
+        #     x = self.post_conv_layer(x)
+        #     # x= self.post_conv_layer(x)
+        #     # print(x.shape)
+        #     # x = self.dropout(x)
+        #     # x = rearrange(x, 'd0 d1 (d2 d3) -> d0 d1 d2 d3', d0=bsize, d1=ch, d2=h, d3=2*w)
+
+        #     x = x.permute(0, 1, 3, 2)
+        #     # import pdb; pdb.set_trace()
+        #     # print('Upsampler1D: x.shape:', x.shape)
+        #     return x
+
+        # except Exception as e:
+        #     print("Error in Upsampler1D_transpose_conv_1pass:", e)
+        #     import pdb
+
+        #     pdb.set_trace()
+        #     raise NotImplementedError
+
+
+class Reynolds_QSR(nn.Module):
     def __init__(self, args):
-        super(QRBSA_1D, self).__init__()
+        super(Reynolds_QSR, self).__init__()
         # import pdb; pdb.set_trace()
         n_resblocks = args.n_resblocks
+        n_channels = 4
         n_feats = args.n_feats
         scale = args.scale
         kernel_size = 3
-        act = nn.ReLU(True)
+        # act = nn.ReLU(True)
+
+        self.register_buffer(
+            "group_tensor", torch.tensor(np.load(args.sym_np_path), dtype=torch.float32)
+        )  # (G, C, C) where C=4
+
+        self.register_buffer(
+            "group_tensor_inv",
+            torch.tensor(np.load(args.sym_inv_np_path), dtype=torch.float32),
+        )  # (G, C, C) where C=4
 
         m_head = [
-            conv2d(
-                args.n_colors,
-                n_feats,
+            QuaternionConv(
+                in_channels=n_channels,
+                out_channels=n_feats,
                 kernel_size=kernel_size,
                 stride=1,
                 padding=kernel_size // 2,
             )
         ]
-        m_body = [Residual_SA(n_feats, n_feats) for _ in range(n_resblocks)]
-        m_body.append(
-            conv2d(
-                n_feats,
-                n_feats,
-                kernel_size=kernel_size,
-                stride=1,
-                padding=kernel_size // 2,
-            )
-        )
 
-        # kernel_size = scale
+        # m_body = [Residual_SA(n_feats, n_feats) for _ in range(n_resblocks)]
+        # m_body.append(
+        #     QuaternionConv(
+        #         n_feats,
+        #         n_feats,
+        #         kernel_size=kernel_size,
+        #         stride=1,
+        #         padding=kernel_size // 2,
+        #     )
+        # )
+
         m_tail = [
-            # Upsampler1D_transpose_conv_1pass(kernel_size= kernel_size, scale=scale, n_feat=n_feats, act=False),
-            Upsampler1D_transpose_conv(
-                kernel_size=kernel_size, scale=scale, n_feat=n_feats, act=False
+            Upsampler2DQuaternionTransposeConv(
+                kernel_size=kernel_size,
+                scale=scale,
+                n_feats=n_feats,
             ),
-            # Upsampler1D_quaternion_interp(kernel_size, scale, n_feats, act=False),
-            # Upsampler1D_pixel_shuffle(kernel_size, scale, n_feats, act=False),
-            conv2d(
+            QuaternionConv(
                 n_feats,
-                args.n_colors,
+                n_channels,
                 kernel_size=kernel_size,
                 stride=1,
                 padding=kernel_size // 2,
@@ -385,32 +455,33 @@ class QRBSA_1D(nn.Module):
         ]
 
         self.head = nn.Sequential(*m_head)
-        self.body = nn.Sequential(*m_body)
+        # self.body = nn.Sequential(*m_body)
         self.tail = nn.Sequential(*m_tail)
 
     def gen_eqv(self, gamma_x, fn):
+        # x shape (B,C,H,W)
+
         # Multiply by group tensor transpose:
         # einsum over group dims: (G, N, N) x (B, G, W, N) -> (B, G, W, N)
         # We'll do einsum with broadcasting:
         # fn(gamma_x) # (B, G, W*N)
         gamma_T_f_gamma_x = torch.einsum(
             "gij,bgwj->bgwi",
-            self.group_tensor_T,
+            self.group_tensor_inv,
             fn(gamma_x).view(-1, self.G, self.W, self.N),
         )  # (B, G, W, N)
         return gamma_T_f_gamma_x.mean(dim=1)  # (B, W, N)
 
     def forward(self, x):
-        # x shape: (B,H,W,C=4)
-        gamma_x = torch.einsum("gij,bj->bgi", self.group_tensor, x)  # (B, G, N) WZ
+        # gamma_x = torch.einsum("gij,bj->bgi", self.group_tensor, x)  # (B, G, N) WZ
 
-        alpha = 1  # learnable or fixed
-        # x = self.head(x)
-        x = self.gen_eqv(x, self.head)
+        # alpha = 1  # learnable or fixed
+        x = self.head(x)
+        # x = self.gen_eqv(x, self.head)
         # res = self.body(x)
         # x= res + alpha * x
-        x = self.gen_eqv(x, self.tail)
-        # x = self.tail(x)
+        # x = self.gen_eqv(x, self.tail)
+        x = self.tail(x)
         return x
 
     def load_state_dict(self, state_dict, strict=True):
@@ -440,19 +511,45 @@ if __name__ == "__main__":
     class Custom_Args:
         def __init__(self):
             self.n_resblocks = 0
-            self.n_feats = 4
+            self.n_feats = 8
             self.scale = 4
-            self.n_colors = 4
+            self.n_channels = 4
+            self.sym_np_path = "model/reynolds_utils/fcc_symmetry_group.npy"
+            self.sym_inv_np_path = "model/reynolds_utils/fcc_symmetry_group_inv.npy"
 
     args = Custom_Args()
-    model = QRBSA_1D(args)
+    model = Reynolds_QSR(args)
 
-    data = torch.rand((1, 4, 64, 64))
+    torch.tensor(np.load(args.sym_np_path), dtype=torch.float64)
+    data = torch.rand((1, 4, 63, 65))
+    data2 = torch.cat((data, data), dim=0)
     # x[:,:,0:h,0:w]
     A = model(data)
     # A.shape
     # x shape (B,C,H,W)
-    summary(model, input_size=(1, 4, 3, 5))
+    summary(model, input_size=(1, 4, 63, 65))
 
-    fcc_symmetry_group = np.load("fcc_symmetry_group.npy")
-    fcc_symmetry_group_inv = np.load("fcc_symmetry_group_inv.npy")
+    gamma_x = torch.einsum("gci,bihw->bgchw", model.group_tensor, data)  # (bgchw) WZ
+
+    (gamma_x[:, 0, :, :, :] == data).all()
+
+    data_out = model(data)
+
+    data_out2 = model(data2)
+    gamma_x.shape
+
+    gamma_x.view(-1, 4, 63, 65).shape
+
+    out = model(gamma_x.view(-1, 4, 63, 65))
+    out_reshape = out.view(-1, 24, 4, 252, 260)
+    torch.allclose(out_reshape[:, 0], data_out, rtol=1e-5, atol=1e-6)
+
+dtype = torch.float64
+
+model.group_tensor
+
+# uplayer = Upsampler2DQuaternionTransposeConv(
+#     kernel_size=3,
+#     scale=args.scale,
+#     n_feats=args.n_feats,
+# )

@@ -132,7 +132,7 @@ class QEDSR(nn.Module):
 
         m_head = [
             conv2d(
-                args.n_colors,
+                args.n_channels,
                 n_feats,
                 kernel_size=kernel_size,
                 stride=1,
