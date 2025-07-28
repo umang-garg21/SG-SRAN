@@ -3,7 +3,8 @@ import torch.nn as nn
 import math
 import torch.nn.functional as F
 import numpy as np
-from model.quat_utils.Qops_with_QSN import conv2d, Residual_SA
+
+# from model.quat_utils.Qops_with_QSN import conv2d, Residual_SA
 from model.quat_utils.quaternion_layers import QuaternionConv
 
 # from einops import rearrange
@@ -16,295 +17,6 @@ from torchinfo import summary
 
 def make_model(args):
     return Reynolds_QSR(args)
-
-
-class PixelShuffle1D(torch.nn.Module):
-    """
-    1D pixel shuffler. https://arxiv.org/pdf/1609.05158.pdf
-    Upscales sample length, downscales channel length
-    "short" is input, "long" is output
-    """
-
-    def __init__(self, upscale_factor):
-        super(PixelShuffle1D, self).__init__()
-        self.upscale_factor = upscale_factor
-
-    def forward(self, x):
-        # import pdb; pdb.set_trace()
-        batch_size = x.shape[0]
-        short_channel_len = x.shape[1]
-        long_height = x.shape[2]
-        short_width = x.shape[3]
-
-        long_channel_len = short_channel_len // self.upscale_factor
-        long_width = self.upscale_factor * short_width
-
-        x = x.contiguous().view(
-            [
-                batch_size,
-                self.upscale_factor,
-                long_channel_len,
-                long_height,
-                short_width,
-            ]
-        )
-        x = x.permute(0, 2, 3, 4, 1).contiguous()
-        x = x.view(batch_size, long_channel_len, long_height, long_width)
-
-        return x
-
-
-class PixelUnshuffle1D(torch.nn.Module):
-    """
-    Inverse of 1D pixel shuffler
-    Upscales channel length, downscales sample length
-    "long" is input, "short" is output
-    """
-
-    def __init__(self, downscale_factor):
-        super(PixelUnshuffle1D, self).__init__()
-        self.downscale_factor = downscale_factor
-
-    def forward(self, x):
-        batch_size = x.shape[0]
-        long_channel_len = x.shape[1]
-        long_width = x.shape[2]
-
-        short_channel_len = long_channel_len * self.downscale_factor
-        short_width = long_width // self.downscale_factor
-
-        x = x.contiguous().view(
-            [batch_size, long_channel_len, short_width, self.downscale_factor]
-        )
-        x = x.permute(0, 3, 1, 2).contiguous()
-        x = x.view([batch_size, short_channel_len, short_width])
-        return x
-
-
-class Upsampler1D_pixel_shuffle(nn.Module):
-    def __init__(self, kernel_size, scale, n_feat, bn=False, act=False, bias=True):
-        super(Upsampler1D_pixel_shuffle, self).__init__()
-
-        self.conv_layer = conv2d(
-            n_feat,
-            2 * n_feat,
-            kernel_size=kernel_size,
-            stride=1,
-            padding=kernel_size // 2,
-        )
-        self.pixel_shuffle = PixelShuffle1D(2)
-        # self.up_sample = nn.Upsample(scale_factor=2, mode='linear', align_corners=True)
-
-        self.scale = scale
-        self.n_feat = n_feat
-
-    def forward(self, x):
-        x = x.permute(0, 1, 3, 2)
-        if (self.scale & (self.scale - 1)) == 0:  # Is scale = 2^n?
-            for _ in range(int(math.log(self.scale, 2))):
-                # import pdb; pdb.set_trace()
-                bsize, ch, h, w = x.shape
-                x = self.conv_layer(x)
-                # x = rearrange(x, 'd0 d1 d2 d3 -> d0 d1 (d2 d3)')
-                x = self.pixel_shuffle(x)
-                # x = rearrange(x, 'd0 d1 (d2 d3) -> d0 d1 d2 d3', d0=bsize, d1=ch, d2=h, d3=2*w)
-
-            x = x.permute(0, 1, 3, 2)
-            return x
-
-        else:
-            raise NotImplementedError
-
-
-### TRANSPOSE CONV BASED UPSAMPLER ####
-class Upsampler1D_transpose_conv(nn.Module):
-    def __init__(
-        self,
-        kernel_size,
-        scale,
-        n_feat,
-        bn=False,
-        act=False,
-        bias=True,
-        dropout_prob=0.2,
-    ):
-        super(Upsampler1D_transpose_conv, self).__init__()
-
-        self.conv_layer1 = conv2d(
-            n_feat,
-            2 * n_feat,
-            kernel_size=kernel_size,
-            stride=1,
-            padding=kernel_size // 2,
-        )
-        self.conv_layer2 = conv2d(
-            n_feat, n_feat, kernel_size=kernel_size, stride=1, padding=kernel_size // 2
-        )
-        # Adding dropout layer after the convolution layer
-        self.dropout = nn.Dropout(p=dropout_prob)  # Dropout with specified probability
-        self.pixel_shuffle = PixelShuffle1D(2)
-        # self.transposed_conv = TransposedConvUpsampler1D(2*n_feat, n_feat, kernel_size=(3,3), stride=(1,2), padding=(1,1), output_padding=(0,1))
-        self.transposed_conv = nn.ConvTranspose2d(
-            in_channels=2 * n_feat,  # e.g., 1024
-            out_channels=n_feat,  # e.g., 256
-            kernel_size=(3, 4),  # upsampling only in width
-            stride=(1, 2),
-            padding=(1, 1),  # pad width by 1, height unchanged
-            output_padding=(0, 0),
-            bias=True,
-        )
-        # self.up_sample = nn.Upsample(scale_factor=2, mode='linear', align_corners=True)
-        self.scale = scale
-        self.n_feat = n_feat
-
-    def forward(self, x):
-        x = x.permute(0, 1, 3, 2)
-        if (self.scale & (self.scale - 1)) == 0:  # Is scale = 2^n?
-            for _ in range(int(math.log(self.scale, 2))):
-                # import pdb; pdb.set_trace()
-                bsize, ch, h, w = x.shape
-                # print(x.shape)
-                x = self.conv_layer1(x)
-                # x = self.dropout(x)
-                # x = rearrange(x, 'd0 d1 d2 d3 -> d0 d1 (d2 d3)')
-                # x = self.conv_layer2(x)
-                # x = self.dropout(x)
-
-                # import pdb; pdb.set_trace()
-                # print(x.shape)
-                # x = self.pixel_shuffle(x)
-                x = self.transposed_conv(x)
-                # x= self.conv_layer2(x)
-                # print(x.shape)
-
-                # x = self.dropout(x)
-                # x = rearrange(x, 'd0 d1 (d2 d3) -> d0 d1 d2 d3', d0=bsize, d1=ch, d2=h, d3=2*w)
-
-            x = x.permute(0, 1, 3, 2)
-            # import pdb; pdb.set_trace()
-            # print('Upsampler1D: x.shape:', x.shape)
-            return x
-
-        else:
-            raise NotImplementedError
-
-
-### TRANSPOSE CONV BASED UPSAMPLER ####
-class Upsampler1D_transpose_conv_1pass(nn.Module):
-    def __init__(
-        self,
-        kernel_size,
-        scale,
-        n_feat,
-        bn=False,
-        act=False,
-        bias=True,
-        dropout_prob=0.2,
-    ):
-        super(Upsampler1D_transpose_conv_1pass, self).__init__()
-
-        self.conv_layer = conv2d(
-            n_feat,
-            scale * n_feat,
-            kernel_size=kernel_size,
-            stride=1,
-            padding=kernel_size // 2,
-        )
-        # Adding dropout layer after the convolution layer
-        self.dropout = nn.Dropout(p=dropout_prob)  # Dropout with specified probability
-
-        # self.transposed_conv = TransposedConvUpsampler1D(scale*n_feat, n_feat, kernel_size=(1,kernel_size), stride=(1,scale), padding=(0, 2), output_padding=(0,1))
-        # self.transposed_conv = TransposedConvUpsampler1D(scale*n_feat, n_feat, kernel_size=(1,kernel_size), stride=(1,scale), padding=(0, scale//2), output_padding=(0, scale%2))
-
-        self.transposed_conv = nn.ConvTranspose2d(
-            in_channels=scale * n_feat,  # e.g., 1024
-            out_channels=n_feat,  # e.g., 256
-            kernel_size=(1, scale),  # upsampling only in width
-            stride=(1, scale),
-            padding=(0, 1),  # pad width by 1, height unchanged
-            output_padding=(0, 2),  # add 2 more pixels in width
-            bias=True,
-        )
-
-        self.post_conv_layer = conv2d(
-            n_feat, n_feat, kernel_size=kernel_size, stride=1, padding=kernel_size // 2
-        )
-        # self.up_sample = nn.Upsample(scale_factor=2, mode='linear', align_corners=True)
-        self.scale = scale
-        self.n_feat = n_feat
-
-    def forward(self, x):
-        try:
-            x = x.permute(0, 1, 3, 2)
-            x = self.conv_layer(x)
-            x = self.transposed_conv(x)
-            x = self.post_conv_layer(x)
-            # x= self.post_conv_layer(x)
-            # print(x.shape)
-            # x = self.dropout(x)
-            # x = rearrange(x, 'd0 d1 (d2 d3) -> d0 d1 d2 d3', d0=bsize, d1=ch, d2=h, d3=2*w)
-
-            x = x.permute(0, 1, 3, 2)
-            # import pdb; pdb.set_trace()
-            # print('Upsampler1D: x.shape:', x.shape)
-            return x
-
-        except Exception as e:
-            print("Error in Upsampler1D_transpose_conv_1pass:", e)
-            import pdb
-
-            pdb.set_trace()
-            raise NotImplementedError
-
-
-### Chatgpt based interpolation
-class Upsampler1D_quaternion_interp(nn.Module):
-    def __init__(
-        self,
-        kernel_size,
-        scale,
-        n_feat,
-        bn=False,
-        act=False,
-        bias=True,
-        dropout_prob=0.2,
-    ):
-        super(Upsampler1D_quaternion_interp, self).__init__()
-
-        self.scale = scale
-        self.n_feat = n_feat
-        self.kernel_size = kernel_size
-
-        self.smoothing_conv = conv2d(n_feat, n_feat, kernel_size=5, stride=1, padding=2)
-        self.refine_conv = conv2d(
-            n_feat, n_feat, kernel_size=kernel_size, stride=1, padding=kernel_size // 2
-        )
-        self.dropout = nn.Dropout(p=dropout_prob)
-
-    def forward(self, x):
-        """
-        x: (B, 4C, H, W) where 4C = number of quaternion channels
-        """
-        # import pdb; pdb.set_trace()
-        x = x.permute(0, 1, 3, 2)  # (B, 4C, W, H) to match interpolation convention
-
-        for _ in range(int(math.log(self.scale, 2))):
-            # Smooth before interpolation
-            x = self.smoothing_conv(x)
-
-            # Apply bilinear interpolation per quaternion channel
-            x = F.interpolate(
-                x, scale_factor=(1, 2), mode="bilinear", align_corners=True
-            )
-
-            # Optional: Dropout
-            # x = self.dropout(x)
-
-            # Refine interpolated output with quaternion-aware conv
-            x = self.refine_conv(x)
-
-        x = x.permute(0, 1, 3, 2)  # Back to (B, 4C, H, W)
-        return x
 
 
 ### TRANSPOSE CONV BASED UPSAMPLER ####
@@ -357,7 +69,6 @@ class Upsampler2DQuaternionTransposeConv(nn.Module):
     def forward(self, x):
         try:
             print("Input:", x.shape)
-
             # x = x.permute(0, 1, 3, 2)
             # print("Permuted Input:", x.shape)
             x = self.conv_layer(x)
@@ -401,7 +112,6 @@ class Upsampler2DQuaternionTransposeConv(nn.Module):
 class Reynolds_QSR(nn.Module):
     def __init__(self, args):
         super(Reynolds_QSR, self).__init__()
-        # import pdb; pdb.set_trace()
         n_resblocks = args.n_resblocks
         n_channels = 4
         n_feats = args.n_feats
@@ -544,9 +254,44 @@ if __name__ == "__main__":
     out_reshape = out.view(-1, 24, 4, 252, 260)
     torch.allclose(out_reshape[:, 0], data_out, rtol=1e-5, atol=1e-6)
 
-dtype = torch.float64
+    c = QuaternionConv(
+        in_channels=4,
+        out_channels=4,
+        kernel_size=3,
+        stride=1,
+        padding=3 // 2,
+    )
+    r_weight = c.r_weight
+    i_weight = c.i_weight
+    j_weight = c.j_weight
+    k_weight = c.k_weight
+    cat_kernels_4_r = torch.cat([r_weight, -i_weight, -j_weight, -k_weight], dim=1)
+    cat_kernels_4_i = torch.cat([i_weight, r_weight, -k_weight, j_weight], dim=1)
+    cat_kernels_4_j = torch.cat([j_weight, k_weight, r_weight, -i_weight], dim=1)
+    cat_kernels_4_k = torch.cat([k_weight, -j_weight, i_weight, r_weight], dim=1)
+    cat_kernels_4_quaternion = torch.cat(
+        [cat_kernels_4_r, cat_kernels_4_i, cat_kernels_4_j, cat_kernels_4_k], dim=0
+    )
 
-model.group_tensor
+    cat_kernels_4_quaternion = torch.cat(
+        [cat_kernels_4_r, cat_kernels_4_i, cat_kernels_4_j, cat_kernels_4_k], dim=0
+    )
+
+    if input.dim() == 3:
+        convfunc = F.conv1d
+    elif input.dim() == 4:
+        convfunc = F.conv2d
+    elif input.dim() == 5:
+        convfunc = F.conv3d
+    else:
+        raise Exception(
+            "The convolutional input is either 3, 4 or 5 dimensions."
+            " input.dim = " + str(input.dim())
+        )
+
+    return convfunc(
+        input, cat_kernels_4_quaternion, bias, stride, padding, dilation, groups
+    )
 
 # uplayer = Upsampler2DQuaternionTransposeConv(
 #     kernel_size=3,

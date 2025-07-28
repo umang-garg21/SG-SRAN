@@ -93,36 +93,19 @@ class QuaternionTransposeConv(Module):
             self.bias.data.zero_()
 
     def forward(self, input):
-
-        if self.rotation:
-            return quaternion_tranpose_conv_rotation(
-                input,
-                self.r_weight,
-                self.i_weight,
-                self.j_weight,
-                self.k_weight,
-                self.bias,
-                self.stride,
-                self.padding,
-                self.output_padding,
-                self.groups,
-                self.dilation,
-                self.quaternion_format,
-            )
-        else:
-            return quaternion_transpose_conv(
-                input,
-                self.r_weight,
-                self.i_weight,
-                self.j_weight,
-                self.k_weight,
-                self.bias,
-                self.stride,
-                self.padding,
-                self.output_padding,
-                self.groups,
-                self.dilation,
-            )
+        return quaternion_transpose_conv(
+            input,
+            self.r_weight,
+            self.i_weight,
+            self.j_weight,
+            self.k_weight,
+            self.bias,
+            self.stride,
+            self.padding,
+            self.output_padding,
+            self.groups,
+            self.dilation,
+        )
 
     def __repr__(self):
         return (
@@ -246,36 +229,19 @@ class QuaternionConv(Module):
             self.bias.data.zero_()
 
     def forward(self, input):
-        # import pdb; pdb.set_trace()
-        if self.rotation:
-            return quaternion_conv_rotation(
-                input,
-                self.zero_kernel,
-                self.r_weight,
-                self.i_weight,
-                self.j_weight,
-                self.k_weight,
-                self.bias,
-                self.stride,
-                self.padding,
-                self.groups,
-                self.dilation,
-                self.quaternion_format,
-                self.scale_param,
-            )
-        else:
-            return quaternion_conv(
-                input,
-                self.r_weight,
-                self.i_weight,
-                self.j_weight,
-                self.k_weight,
-                self.bias,
-                self.stride,
-                self.padding,
-                self.groups,
-                self.dilation,
-            )
+
+        return quaternion_conv(
+            input,
+            self.r_weight,
+            self.i_weight,
+            self.j_weight,
+            self.k_weight,
+            self.bias,
+            self.stride,
+            self.padding,
+            self.groups,
+            self.dilation,
+        )
 
     def __repr__(self):
         return (
