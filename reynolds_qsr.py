@@ -240,7 +240,6 @@ class Reynolds_QSR(nn.Module):
         self.tail = nn.Sequential(*m_tail)
 
     def forward(self, x):
-        # gamma_x = torch.einsum("gij,bj->bgi", self.group_tensor, x)  # (B, G, N) WZ
         # alpha = 1  # learnable or fixed
         x = self.head(x)
         # x = self.gen_eqv(x, self.head)
@@ -277,7 +276,7 @@ if __name__ == "__main__":
     class Custom_Args:
         def __init__(self):
             self.n_resblocks = 0
-            self.n_feats = 8
+            self.n_feats = 4
             self.scale = 4
             self.n_channels = 4
             self.sym_np_path = "model/reynolds_utils/fcc_symmetry_group.npy"
@@ -286,90 +285,131 @@ if __name__ == "__main__":
     args = Custom_Args()
     model = Reynolds_QSR(args)
 
-    summary(model, input_size=(7, 4, 63, 65))
+    summary(model, input_size=(7, 4, 64, 64))
 
     data = torch.rand((1, 4, 63, 65))
-    model(data)
+    # model(data)
 
-    # data = torch.rand((1, 4, 63, 65))
-    # data2 = torch.cat((data, data), dim=0)
-    # self = model
 
-    # summary(model, input_size=(1, 4, 63, 65))
+def test_model_equivariance(model, x, atol=1e-6, rtol=1e-5):
+    """
+    Tests equivariance: f(g·x) ≈ g·f(x)
+    for model with group_tensor (G,Cg,Cg).
+    Input shape: (B,C,*spatial) with C % Cg == 0.
+    """
+    model.eval()
+    with torch.no_grad():
+        B, C, *spatial = x.shape
+        G, Cg, _ = model.group_tensor.shape
+        assert C == Cg, f"Channels {C} must be same as group element {Cg}"
 
-    # self(data)
+        # f(x)
+        fx = model(x)  # (B,Cout,*spatial_out)
+        _, Cout, *spatial_out = fx.shape
 
-    # data_out = model(data)
-    # data_out2 = model(data2)[:1, ...]
-    # torch.allclose(data_out, data_out2, rtol=1e-5, atol=1e-9)
-    # # Step 1: Apply group action: gamma_x = g ⋅ x
-    # gamma_x = torch.einsum("gci,bihw->bgchw", model.group_tensor, data)  # (B,G,C,H,W)
+        errors = []
 
-    # (gamma_x[:, 0, :, :, :] == data).all()
+        for g in model.group_tensor:  # (Cg,Cg)
+            # g·x
+            gx = torch.einsum("ci,bi...->bc...", g, x)  # (B,C,*spatial)
+            f_gx = model(gx)  # f(g·x)
 
-    # gamma_x.shape
+            # g·f(x)
+            g_fx = torch.einsum("ci,bi...->bc...", g, fx)  # (B,Cout,*spatial_out)
 
-    # gamma_x.view(-1, 4, 63, 65).shape
+            # max error for this g
+            diff = (f_gx - g_fx).abs().max().item()
+            errors.append(diff)
 
-    # out = model(gamma_x.view(-1, 4, 63, 65))
+        max_err = max(errors)
+        passed = max_err < atol + rtol * fx.abs().max().item()
+        return passed, max_err, errors
 
-    # model.group_tensor_inv
+    passed, max_err, errs = test_model_equivariance(model, data)
+    print("Equivariant:", passed)
+    print("Max error:", max_err)
+    print("Per-group errors:", errs)
 
-    # gamma_T_f_gamma_x = torch.einsum(
-    #     "gic,bgchw->bgihw",
-    #     self.group_tensor_inv,
-    #     fn(gamma_x).view(-1, self.G, self.W, self.N),
-    # )  # (B, G, W, N)
 
-    # gamma_x.view(B, G, C_out, H, W)
+# data = torch.rand((1, 4, 63, 65))
+# data2 = torch.cat((data, data), dim=0)
+# self = model
 
-    # gamma_T_f_gamma_x = torch.einsum(
-    #     "gij,bgwj->bgwi",
-    #     self.group_tensor_inv,
-    #     fn(gamma_x).view(-1, self.G, self.W, self.N),
-    # )  # (B, G, W, N)
-    # # return gamma_T_f_gamma_x.mean(dim=1)  # (B, W, N)
+# summary(model, input_size=(1, 4, 63, 65))
 
-    # out_reshape = out.view(-1, 24, 4, 252, 260)
-    # torch.allclose(out_reshape[:, 0], data_out, rtol=1e-5, atol=1e-6)
+# self(data)
 
-    # c = QuaternionConv(
-    #     in_channels=4,
-    #     out_channels=4,
-    #     kernel_size=5,
-    #     stride=1,
-    #     padding=3 // 2,
-    #     operation="conv3d",
-    # )
-    # r_weight = c.r_weight
-    # i_weight = c.i_weight
-    # j_weight = c.j_weight
-    # k_weight = c.k_weight
-    # cat_kernels_4_r = torch.cat([r_weight, -i_weight, -j_weight, -k_weight], dim=1)
-    # cat_kernels_4_i = torch.cat([i_weight, r_weight, -k_weight, j_weight], dim=1)
-    # cat_kernels_4_j = torch.cat([j_weight, k_weight, r_weight, -i_weight], dim=1)
-    # cat_kernels_4_k = torch.cat([k_weight, -j_weight, i_weight, r_weight], dim=1)
-    # cat_kernels_4_quaternion = torch.cat(
-    #     [cat_kernels_4_r, cat_kernels_4_i, cat_kernels_4_j, cat_kernels_4_k], dim=0
-    # )
+# data_out = model(data)
+# data_out2 = model(data2)[:1, ...]
+# torch.allclose(data_out, data_out2, rtol=1e-5, atol=1e-9)
+# # Step 1: Apply group action: gamma_x = g ⋅ x
+# gamma_x = torch.einsum("gci,bihw->bgchw", model.group_tensor, data)  # (B,G,C,H,W)
 
-    # cat_kernels_4_quaternion.dim()
+# (gamma_x[:, 0, :, :, :] == data).all()
 
-    # if input.dim() == 3:
-    #     convfunc = F.conv1d
-    # elif input.dim() == 4:
-    #     convfunc = F.conv2d
-    # elif input.dim() == 5:
-    #     convfunc = F.conv3d
-    # else:
-    #     raise Exception(
-    #         "The convolutional input is either 3, 4 or 5 dimensions."
-    #         " input.dim = " + str(input.dim())
-    #     )
+# gamma_x.shape
 
-    # return convfunc(
-    #     input, cat_kernels_4_quaternion, bias, stride, padding, dilation, groups
-    # )
+# gamma_x.view(-1, 4, 63, 65).shape
+
+# out = model(gamma_x.view(-1, 4, 63, 65))
+
+# model.group_tensor_inv
+
+# gamma_T_f_gamma_x = torch.einsum(
+#     "gic,bgchw->bgihw",
+#     self.group_tensor_inv,
+#     fn(gamma_x).view(-1, self.G, self.W, self.N),
+# )  # (B, G, W, N)
+
+# gamma_x.view(B, G, C_out, H, W)
+
+# gamma_T_f_gamma_x = torch.einsum(
+#     "gij,bgwj->bgwi",
+#     self.group_tensor_inv,
+#     fn(gamma_x).view(-1, self.G, self.W, self.N),
+# )  # (B, G, W, N)
+# # return gamma_T_f_gamma_x.mean(dim=1)  # (B, W, N)
+
+# out_reshape = out.view(-1, 24, 4, 252, 260)
+# torch.allclose(out_reshape[:, 0], data_out, rtol=1e-5, atol=1e-6)
+
+# c = QuaternionConv(
+#     in_channels=4,
+#     out_channels=4,
+#     kernel_size=5,
+#     stride=1,
+#     padding=3 // 2,
+#     operation="conv3d",
+# )
+# r_weight = c.r_weight
+# i_weight = c.i_weight
+# j_weight = c.j_weight
+# k_weight = c.k_weight
+# cat_kernels_4_r = torch.cat([r_weight, -i_weight, -j_weight, -k_weight], dim=1)
+# cat_kernels_4_i = torch.cat([i_weight, r_weight, -k_weight, j_weight], dim=1)
+# cat_kernels_4_j = torch.cat([j_weight, k_weight, r_weight, -i_weight], dim=1)
+# cat_kernels_4_k = torch.cat([k_weight, -j_weight, i_weight, r_weight], dim=1)
+# cat_kernels_4_quaternion = torch.cat(
+#     [cat_kernels_4_r, cat_kernels_4_i, cat_kernels_4_j, cat_kernels_4_k], dim=0
+# )
+
+# cat_kernels_4_quaternion.dim()
+
+# if input.dim() == 3:
+#     convfunc = F.conv1d
+# elif input.dim() == 4:
+#     convfunc = F.conv2d
+# elif input.dim() == 5:
+#     convfunc = F.conv3d
+# else:
+#     raise Exception(
+#         "The convolutional input is either 3, 4 or 5 dimensions."
+#         " input.dim = " + str(input.dim())
+#     )
+
+# return convfunc(
+#     input, cat_kernels_4_quaternion, bias, stride, padding, dilation, groups
+# )
 
 
 # uplayer = Upsampler2DQuaternionTransposeConv(

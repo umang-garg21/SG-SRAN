@@ -183,8 +183,8 @@ class QuaternionConv(Module):
             self.operation, self.in_channels, self.out_channels, kernel_size
         )
 
-        print("QuaternionConv kernel Shape: ", self.kernel_size)
-        print("QuaternionConv w Shape: ", self.w_shape)
+        # print("QuaternionConv kernel Shape: ", self.kernel_size)
+        # print("QuaternionConv w Shape: ", self.w_shape)
         self.r_weight = Parameter(torch.Tensor(*self.w_shape))
         self.i_weight = Parameter(torch.Tensor(*self.w_shape))
         self.j_weight = Parameter(torch.Tensor(*self.w_shape))
