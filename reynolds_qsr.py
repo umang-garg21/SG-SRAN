@@ -213,31 +213,31 @@ class Reynolds_QSR(nn.Module):
             )
         ]
 
-        m_tail = [
-            EquivariantReynoldsWrap(
-                Upsampler2DQuaternionTransposeConv(
-                    kernel_size=kernel_size,
-                    scale=scale,
-                    n_feats=n_feats,
-                ),
-                group_tensor=self.group_tensor,
-                group_tensor_inv=self.group_tensor_inv,
-            ),
-            EquivariantReynoldsWrap(
-                QuaternionConv(
-                    in_channels=n_feats,
-                    out_channels=n_channels,
-                    kernel_size=kernel_size,
-                    stride=1,
-                    padding=kernel_size // 2,
-                ),
-                group_tensor=self.group_tensor,
-                group_tensor_inv=self.group_tensor_inv,
-            ),
-        ]
+        # m_tail = [
+        #     EquivariantReynoldsWrap(
+        #         Upsampler2DQuaternionTransposeConv(
+        #             kernel_size=kernel_size,
+        #             scale=scale,
+        #             n_feats=n_feats,
+        #         ),
+        #         group_tensor=self.group_tensor,
+        #         group_tensor_inv=self.group_tensor_inv,
+        #     ),
+        #     EquivariantReynoldsWrap(
+        #         QuaternionConv(
+        #             in_channels=n_feats,
+        #             out_channels=n_channels,
+        #             kernel_size=kernel_size,
+        #             stride=1,
+        #             padding=kernel_size // 2,
+        #         ),
+        #         group_tensor=self.group_tensor,
+        #         group_tensor_inv=self.group_tensor_inv,
+        #     ),
+        # ]
         self.head = nn.Sequential(*m_head)
         # self.body = nn.Sequential(*m_body)
-        self.tail = nn.Sequential(*m_tail)
+        # self.tail = nn.Sequential(*m_tail)
 
     def forward(self, x):
         # alpha = 1  # learnable or fixed
@@ -246,7 +246,7 @@ class Reynolds_QSR(nn.Module):
         # res = self.body(x)
         # x= res + alpha * x
         # x = self.gen_eqv(x, self.tail)
-        x = self.tail(x)
+        # x = self.tail(x)
         return x
 
     def load_state_dict(self, state_dict, strict=True):
@@ -290,40 +290,39 @@ if __name__ == "__main__":
     data = torch.rand((1, 4, 63, 65))
     # model(data)
 
+    def test_model_equivariance(model, x, atol=1e-6, rtol=1e-5):
+        """
+        Tests equivariance: f(g·x) ≈ g·f(x)
+        for model with group_tensor (G,Cg,Cg).
+        Input shape: (B,C,*spatial) with C % Cg == 0.
+        """
+        model.eval()
+        with torch.no_grad():
+            B, C, *spatial = x.shape
+            G, Cg, _ = model.group_tensor.shape
+            assert C == Cg, f"Channels {C} must be same as group element {Cg}"
 
-def test_model_equivariance(model, x, atol=1e-6, rtol=1e-5):
-    """
-    Tests equivariance: f(g·x) ≈ g·f(x)
-    for model with group_tensor (G,Cg,Cg).
-    Input shape: (B,C,*spatial) with C % Cg == 0.
-    """
-    model.eval()
-    with torch.no_grad():
-        B, C, *spatial = x.shape
-        G, Cg, _ = model.group_tensor.shape
-        assert C == Cg, f"Channels {C} must be same as group element {Cg}"
+            # f(x)
+            fx = model(x)  # (B,Cout,*spatial_out)
+            _, Cout, *spatial_out = fx.shape
 
-        # f(x)
-        fx = model(x)  # (B,Cout,*spatial_out)
-        _, Cout, *spatial_out = fx.shape
+            errors = []
 
-        errors = []
+            for g in model.group_tensor:  # (Cg,Cg)
+                # g·x
+                gx = torch.einsum("ci,bi...->bc...", g, x)  # (B,C,*spatial)
+                f_gx = model(gx)  # f(g·x)
 
-        for g in model.group_tensor:  # (Cg,Cg)
-            # g·x
-            gx = torch.einsum("ci,bi...->bc...", g, x)  # (B,C,*spatial)
-            f_gx = model(gx)  # f(g·x)
+                # g·f(x)
+                g_fx = torch.einsum("ci,bi...->bc...", g, fx)  # (B,Cout,*spatial_out)
 
-            # g·f(x)
-            g_fx = torch.einsum("ci,bi...->bc...", g, fx)  # (B,Cout,*spatial_out)
+                # max error for this g
+                diff = (f_gx - g_fx).abs().max().item()
+                errors.append(diff)
 
-            # max error for this g
-            diff = (f_gx - g_fx).abs().max().item()
-            errors.append(diff)
-
-        max_err = max(errors)
-        passed = max_err < atol + rtol * fx.abs().max().item()
-        return passed, max_err, errors
+            max_err = max(errors)
+            passed = max_err < atol + rtol * fx.abs().max().item()
+            return passed, max_err, errors
 
     passed, max_err, errs = test_model_equivariance(model, data)
     print("Equivariant:", passed)
