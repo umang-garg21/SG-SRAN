@@ -330,6 +330,52 @@ if __name__ == "__main__":
     print("Per-group errors:", errs)
 
 
+# class EquivariantQuaternionConv(QuaternionConv):
+#     def __init__(self, *args, group_tensor=None, group_tensor_inv=None, **kwargs):
+#         super().__init__(*args, **kwargs)
+#         assert group_tensor is not None and group_tensor_inv is not None
+#         self.register_buffer("group_tensor", group_tensor)  # (G,Cg,Cg)
+#         self.register_buffer("group_tensor_inv", group_tensor_inv)
+
+#     def project_weights(self):
+#         """
+#         Project raw quaternion weights into the equivariant subspace.
+#         """
+#         # Shape: (out, in, kH, kW)
+#         W = torch.cat(
+#             [self.r_weight, self.i_weight, self.j_weight, self.k_weight], dim=1
+#         )  # (4*out, in, kH, kW)
+
+#         # Apply Reynolds operator over group
+#         G = self.group_tensor.shape[0]
+#         W_eqv = 0
+#         for g, g_inv in zip(self.group_tensor, self.group_tensor_inv):
+#             # g: (Cg,Cg), g_inv: (Cg,Cg)
+#             # left = rho_out(g), right = rho_in(g)^(-1)
+#             W_g = torch.einsum("oi, oihw, pj -> ophw", g, W, g_inv)
+#             W_eqv = W_eqv + W_g
+#         W_eqv = W_eqv / G
+#         return W_eqv
+
+#     def forward(self, x):
+#         # Replace raw weights with projected equivariant weights
+#         W_eqv = self.project_weights()
+
+#         # Use the standard quaternion conv operator
+#         return quaternion_conv(
+#             x,
+#             W_eqv[: self.out_channels],  # split back into quaternion parts
+#             W_eqv[self.out_channels : 2 * self.out_channels],
+#             W_eqv[2 * self.out_channels : 3 * self.out_channels],
+#             W_eqv[3 * self.out_channels :],
+#             self.bias,
+#             self.stride,
+#             self.padding,
+#             self.groups,
+#             self.dilation,
+#         )
+
+
 # data = torch.rand((1, 4, 63, 65))
 # data2 = torch.cat((data, data), dim=0)
 # self = model
