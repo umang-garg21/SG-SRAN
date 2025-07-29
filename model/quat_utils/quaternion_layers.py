@@ -154,7 +154,6 @@ class QuaternionConv(Module):
         weight_init="quaternion",
         seed=None,
         operation="convolution2d",
-        rotation=False,
         quaternion_format=True,
         scale=False,
     ):
@@ -172,7 +171,6 @@ class QuaternionConv(Module):
         self.seed = seed if seed is not None else np.random.randint(0, 1234)
         self.rng = RandomState(self.seed)
         self.operation = operation
-        self.rotation = rotation
         self.quaternion_format = quaternion_format
         self.winit = {
             "quaternion": quaternion_init,
@@ -201,11 +199,6 @@ class QuaternionConv(Module):
             self.scale_param = Parameter(torch.Tensor(self.r_weight.shape))
         else:
             self.scale_param = None
-
-        if self.rotation:
-            self.zero_kernel = Parameter(
-                torch.zeros(self.r_weight.shape), requires_grad=False
-            )
         if bias:
             self.bias = Parameter(torch.Tensor(out_channels))
         else:
@@ -229,7 +222,6 @@ class QuaternionConv(Module):
             self.bias.data.zero_()
 
     def forward(self, input):
-
         return quaternion_conv(
             input,
             self.r_weight,
@@ -265,10 +257,6 @@ class QuaternionConv(Module):
             + str(self.weight_init)
             + ", seed="
             + str(self.seed)
-            + ", rotation="
-            + str(self.rotation)
-            + ", q_format="
-            + str(self.quaternion_format)
             + ", operation="
             + str(self.operation)
             + ")"

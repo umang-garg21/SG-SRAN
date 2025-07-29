@@ -68,15 +68,15 @@ class Upsampler2DQuaternionTransposeConv(nn.Module):
 
     def forward(self, x):
         try:
-            print("Input:", x.shape)
+            # print("Input:", x.shape)
             # x = x.permute(0, 1, 3, 2)
             # print("Permuted Input:", x.shape)
             x = self.conv_layer(x)
-            print("After conv:", x.shape)
+            # print("After conv:", x.shape)
             x = self.transposed_conv(x)
-            print("After transpose:", x.shape)
+            # print("After transpose:", x.shape)
             x = self.post_conv_layer(x)
-            print("After post_conv:", x.shape)
+            # print("After post_conv:", x.shape)
             # x = x.permute(0, 1, 3, 2)
             # print("Permuted Output:", x.shape)
             return x
@@ -109,6 +109,50 @@ class Upsampler2DQuaternionTransposeConv(nn.Module):
         #     raise NotImplementedError
 
 
+class EquivariantReynoldsWrap(nn.Module):
+    """
+    Reynolds operator wrapper: enforces equivariance for any module fn
+    under a group action represented by group_tensor (G, Cg, Cg).
+    Input/output channel dims must be multiples of Cg.
+    Works with inputs (B, C, *spatial) for 1D/2D/3D ops.
+    """
+
+    def __init__(
+        self, fn: nn.Module, group_tensor: torch.Tensor, group_tensor_inv: torch.Tensor
+    ):
+        super().__init__()
+        self.fn = fn
+        self.register_buffer("group_tensor", group_tensor)  # (G, Cg, Cg)
+        self.register_buffer("group_tensor_inv", group_tensor_inv)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        B, C, *spatial_in = x.shape
+        G, Cg, _ = self.group_tensor.shape
+        assert C % Cg == 0, f"Channels {C} must be multiple of {Cg}"
+        n_feats = C // Cg
+
+        # --- Lift: apply group action g·x ---
+        x = x.view(B, n_feats, Cg, *spatial_in)  # (B,n_feats,Cg,*spatial)
+        gamma_x = torch.einsum("gci,bnc...->bgni...", self.group_tensor, x)
+        gamma_x = gamma_x.reshape(B * G, n_feats * Cg, *spatial_in)  # (B*G,C,*spatial)
+
+        # --- Apply wrapped fn ---
+        fx = self.fn(gamma_x)  # (B*G,Cout,*spatial_out)
+        BGO, Cout, *spatial_out = fx.shape
+        assert BGO == B * G
+        assert Cout % Cg == 0, f"fn must output multiple of {Cg}, got {Cout}"
+        n_feats_out = Cout // Cg
+
+        # --- Project back with g⁻¹ ---
+        fx = fx.view(
+            B, G, n_feats_out, Cg, *spatial_out
+        )  # (B,G,n_feats_out,Cg,*spatial)
+        fx = torch.einsum("gci,bgni...->bgnc...", self.group_tensor_inv, fx)
+
+        # --- Average over group and return ---
+        return fx.mean(dim=1).reshape(B, Cout, *spatial_out)
+
+
 class Reynolds_QSR(nn.Module):
     def __init__(self, args):
         super(Reynolds_QSR, self).__init__()
@@ -128,63 +172,75 @@ class Reynolds_QSR(nn.Module):
             torch.tensor(np.load(args.sym_inv_np_path), dtype=torch.float32),
         )  # (G, C, C) where C=4
 
-        m_head = [
-            QuaternionConv(
-                in_channels=n_channels,
-                out_channels=n_feats,
-                kernel_size=kernel_size,
-                stride=1,
-                padding=kernel_size // 2,
-            )
-        ]
-
-        # m_body = [Residual_SA(n_feats, n_feats) for _ in range(n_resblocks)]
-        # m_body.append(
+        # m_head = [
+        #     # EquivariantReynoldsWrap(
         #     QuaternionConv(
-        #         n_feats,
-        #         n_feats,
+        #         in_channels=n_channels,
+        #         out_channels=n_feats,
         #         kernel_size=kernel_size,
         #         stride=1,
         #         padding=kernel_size // 2,
-        #     )
-        # )
-
-        m_tail = [
-            Upsampler2DQuaternionTransposeConv(
-                kernel_size=kernel_size,
-                scale=scale,
-                n_feats=n_feats,
-            ),
-            QuaternionConv(
-                n_feats,
-                n_channels,
-                kernel_size=kernel_size,
-                stride=1,
-                padding=kernel_size // 2,
-            ),
+        #     ),
+        #     # group_tensor=self.group_tensor,
+        #     # group_tensor_inv=self.group_tensor_inv,
+        #     # )
+        # ]
+        # m_tail = [
+        #     Upsampler2DQuaternionTransposeConv(
+        #         kernel_size=kernel_size,
+        #         scale=scale,
+        #         n_feats=n_feats,
+        #     ),
+        #     QuaternionConv(
+        #         in_channels=n_feats,
+        #         out_channels=n_channels,
+        #         kernel_size=kernel_size,
+        #         stride=1,
+        #         padding=kernel_size // 2,
+        #     ),
+        # ]
+        m_head = [
+            EquivariantReynoldsWrap(
+                QuaternionConv(
+                    in_channels=n_channels,
+                    out_channels=n_feats,
+                    kernel_size=kernel_size,
+                    stride=1,
+                    padding=kernel_size // 2,
+                ),
+                group_tensor=self.group_tensor,
+                group_tensor_inv=self.group_tensor_inv,
+            )
         ]
 
+        m_tail = [
+            EquivariantReynoldsWrap(
+                Upsampler2DQuaternionTransposeConv(
+                    kernel_size=kernel_size,
+                    scale=scale,
+                    n_feats=n_feats,
+                ),
+                group_tensor=self.group_tensor,
+                group_tensor_inv=self.group_tensor_inv,
+            ),
+            EquivariantReynoldsWrap(
+                QuaternionConv(
+                    in_channels=n_feats,
+                    out_channels=n_channels,
+                    kernel_size=kernel_size,
+                    stride=1,
+                    padding=kernel_size // 2,
+                ),
+                group_tensor=self.group_tensor,
+                group_tensor_inv=self.group_tensor_inv,
+            ),
+        ]
         self.head = nn.Sequential(*m_head)
         # self.body = nn.Sequential(*m_body)
         self.tail = nn.Sequential(*m_tail)
 
-    def gen_eqv(self, gamma_x, fn):
-        # x shape (B,C,H,W)
-
-        # Multiply by group tensor transpose:
-        # einsum over group dims: (G, N, N) x (B, G, W, N) -> (B, G, W, N)
-        # We'll do einsum with broadcasting:
-        # fn(gamma_x) # (B, G, W*N)
-        gamma_T_f_gamma_x = torch.einsum(
-            "gij,bgwj->bgwi",
-            self.group_tensor_inv,
-            fn(gamma_x).view(-1, self.G, self.W, self.N),
-        )  # (B, G, W, N)
-        return gamma_T_f_gamma_x.mean(dim=1)  # (B, W, N)
-
     def forward(self, x):
         # gamma_x = torch.einsum("gij,bj->bgi", self.group_tensor, x)  # (B, G, N) WZ
-
         # alpha = 1  # learnable or fixed
         x = self.head(x)
         # x = self.gen_eqv(x, self.head)
@@ -230,68 +286,91 @@ if __name__ == "__main__":
     args = Custom_Args()
     model = Reynolds_QSR(args)
 
-    torch.tensor(np.load(args.sym_np_path), dtype=torch.float64)
+    summary(model, input_size=(7, 4, 63, 65))
+
     data = torch.rand((1, 4, 63, 65))
-    data2 = torch.cat((data, data), dim=0)
-    # x[:,:,0:h,0:w]
-    A = model(data)
-    # A.shape
-    # x shape (B,C,H,W)
-    summary(model, input_size=(1, 4, 63, 65))
+    model(data)
 
-    gamma_x = torch.einsum("gci,bihw->bgchw", model.group_tensor, data)  # (bgchw) WZ
+    # data = torch.rand((1, 4, 63, 65))
+    # data2 = torch.cat((data, data), dim=0)
+    # self = model
 
-    (gamma_x[:, 0, :, :, :] == data).all()
+    # summary(model, input_size=(1, 4, 63, 65))
 
-    data_out = model(data)
+    # self(data)
 
-    data_out2 = model(data2)
-    gamma_x.shape
+    # data_out = model(data)
+    # data_out2 = model(data2)[:1, ...]
+    # torch.allclose(data_out, data_out2, rtol=1e-5, atol=1e-9)
+    # # Step 1: Apply group action: gamma_x = g ⋅ x
+    # gamma_x = torch.einsum("gci,bihw->bgchw", model.group_tensor, data)  # (B,G,C,H,W)
 
-    gamma_x.view(-1, 4, 63, 65).shape
+    # (gamma_x[:, 0, :, :, :] == data).all()
 
-    out = model(gamma_x.view(-1, 4, 63, 65))
-    out_reshape = out.view(-1, 24, 4, 252, 260)
-    torch.allclose(out_reshape[:, 0], data_out, rtol=1e-5, atol=1e-6)
+    # gamma_x.shape
 
-    c = QuaternionConv(
-        in_channels=4,
-        out_channels=4,
-        kernel_size=3,
-        stride=1,
-        padding=3 // 2,
-    )
-    r_weight = c.r_weight
-    i_weight = c.i_weight
-    j_weight = c.j_weight
-    k_weight = c.k_weight
-    cat_kernels_4_r = torch.cat([r_weight, -i_weight, -j_weight, -k_weight], dim=1)
-    cat_kernels_4_i = torch.cat([i_weight, r_weight, -k_weight, j_weight], dim=1)
-    cat_kernels_4_j = torch.cat([j_weight, k_weight, r_weight, -i_weight], dim=1)
-    cat_kernels_4_k = torch.cat([k_weight, -j_weight, i_weight, r_weight], dim=1)
-    cat_kernels_4_quaternion = torch.cat(
-        [cat_kernels_4_r, cat_kernels_4_i, cat_kernels_4_j, cat_kernels_4_k], dim=0
-    )
+    # gamma_x.view(-1, 4, 63, 65).shape
 
-    cat_kernels_4_quaternion = torch.cat(
-        [cat_kernels_4_r, cat_kernels_4_i, cat_kernels_4_j, cat_kernels_4_k], dim=0
-    )
+    # out = model(gamma_x.view(-1, 4, 63, 65))
 
-    if input.dim() == 3:
-        convfunc = F.conv1d
-    elif input.dim() == 4:
-        convfunc = F.conv2d
-    elif input.dim() == 5:
-        convfunc = F.conv3d
-    else:
-        raise Exception(
-            "The convolutional input is either 3, 4 or 5 dimensions."
-            " input.dim = " + str(input.dim())
-        )
+    # model.group_tensor_inv
 
-    return convfunc(
-        input, cat_kernels_4_quaternion, bias, stride, padding, dilation, groups
-    )
+    # gamma_T_f_gamma_x = torch.einsum(
+    #     "gic,bgchw->bgihw",
+    #     self.group_tensor_inv,
+    #     fn(gamma_x).view(-1, self.G, self.W, self.N),
+    # )  # (B, G, W, N)
+
+    # gamma_x.view(B, G, C_out, H, W)
+
+    # gamma_T_f_gamma_x = torch.einsum(
+    #     "gij,bgwj->bgwi",
+    #     self.group_tensor_inv,
+    #     fn(gamma_x).view(-1, self.G, self.W, self.N),
+    # )  # (B, G, W, N)
+    # # return gamma_T_f_gamma_x.mean(dim=1)  # (B, W, N)
+
+    # out_reshape = out.view(-1, 24, 4, 252, 260)
+    # torch.allclose(out_reshape[:, 0], data_out, rtol=1e-5, atol=1e-6)
+
+    # c = QuaternionConv(
+    #     in_channels=4,
+    #     out_channels=4,
+    #     kernel_size=5,
+    #     stride=1,
+    #     padding=3 // 2,
+    #     operation="conv3d",
+    # )
+    # r_weight = c.r_weight
+    # i_weight = c.i_weight
+    # j_weight = c.j_weight
+    # k_weight = c.k_weight
+    # cat_kernels_4_r = torch.cat([r_weight, -i_weight, -j_weight, -k_weight], dim=1)
+    # cat_kernels_4_i = torch.cat([i_weight, r_weight, -k_weight, j_weight], dim=1)
+    # cat_kernels_4_j = torch.cat([j_weight, k_weight, r_weight, -i_weight], dim=1)
+    # cat_kernels_4_k = torch.cat([k_weight, -j_weight, i_weight, r_weight], dim=1)
+    # cat_kernels_4_quaternion = torch.cat(
+    #     [cat_kernels_4_r, cat_kernels_4_i, cat_kernels_4_j, cat_kernels_4_k], dim=0
+    # )
+
+    # cat_kernels_4_quaternion.dim()
+
+    # if input.dim() == 3:
+    #     convfunc = F.conv1d
+    # elif input.dim() == 4:
+    #     convfunc = F.conv2d
+    # elif input.dim() == 5:
+    #     convfunc = F.conv3d
+    # else:
+    #     raise Exception(
+    #         "The convolutional input is either 3, 4 or 5 dimensions."
+    #         " input.dim = " + str(input.dim())
+    #     )
+
+    # return convfunc(
+    #     input, cat_kernels_4_quaternion, bias, stride, padding, dilation, groups
+    # )
+
 
 # uplayer = Upsampler2DQuaternionTransposeConv(
 #     kernel_size=3,

@@ -14,7 +14,9 @@ import numpy as np
 from numpy.random import RandomState
 import sys
 import pdb
+import re
 from scipy.stats import chi
+from typing import Union, Tuple
 
 
 def q_normalize(input, channel=1):
@@ -23,18 +25,15 @@ def q_normalize(input, channel=1):
     i = get_i(input)
     j = get_j(input)
     k = get_k(input)
-
     norm = torch.sqrt(r * r + i * i + j * j + k * k + 0.0001)
     r = r / norm
     i = i / norm
     j = j / norm
     k = k / norm
-
     return torch.cat([r, i, j, k], dim=channel)
 
 
 def check_input(input):
-
     if input.dim() not in {2, 3, 4, 5}:
         raise RuntimeError(
             "Quaternion linear accepts only input of dimension 2 or 3. Quaternion conv accepts up to 5 dim "
@@ -208,8 +207,7 @@ def quaternion_transpose_conv(
     dilation,
 ):
     """
-    Applies a quaternion trasposed convolution to the incoming data:
-
+    Applies a quaternion transposed convolution to the incoming data:
     """
 
     cat_kernels_4_r = torch.cat([r_weight, -i_weight, -j_weight, -k_weight], dim=1)
@@ -219,270 +217,6 @@ def quaternion_transpose_conv(
     cat_kernels_4_quaternion = torch.cat(
         [cat_kernels_4_r, cat_kernels_4_i, cat_kernels_4_j, cat_kernels_4_k], dim=0
     )
-
-    if input.dim() == 3:
-        convfunc = F.conv_transpose1d
-    elif input.dim() == 4:
-        convfunc = F.conv_transpose2d
-    elif input.dim() == 5:
-        convfunc = F.conv_transpose3d
-    else:
-        raise Exception(
-            "The convolutional input is either 3, 4 or 5 dimensions."
-            " input.dim = " + str(input.dim())
-        )
-
-    return convfunc(
-        input,
-        cat_kernels_4_quaternion,
-        bias,
-        stride,
-        padding,
-        output_padding,
-        groups,
-        dilation,
-    )
-
-
-def quaternion_conv_rotation(
-    input,
-    zero_kernel,
-    r_weight,
-    i_weight,
-    j_weight,
-    k_weight,
-    bias,
-    stride,
-    padding,
-    groups,
-    dilation,
-    quaternion_format,
-    scale=None,
-):
-    """
-    Applies a quaternion rotation and convolution transformation to the incoming data:
-
-    The rotation W*x*W^t can be replaced by R*x following:
-    https://en.wikipedia.org/wiki/Quaternions_and_spatial_rotation
-
-    Works for unitary and non unitary weights.
-
-    The initial size of the input must be a multiple of 3 if quaternion_format = False and
-    4 if quaternion_format = True.
-    """
-
-    square_r = r_weight * r_weight
-    square_i = i_weight * i_weight
-    square_j = j_weight * j_weight
-    square_k = k_weight * k_weight
-
-    norm = torch.sqrt(square_r + square_i + square_j + square_k + 0.0001)
-
-    # print(norm)
-
-    r_n_weight = r_weight / norm
-    i_n_weight = i_weight / norm
-    j_n_weight = j_weight / norm
-    k_n_weight = k_weight / norm
-
-    norm_factor = 2.0
-
-    square_i = norm_factor * (i_n_weight * i_n_weight)
-    square_j = norm_factor * (j_n_weight * j_n_weight)
-    square_k = norm_factor * (k_n_weight * k_n_weight)
-
-    ri = norm_factor * r_n_weight * i_n_weight
-    rj = norm_factor * r_n_weight * j_n_weight
-    rk = norm_factor * r_n_weight * k_n_weight
-
-    ij = norm_factor * i_n_weight * j_n_weight
-    ik = norm_factor * i_n_weight * k_n_weight
-
-    jk = norm_factor * j_n_weight * k_n_weight
-
-    if quaternion_format:
-        if scale is not None:
-            rot_kernel_1 = torch.cat(
-                [
-                    zero_kernel,
-                    scale * (1.0 - (square_j + square_k)),
-                    scale * (ij - rk),
-                    scale * (ik + rj),
-                ],
-                dim=1,
-            )
-            rot_kernel_2 = torch.cat(
-                [
-                    zero_kernel,
-                    scale * (ij + rk),
-                    scale * (1.0 - (square_i + square_k)),
-                    scale * (jk - ri),
-                ],
-                dim=1,
-            )
-            rot_kernel_3 = torch.cat(
-                [
-                    zero_kernel,
-                    scale * (ik - rj),
-                    scale * (jk + ri),
-                    scale * (1.0 - (square_i + square_j)),
-                ],
-                dim=1,
-            )
-        else:
-            rot_kernel_1 = torch.cat(
-                [zero_kernel, (1.0 - (square_j + square_k)), (ij - rk), (ik + rj)],
-                dim=1,
-            )
-            rot_kernel_2 = torch.cat(
-                [zero_kernel, (ij + rk), (1.0 - (square_i + square_k)), (jk - ri)],
-                dim=1,
-            )
-            rot_kernel_3 = torch.cat(
-                [zero_kernel, (ik - rj), (jk + ri), (1.0 - (square_i + square_j))],
-                dim=1,
-            )
-
-        zero_kernel2 = torch.cat(
-            [zero_kernel, zero_kernel, zero_kernel, zero_kernel], dim=1
-        )
-        global_rot_kernel = torch.cat(
-            [zero_kernel2, rot_kernel_1, rot_kernel_2, rot_kernel_3], dim=0
-        )
-
-    else:
-        if scale is not None:
-            rot_kernel_1 = torch.cat(
-                [
-                    scale * (1.0 - (square_j + square_k)),
-                    scale * (ij - rk),
-                    scale * (ik + rj),
-                ],
-                dim=0,
-            )
-            rot_kernel_2 = torch.cat(
-                [
-                    scale * (ij + rk),
-                    scale * (1.0 - (square_i + square_k)),
-                    scale * (jk - ri),
-                ],
-                dim=0,
-            )
-            rot_kernel_3 = torch.cat(
-                [
-                    scale * (ik - rj),
-                    scale * (jk + ri),
-                    scale * (1.0 - (square_i + square_j)),
-                ],
-                dim=0,
-            )
-        else:
-            rot_kernel_1 = torch.cat(
-                [1.0 - (square_j + square_k), (ij - rk), (ik + rj)], dim=0
-            )
-            rot_kernel_2 = torch.cat(
-                [(ij + rk), 1.0 - (square_i + square_k), (jk - ri)], dim=0
-            )
-            rot_kernel_3 = torch.cat(
-                [(ik - rj), (jk + ri), (1.0 - (square_i + square_j))], dim=0
-            )
-
-        global_rot_kernel = torch.cat([rot_kernel_1, rot_kernel_2, rot_kernel_3], dim=0)
-
-    # print(input.shape)
-    # print(square_r.shape)
-    # print(global_rot_kernel.shape)
-
-    if input.dim() == 3:
-        convfunc = F.conv1d
-    elif input.dim() == 4:
-        convfunc = F.conv2d
-    elif input.dim() == 5:
-        convfunc = F.conv3d
-    else:
-        raise Exception(
-            "The convolutional input is either 3, 4 or 5 dimensions."
-            " input.dim = " + str(input.dim())
-        )
-
-    return convfunc(input, global_rot_kernel, bias, stride, padding, dilation, groups)
-
-
-def quaternion_transpose_conv_rotation(
-    input,
-    zero_kernel,
-    r_weight,
-    i_weight,
-    j_weight,
-    k_weight,
-    bias,
-    stride,
-    padding,
-    output_padding,
-    groups,
-    dilation,
-    quaternion_format,
-):
-    """
-    Applies a quaternion rotation and transposed convolution transformation to the incoming data:
-
-    The rotation W*x*W^t can be replaced by R*x following:
-    https://en.wikipedia.org/wiki/Quaternions_and_spatial_rotation
-
-    Works for unitary and non unitary weights.
-
-    The initial size of the input must be a multiple of 3 if quaternion_format = False and
-    4 if quaternion_format = True.
-
-    """
-
-    square_r = r_weight * r_weight
-    square_i = i_weight * i_weight
-    square_j = j_weight * j_weight
-    square_k = k_weight * k_weight
-
-    norm = torch.sqrt(square_r + square_i + square_j + square_k + 0.0001)
-
-    r_weight = r_weight / norm
-    i_weight = i_weight / norm
-    j_weight = j_weight / norm
-    k_weight = k_weight / norm
-
-    norm_factor = 2.0
-
-    square_i = norm_factor * (i_weight * i_weight)
-    square_j = norm_factor * (j_weight * j_weight)
-    square_k = norm_factor * (k_weight * k_weight)
-
-    ri = norm_factor * r_weight * i_weight
-    rj = norm_factor * r_weight * j_weight
-    rk = norm_factor * r_weight * k_weight
-
-    ij = norm_factor * i_weight * j_weight
-    ik = norm_factor * i_weight * k_weight
-
-    jk = norm_factor * j_weight * k_weight
-
-    if quaternion_format:
-        rot_kernel_1 = torch.cat(
-            [zero_kernel, 1.0 - (square_j + square_k), ij - rk, ik + rj], dim=1
-        )
-        rot_kernel_2 = torch.cat(
-            [zero_kernel, ij + rk, 1.0 - (square_i + square_k), jk - ri], dim=1
-        )
-        rot_kernel_3 = torch.cat(
-            [zero_kernel, ik - rj, jk + ri, 1.0 - (square_i + square_j)], dim=1
-        )
-
-        zero_kernel2 = torch.zeros(rot_kernel_1.shape).cuda()
-        global_rot_kernel = torch.cat(
-            [zero_kernel2, rot_kernel_1, rot_kernel_2, rot_kernel_3], dim=0
-        )
-    else:
-        rot_kernel_1 = torch.cat([1.0 - (square_j + square_k), ij - rk, ik + rj], dim=1)
-        rot_kernel_2 = torch.cat([ij + rk, 1.0 - (square_i + square_k), jk - ri], dim=1)
-        rot_kernel_3 = torch.cat([ik - rj, jk + ri, 1.0 - (square_i + square_j)], dim=1)
-        global_rot_kernel = torch.cat([rot_kernel_1, rot_kernel_2, rot_kernel_3], dim=0)
 
     if input.dim() == 3:
         convfunc = F.conv_transpose1d
@@ -1045,8 +779,8 @@ def affect_init_conv(
     elif 2 >= r_weight.dim():
         raise Exception(
             "affect_conv_init accepts only tensors that have more than 2 dimensions. Found dimension = "
-            + str(real_weight.dim())
-        )
+            + str(r_weight.dim())
+        )  # Changed this line to use `r_weight` instead of `real_weight` bc it was undefined.
 
     r, i, j, k = init_func(
         r_weight.size(1),
@@ -1067,36 +801,28 @@ def affect_init_conv(
     k_weight.data = k.type_as(k_weight.data)
 
 
-def get_kernel_and_weight_shape(operation, in_channels, out_channels, kernel_size):
-    if operation == "convolution1d":
-        if type(kernel_size) is not int:
+def get_kernel_and_weight_shape(
+    operation: str, in_channels: int, out_channels: int, kernel_size: Union[int, tuple]
+) -> Tuple[tuple, tuple]:
+    # Extract dimension (1, 2, or 3) from operation string like 'convolution2d'
+    match = re.search(r"(\d+)d", operation)
+    if not match:
+        raise ValueError(f"Invalid operation name: {operation}")
+
+    dim = int(match.group(1))
+
+    # Check and normalize kernel_size
+    if isinstance(kernel_size, int):
+        ks = (kernel_size,) * dim
+    elif isinstance(kernel_size, (tuple, list)):
+        if len(kernel_size) != dim:
             raise ValueError(
-                """An invalid kernel_size was supplied for a 1d convolution. The kernel size
-                must be integer in the case. Found kernel_size = """
-                + str(kernel_size)
+                f"""An invalid kernel_size was supplied for a {dim}d convolution.
+                It must be an int or a tuple/list of length {dim}. Found: {kernel_size}"""
             )
-        else:
-            ks = kernel_size
-            w_shape = (out_channels, in_channels) + tuple((ks,))
-    else:  # in case it is 2d or 3d.
-        if operation == "convolution2d" and type(kernel_size) is int:
-            ks = (kernel_size, kernel_size)
-        elif operation == "convolution3d" and type(kernel_size) is int:
-            ks = (kernel_size, kernel_size, kernel_size)
-        elif type(kernel_size) is not int:
-            if operation == "convolution2d" and len(kernel_size) != 2:
-                raise ValueError(
-                    """An invalid kernel_size was supplied for a 2d convolution. The kernel size
-                    must be either an integer or a tuple of 2. Found kernel_size = """
-                    + str(kernel_size)
-                )
-            elif operation == "convolution3d" and len(kernel_size) != 3:
-                raise ValueError(
-                    """An invalid kernel_size was supplied for a 3d convolution. The kernel size
-                    must be either an integer or a tuple of 3. Found kernel_size = """
-                    + str(kernel_size)
-                )
-            else:
-                ks = kernel_size
-        w_shape = (out_channels, in_channels) + (*ks,)
+        ks = tuple(kernel_size)
+    else:
+        raise ValueError(f"Unsupported kernel_size type: {type(kernel_size)}")
+
+    w_shape = (out_channels, in_channels) + ks
     return ks, w_shape
