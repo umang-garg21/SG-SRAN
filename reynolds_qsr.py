@@ -13,10 +13,15 @@ from model.quat_utils.quaternion_layers import QuaternionConv
 # ────────────────────────────────────────────────────────────────────────────────
 import torch, torch.nn as nn
 from torchinfo import summary
-
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
+device = torch.device("cpu")
+torch.set_default_device(device)
 
 def make_model(args):
     return Reynolds_QSR(args)
+
+
 
 
 ### TRANSPOSE CONV BASED UPSAMPLER ####
@@ -26,6 +31,8 @@ class Upsampler2DQuaternionTransposeConv(nn.Module):
         kernel_size,
         scale,
         n_feats,
+        group_tensor,
+        group_tensor_inv,
         bn=False,
         act=False,
         bias=True,
@@ -33,38 +40,52 @@ class Upsampler2DQuaternionTransposeConv(nn.Module):
     ):
         super(Upsampler2DQuaternionTransposeConv, self).__init__()
 
-        self.conv_layer = QuaternionConv(
-            n_feats,
-            scale * scale * n_feats,
-            kernel_size=kernel_size,
-            stride=1,
-            padding=kernel_size // 2,
-        )
-
-        # Adding dropout layer after the convolution layer
-        self.dropout = nn.Dropout(p=dropout_prob)  # Dropout with specified probability
-
-        self.transposed_conv = nn.ConvTranspose2d(
-            in_channels=scale * scale * n_feats,  # e.g., 1024
-            out_channels=n_feats,  # e.g., 256
-            kernel_size=(scale, scale),  # upsampling only in width
-            stride=(scale, scale),
-            padding=(1, 1),  # pad width by 1, height unchanged
-            output_padding=(2, 2),  # add 2 more pixels in width
-            bias=True,
-        )
-
-        self.post_conv_layer = QuaternionConv(
-            n_feats,
-            n_feats,
-            kernel_size=kernel_size,
-            stride=1,
-            padding=kernel_size // 2,
-        )
-
         # self.up_sample = nn.Upsample(scale_factor=2, mode='linear', align_corners=True)
         self.scale = scale
         self.n_feat = n_feats
+        
+        self.conv_layer = EquivariantReynoldsWrap(
+            QuaternionConv(
+                in_channels=n_feats,
+                out_channels=scale*scale*n_feats,
+                kernel_size=kernel_size,
+                stride=1,
+                padding=kernel_size // 2,
+                ),
+                group_tensor=group_tensor,
+                group_tensor_inv=group_tensor_inv,
+            )
+        
+        # Adding dropout layer after the convolution layer
+        #self.dropout = nn.Dropout(p=dropout_prob)  # Dropout with specified probability
+
+        self.transposed_conv = EquivariantReynoldsWrap(
+            nn.ConvTranspose2d(
+                in_channels=scale * scale * n_feats,  # e.g., 1024
+                out_channels=n_feats,  # e.g., 256
+                kernel_size=(scale, scale),  # upsampling only in width
+                stride=(scale, scale),
+                padding=(1, 1),  # pad width by 1, height unchanged
+                output_padding=(2, 2),  # add 2 more pixels in width
+                bias=True,
+                ),
+                group_tensor=group_tensor,
+                group_tensor_inv=group_tensor_inv,
+            )
+
+
+        self.post_conv_layer = EquivariantReynoldsWrap(
+            QuaternionConv(
+                in_channels=n_feats,
+                out_channels=n_feats,
+                kernel_size=kernel_size,
+                stride=1,
+                padding=kernel_size // 2,
+                ),
+                group_tensor=group_tensor,
+                group_tensor_inv=group_tensor_inv,
+            )
+
 
     def forward(self, x):
         try:
@@ -73,7 +94,7 @@ class Upsampler2DQuaternionTransposeConv(nn.Module):
             # print("Permuted Input:", x.shape)
             x = self.conv_layer(x)
             # print("After conv:", x.shape)
-            x = self.transposed_conv(x)
+            #x = self.transposed_conv(x)
             # print("After transpose:", x.shape)
             x = self.post_conv_layer(x)
             # print("After post_conv:", x.shape)
@@ -133,7 +154,7 @@ class EquivariantReynoldsWrap(nn.Module):
 
         # --- Lift: apply group action g·x ---
         x = x.view(B, n_feats, Cg, *spatial_in)  # (B,n_feats,Cg,*spatial)
-        gamma_x = torch.einsum("gci,bnc...->bgni...", self.group_tensor, x)
+        gamma_x = torch.einsum("gci,bni...->bgnc...", self.group_tensor, x)
         gamma_x = gamma_x.reshape(B * G, n_feats * Cg, *spatial_in)  # (B*G,C,*spatial)
 
         # --- Apply wrapped fn ---
@@ -213,31 +234,30 @@ class Reynolds_QSR(nn.Module):
             )
         ]
 
-        # m_tail = [
-        #     EquivariantReynoldsWrap(
-        #         Upsampler2DQuaternionTransposeConv(
-        #             kernel_size=kernel_size,
-        #             scale=scale,
-        #             n_feats=n_feats,
-        #         ),
-        #         group_tensor=self.group_tensor,
-        #         group_tensor_inv=self.group_tensor_inv,
-        #     ),
-        #     EquivariantReynoldsWrap(
-        #         QuaternionConv(
-        #             in_channels=n_feats,
-        #             out_channels=n_channels,
-        #             kernel_size=kernel_size,
-        #             stride=1,
-        #             padding=kernel_size // 2,
-        #         ),
-        #         group_tensor=self.group_tensor,
-        #         group_tensor_inv=self.group_tensor_inv,
-        #     ),
-        # ]
+        m_tail = [
+                Upsampler2DQuaternionTransposeConv(
+                    kernel_size=kernel_size,
+                    scale=scale,
+                    n_feats=n_feats,
+                    group_tensor=self.group_tensor,
+                    group_tensor_inv=self.group_tensor_inv,
+                ),
+
+            EquivariantReynoldsWrap(
+                QuaternionConv(
+                    in_channels=n_feats,
+                    out_channels=n_channels,
+                    kernel_size=kernel_size,
+                    stride=1,
+                    padding=kernel_size // 2,
+                ),
+                group_tensor=self.group_tensor,
+                group_tensor_inv=self.group_tensor_inv,
+            ),
+        ]
         self.head = nn.Sequential(*m_head)
-        # self.body = nn.Sequential(*m_body)
-        # self.tail = nn.Sequential(*m_tail)
+        #self.body = nn.Sequential(*m_body)
+        self.tail = nn.Sequential(*m_tail)
 
     def forward(self, x):
         # alpha = 1  # learnable or fixed
@@ -246,7 +266,7 @@ class Reynolds_QSR(nn.Module):
         # res = self.body(x)
         # x= res + alpha * x
         # x = self.gen_eqv(x, self.tail)
-        # x = self.tail(x)
+        x = self.tail(x)
         return x
 
     def load_state_dict(self, state_dict, strict=True):
