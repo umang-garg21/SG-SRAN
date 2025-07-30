@@ -37,7 +37,6 @@ class QuaternionTransposeConv(Module):
         weight_init="quaternion",
         seed=None,
         operation="convolution2d",
-        rotation=False,
         quaternion_format=False,
     ):
 
@@ -55,7 +54,6 @@ class QuaternionTransposeConv(Module):
         self.seed = seed if seed is not None else np.random.randint(0, 1234)
         self.rng = RandomState(self.seed)
         self.operation = operation
-        self.rotation = rotation
         self.quaternion_format = quaternion_format
         self.winit = {
             "quaternion": quaternion_init,

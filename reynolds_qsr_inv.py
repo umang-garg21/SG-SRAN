@@ -24,89 +24,18 @@ def make_model(args):
     return Reynolds_QSR(args)
 
 
-class UpsamplerQuaternionTransposeConv(nn.Module):
-    def __init__(
-        self,
-        kernel_size,
-        scale,
-        n_feats,
-        group_tensor,
-        group_tensor_inv,
-        bn=False,
-        act=False,
-        bias=True,
-        dropout_prob=0.2,
-    ):
-        super(UpsamplerQuaternionTransposeConv, self).__init__()
-
-        self.scale = scale
-        self.n_feat = n_feats
-
-        self.conv_layer = EquivariantReynoldsWrap(
-            QuaternionConv(
-                in_channels=n_feats,
-                out_channels=scale * scale * n_feats,
-                kernel_size=kernel_size,
-                stride=1,
-                padding=kernel_size // 2,
-            ),
-            group_tensor=group_tensor,
-            group_tensor_inv=group_tensor_inv,
-        )
-
-        # Adding dropout layer after the convolution layer
-        self.dropout = nn.Dropout(p=dropout_prob)  # Dropout with specified probability
-
-        self.transposed_conv = EquivariantReynoldsWrap(
-            QuaternionTransposeConv(
-                in_channels=scale * scale * n_feats,
-                out_channels=n_feats,
-                kernel_size=scale,
-                stride=scale,
-                padding=kernel_size // 2,
-                output_padding=2,  # Adjust output padding
-            ),
-            group_tensor=group_tensor,
-            group_tensor_inv=group_tensor_inv,
-        )
-        self.post_conv_layer = EquivariantReynoldsWrap(
-            QuaternionConv(
-                in_channels=n_feats,
-                out_channels=n_feats,
-                kernel_size=kernel_size,
-                stride=1,
-                padding=kernel_size // 2,
-            ),
-            group_tensor=group_tensor,
-            group_tensor_inv=group_tensor_inv,
-        )
-
-    def forward(self, x):
-        try:
-
-            x = self.conv_layer(x)
-            x = self.transposed_conv(x)
-            x = self.post_conv_layer(x)
-            return x
-        except Exception as e:
-            print("Error in Upsampler2DQuaternionTransposeConv:", e)
-
-
-class EquivariantReynoldsWrap(nn.Module):
+class InvariantReynoldsWrap(nn.Module):
     """
-    Reynolds operator wrapper: enforces equivariance for any module fn
+    Reynolds operator wrapper: enforces invariance for any module fn
     under a group action represented by group_tensor (G, Cg, Cg).
     Input/output channel dims must be multiples of Cg.
     Works with inputs (B, C, *spatial) for 1D/2D/3D ops.
     """
 
-    def __init__(
-        self, fn: nn.Module, group_tensor: torch.Tensor, group_tensor_inv: torch.Tensor
-    ):
+    def __init__(self, fn: nn.Module, group_tensor: torch.Tensor):
         super().__init__()
         self.fn = fn
         self.register_buffer("group_tensor", group_tensor)  # (G, Cg, Cg)
-        self.register_buffer("group_tensor_inv", group_tensor_inv)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, C, *spatial_in = x.shape
@@ -121,19 +50,81 @@ class EquivariantReynoldsWrap(nn.Module):
 
         # --- Apply wrapped fn ---
         fx = self.fn(gamma_x)  # (B*G,Cout,*spatial_out)
-        BGO, Cout, *spatial_out = fx.shape
-        assert BGO == B * G
-        assert Cout % Cg == 0, f"fn must output multiple of {Cg}, got {Cout}"
-        n_feats_out = Cout // Cg
+        BG_out, C_out, *spatial_out = fx.shape
+        assert BG_out == B * G
+        assert C_out % Cg == 0, f"fn must output multiple of {Cg}, got {C_out}"
+        n_feats_out = C_out // Cg
 
         # --- Project back with g⁻¹ ---
         fx = fx.view(
             B, G, n_feats_out, Cg, *spatial_out
         )  # (B,G,n_feats_out,Cg,*spatial)
-        fx = torch.einsum("gci,bgni...->bgnc...", self.group_tensor_inv, fx)
-
         # --- Average over group and return ---
-        return fx.mean(dim=1).reshape(B, Cout, *spatial_out)
+        return fx.mean(dim=1).reshape(B, C_out, *spatial_out)
+
+
+class UpsamplerQuaternionTransposeConv(nn.Module):
+    def __init__(
+        self,
+        kernel_size,
+        scale,
+        n_feats,
+        group_tensor,
+        bn=False,
+        act=False,
+        bias=True,
+        dropout_prob=0.2,
+    ):
+        super(UpsamplerQuaternionTransposeConv, self).__init__()
+
+        self.scale = scale
+        self.n_feat = n_feats
+
+        self.conv_layer = InvariantReynoldsWrap(
+            QuaternionConv(
+                in_channels=n_feats,
+                out_channels=scale * scale * n_feats,
+                kernel_size=kernel_size,
+                stride=1,
+                padding=kernel_size // 2,
+            ),
+            group_tensor=group_tensor,
+        )
+
+        # Adding dropout layer after the convolution layer
+        self.dropout = nn.Dropout(p=dropout_prob)  # Dropout with specified probability
+
+        self.transposed_conv = InvariantReynoldsWrap(
+            QuaternionTransposeConv(
+                in_channels=scale * scale * n_feats,
+                out_channels=n_feats,
+                kernel_size=scale,
+                stride=scale,
+                padding=kernel_size // 2,
+                output_padding=2,  # Adjust output padding
+            ),
+            group_tensor=group_tensor,
+        )
+        self.post_conv_layer = InvariantReynoldsWrap(
+            QuaternionConv(
+                in_channels=n_feats,
+                out_channels=n_feats,
+                kernel_size=kernel_size,
+                stride=1,
+                padding=kernel_size // 2,
+            ),
+            group_tensor=group_tensor,
+        )
+
+    def forward(self, x):
+        try:
+
+            x = self.conv_layer(x)
+            x = self.transposed_conv(x)
+            x = self.post_conv_layer(x)
+            return x
+        except Exception as e:
+            print("Error in Upsampler2DQuaternionTransposeConv:", e)
 
 
 class Reynolds_QSR(nn.Module):
@@ -150,13 +141,8 @@ class Reynolds_QSR(nn.Module):
             "group_tensor", torch.tensor(np.load(args.sym_np_path), dtype=torch.float32)
         )  # (G, C, C) where C=4
 
-        self.register_buffer(
-            "group_tensor_inv",
-            torch.tensor(np.load(args.sym_inv_np_path), dtype=torch.float32),
-        )  # (G, C, C) where C=4
-
         m_head = [
-            EquivariantReynoldsWrap(
+            InvariantReynoldsWrap(
                 QuaternionConv(
                     in_channels=n_channels,
                     out_channels=n_feats,
@@ -165,53 +151,17 @@ class Reynolds_QSR(nn.Module):
                     padding=kernel_size // 2,
                 ),
                 group_tensor=self.group_tensor,
-                group_tensor_inv=self.group_tensor_inv,
             ),
         ]
 
         m_tail = [
-            # EquivariantReynoldsWrap(
-            #     QuaternionConv(
-            #         in_channels=n_feats,
-            #         out_channels=scale * scale * n_feats,
-            #         kernel_size=kernel_size,
-            #         stride=1,
-            #         padding=kernel_size // 2,
-            #     ),
-            #     group_tensor=self.group_tensor,
-            #     group_tensor_inv=self.group_tensor_inv,
-            # ),
-            # EquivariantReynoldsWrap(
-            #     QuaternionTransposeConv(
-            #         in_channels=scale * scale * n_feats,
-            #         out_channels=n_feats,
-            #         kernel_size=scale,
-            #         stride=scale,
-            #         padding=kernel_size // 2,
-            #         # output_padding=(2, 2),  # Adjust output padding
-            #     ),
-            #     group_tensor=self.group_tensor,
-            #     group_tensor_inv=self.group_tensor_inv,
-            # ),
-            # EquivariantReynoldsWrap(
-            #     QuaternionConv(
-            #         in_channels=n_feats,
-            #         out_channels=n_feats,
-            #         kernel_size=kernel_size,
-            #         stride=1,
-            #         padding=kernel_size // 2,
-            #     ),
-            #     group_tensor=self.group_tensor,
-            #     group_tensor_inv=self.group_tensor_inv,
-            # ),
             UpsamplerQuaternionTransposeConv(
                 kernel_size=kernel_size,
                 scale=scale,
                 n_feats=n_feats,
                 group_tensor=self.group_tensor,
-                group_tensor_inv=self.group_tensor_inv,
             ),
-            EquivariantReynoldsWrap(
+            InvariantReynoldsWrap(
                 QuaternionConv(
                     in_channels=n_feats,
                     out_channels=n_channels,
@@ -220,7 +170,6 @@ class Reynolds_QSR(nn.Module):
                     padding=kernel_size // 2,
                 ),
                 group_tensor=self.group_tensor,
-                group_tensor_inv=self.group_tensor_inv,
             ),
         ]
         self.head = nn.Sequential(*m_head)
@@ -288,12 +237,19 @@ if __name__ == "__main__":
     summary(model, input_size=(7, 4, 64, 64))
 
     data = torch.rand((1, 4, 63, 65))
-
+    x = data
+    a = QuaternionConv(
+        in_channels=4,
+        out_channels=4,
+        kernel_size=3,
+        stride=1,
+        padding=3 // 2,
+    )
     model(data)
 
-    def test_model_equivariance(model, x, atol=1e-6, rtol=1e-5):
+    def test_model_invariance(model, x, atol=1e-6, rtol=1e-5):
         """
-        Tests equivariance: f(g·x) ≈ g·f(x)
+        Tests invariance: f(g·x) ≈ f(x)
         for model with group_tensor (G,Cg,Cg).
         Input shape: (B,C,*spatial) with C % Cg == 0.
         """
@@ -313,20 +269,16 @@ if __name__ == "__main__":
                 # g·x
                 gx = torch.einsum("ci,bi...->bc...", g, x)  # (B,C,*spatial)
                 f_gx = model(gx)  # f(g·x)
-
-                # g·f(x)
-                g_fx = torch.einsum("ci,bi...->bc...", g, fx)  # (B,Cout,*spatial_out)
-
                 # max error for this g
-                diff = (f_gx - g_fx).abs().max().item()
+                diff = (f_gx - fx).abs().max().item()
                 errors.append(diff)
 
             max_err = max(errors)
             passed = max_err < atol + rtol * fx.abs().max().item()
             return passed, max_err, errors
 
-    passed, max_err, errs = test_model_equivariance(model, data)
-    print("Equivariant:", passed)
+    passed, max_err, errs = test_model_invariance(model, data)
+    print("Invariance:", passed)
     print("Max error:", max_err)
     print("Per-group errors:", errs)
 
