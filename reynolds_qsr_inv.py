@@ -238,12 +238,15 @@ if __name__ == "__main__":
 
     data = torch.rand((1, 4, 63, 65))
     x = data
-    a = QuaternionConv(
-        in_channels=4,
-        out_channels=4,
-        kernel_size=3,
-        stride=1,
-        padding=3 // 2,
+    a = InvariantReynoldsWrap(
+        QuaternionConv(
+            in_channels=4,
+            out_channels=4,
+            kernel_size=3,
+            stride=1,
+            padding=3 // 2,
+        ),
+        group_tensor=self.group_tensor,
     )
     model(data)
 
@@ -261,7 +264,6 @@ if __name__ == "__main__":
 
             # f(x)
             fx = model(x)  # (B,Cout,*spatial_out)
-            _, Cout, *spatial_out = fx.shape
 
             errors = []
 
