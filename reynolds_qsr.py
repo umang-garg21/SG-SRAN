@@ -15,9 +15,9 @@ import torch, torch.nn as nn
 from torchinfo import summary
 import os
 
-os.environ["CUDA_VISIBLE_DEVICES"] = ""
-device = torch.device("cpu")
-torch.set_default_device(device)
+# os.environ["CUDA_VISIBLE_DEVICES"] = ""
+# device = torch.device("cpu")
+# torch.set_default_device(device)
 
 
 def make_model(args):
@@ -144,7 +144,6 @@ class Reynolds_QSR(nn.Module):
         n_feats = args.n_feats
         scale = args.scale
         kernel_size = 3
-        # act = nn.ReLU(True)
 
         self.register_buffer(
             "group_tensor", torch.tensor(np.load(args.sym_np_path), dtype=torch.float32)
@@ -170,40 +169,6 @@ class Reynolds_QSR(nn.Module):
         ]
 
         m_tail = [
-            # EquivariantReynoldsWrap(
-            #     QuaternionConv(
-            #         in_channels=n_feats,
-            #         out_channels=scale * scale * n_feats,
-            #         kernel_size=kernel_size,
-            #         stride=1,
-            #         padding=kernel_size // 2,
-            #     ),
-            #     group_tensor=self.group_tensor,
-            #     group_tensor_inv=self.group_tensor_inv,
-            # ),
-            # EquivariantReynoldsWrap(
-            #     QuaternionTransposeConv(
-            #         in_channels=scale * scale * n_feats,
-            #         out_channels=n_feats,
-            #         kernel_size=scale,
-            #         stride=scale,
-            #         padding=kernel_size // 2,
-            #         # output_padding=(2, 2),  # Adjust output padding
-            #     ),
-            #     group_tensor=self.group_tensor,
-            #     group_tensor_inv=self.group_tensor_inv,
-            # ),
-            # EquivariantReynoldsWrap(
-            #     QuaternionConv(
-            #         in_channels=n_feats,
-            #         out_channels=n_feats,
-            #         kernel_size=kernel_size,
-            #         stride=1,
-            #         padding=kernel_size // 2,
-            #     ),
-            #     group_tensor=self.group_tensor,
-            #     group_tensor_inv=self.group_tensor_inv,
-            # ),
             UpsamplerQuaternionTransposeConv(
                 kernel_size=kernel_size,
                 scale=scale,
@@ -272,23 +237,8 @@ if __name__ == "__main__":
 
     args = Custom_Args()
     model = Reynolds_QSR(args)
-    self = model
-
-    # a = EquivariantReynoldsWrap(
-    #     QuaternionConv(
-    #         in_channels=4,
-    #         out_channels=8,
-    #         kernel_size=3,
-    #         stride=1,
-    #         padding=3 // 2,
-    #     ),
-    #     group_tensor=self.group_tensor,
-    #     group_tensor_inv=self.group_tensor_inv,
-    # )
     summary(model, input_size=(7, 4, 64, 64))
-
     data = torch.rand((1, 4, 63, 65))
-
     model(data)
 
     def test_model_equivariance(model, x, atol=1e-6, rtol=1e-5):
@@ -330,6 +280,17 @@ if __name__ == "__main__":
     print("Max error:", max_err)
     print("Per-group errors:", errs)
 
+    # a = EquivariantReynoldsWrap(
+    #     QuaternionConv(
+    #         in_channels=4,
+    #         out_channels=8,
+    #         kernel_size=3,
+    #         stride=1,
+    #         padding=3 // 2,
+    #     ),
+    #     group_tensor=self.group_tensor,
+    #     group_tensor_inv=self.group_tensor_inv,
+    # )
     # m_tail = [
     #     EquivariantReynoldsWrap(
     #         QuaternionConv(

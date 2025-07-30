@@ -142,16 +142,16 @@ class Reynolds_QSR(nn.Module):
         )  # (G, C, C) where C=4
 
         m_head = [
-            InvariantReynoldsWrap(
-                QuaternionConv(
-                    in_channels=n_channels,
-                    out_channels=n_feats,
-                    kernel_size=kernel_size,
-                    stride=1,
-                    padding=kernel_size // 2,
-                ),
-                group_tensor=self.group_tensor,
+            # InvariantReynoldsWrap(
+            QuaternionConv(
+                in_channels=n_channels,
+                out_channels=n_feats,
+                kernel_size=kernel_size,
+                stride=1,
+                padding=kernel_size // 2,
             ),
+            #     group_tensor=self.group_tensor,
+            # ),
         ]
 
         m_tail = [
@@ -161,16 +161,16 @@ class Reynolds_QSR(nn.Module):
                 n_feats=n_feats,
                 group_tensor=self.group_tensor,
             ),
-            InvariantReynoldsWrap(
-                QuaternionConv(
-                    in_channels=n_feats,
-                    out_channels=n_channels,
-                    kernel_size=kernel_size,
-                    stride=1,
-                    padding=kernel_size // 2,
-                ),
-                group_tensor=self.group_tensor,
+            # InvariantReynoldsWrap(
+            QuaternionConv(
+                in_channels=n_feats,
+                out_channels=n_channels,
+                kernel_size=kernel_size,
+                stride=1,
+                padding=kernel_size // 2,
             ),
+            # group_tensor=self.group_tensor,
+            # ),
         ]
         self.head = nn.Sequential(*m_head)
         # self.body = nn.Sequential(*m_body)
