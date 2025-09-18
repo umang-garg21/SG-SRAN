@@ -1,7 +1,8 @@
 import numpy as np
 import sympy as sp
-from itertools import permutations
+from itertools import permutations, product
 
+import quaternion_matrix_expression_farebrother
 
 # There are a total 48 total quaternion matrix expression forms
 # The purpose of this script is to assess their uniqueness and determine how many duplicate quat forms exist
@@ -20,27 +21,33 @@ k = sp.symbols("k", commutative=False)
 # 24 from number of unique 4 term permutations
 # Each permutation has 2 forms because q @ q_conj != q_cong @ q
 # Note: these 2 forms are skew symmetric
-component_list = [s, i, j, k]
-conj_list = [s, -i, -j, -k]
-q_combos = permutations(component_list, 4)
+component_list = [i, j, k]
+conj_list = [-i, -j, -k]
+sign_list = [1, -1]
+sign_combos = product(sign_list, repeat=3)
+sign_combos = list(sign_combos)
+
+
+q_combos = permutations(component_list, 3)
 q_list = list(q_combos)
 
-q_conj_combos = permutations(conj_list, 4)
-q_conj_list = list(q_conj_combos)
+
+q_list_full = []
+q_conj_list_full = []
+for sign in sign_combos:
+    for q in q_list:
+        q_list_full.append([s, sign[0] * q[0], sign[1] * q[1], sign[2] * q[2]])
+        q_conj_list_full.append([s, sign[0] * -q[0], sign[1] * -q[1], sign[2] * -q[2]])
 
 # Build raw symbolic list
 matrix_list = []
 
-for q_ind, q in enumerate(q_list):
-    q_conj = q_conj_list[q_ind]
-    q1 = sp.Matrix(list(q))
-    q1_conj = sp.Matrix([list(q_conj)])
-    mat1 = q1 @ q1_conj
+for q_ind, q in enumerate(q_list_full):
+    q_conj = q_conj_list_full[q_ind]
+    q1 = sp.Matrix([list(q)])
+    q1_conj = sp.Matrix(list(q_conj))
+    mat1 = q1_conj @ q1  # @ q1_conj
     matrix_list.append(mat1)
-    q2 = sp.Matrix(list(q_conj))
-    q2_conj = sp.Matrix([list(q)])
-    mat2 = q2 @ q2_conj
-    matrix_list.append(mat2)
 
 # Simplify Operation Matrices with i,j,k equivalencies
 simplified_list = []
@@ -59,7 +66,6 @@ for current_mat in matrix_list:
     current_mat = current_mat.subs(k * j, -i)
     simplified_list.append(current_mat)
 
-
 # Perform Piecewise Substitutions of a, b, c, and d
 matrix_quat_list = []
 
@@ -72,6 +78,40 @@ for current_mat in simplified_list:
     current_mat = current_mat.subs(j, c)
     current_mat = current_mat.subs(k, d)
     matrix_quat_list.append(current_mat)
+
+# Handedness calculation
+quat_handedness = []
+for current_quat in q_list_full:
+    current_val = current_quat[0]*current_quat[1]*current_quat[2]*current_quat[3]
+    current_val = current_val.subs(i * j, k)
+    current_val = current_val.subs(j * i, -k)
+    current_val = current_val.subs(i * k, -j)
+    current_val = current_val.subs(k * i, j)
+    current_val = current_val.subs(j * k, i)
+    current_val = current_val.subs(k * j, -i)
+    current_val = current_val.subs(s, 1)
+    current_val = current_val.subs(i ** 2, -1)
+    current_val = current_val.subs(j ** 2, -1)
+    current_val = current_val.subs(k ** 2, -1)
+    quat_handedness.append(current_val)
+print(f"handedness = {quat_handedness}")
+
+# determinant_list = []
+# current_matrix_form = simplified_list[0]
+# current_determinant = sp.det(current_matrix_form)
+# current_determinant = current_determinant.subs(s, 1)
+# current_val= current_determinant
+# current_val = current_val.subs(i * j, k)
+# current_val = current_val.subs(j * i, -k)
+# current_val = current_val.subs(i * k, -j)
+# current_val = current_val.subs(k * i, j)
+# current_val = current_val.subs(j * k, i)
+# current_val = current_val.subs(k * j, -i)
+# current_val = current_val.subs(s, 1)
+# current_val = current_val.subs(i ** 2, -1)
+# current_val = current_val.subs(j ** 2, -1)
+# current_val = current_val.subs(k ** 2, -1)
+# determinant_list.append(current_val)
 
 # With all 48 matrix quat forms now defined, we will go through the FCC generation process with each of them
 # Once generated, we will compare them for uniqueness in matrix form as well as associated quaternion form
@@ -104,6 +144,7 @@ fcc_symms = sp.Matrix(
         [h, h, -h, h],
         [h, -h, h, h],
         [h, -h, -h, -h],
+        # Negatives
         [-1, 0, 0, 0],
         [0, -1, 0, 0],
         [0, 0, -1, 0],
@@ -130,8 +171,8 @@ fcc_symms = sp.Matrix(
         [-h, h, h, h],
     ]
 )
-triclinic_syms = sp.Matrix([[1, 0, 0, 0], [-1, 0, 0, 0]])
-fcc_symms = triclinic_syms
+# triclinic_syms = sp.Matrix([[1, 0, 0, 0], [-1, 0, 0, 0]])
+# fcc_symms = triclinic_syms
 
 # Operators will be generated here and stored as a Python list of SymPy Matrix elements
 # SymPy subs() along with numpy numpy.array().astype() can be used to convert these into numpy arrays
@@ -153,83 +194,138 @@ for quat_matrix_form in matrix_quat_list:
     symbolic_form_list.append(operator_list)
 
 # Test to Verify Equivalence of Matrix forms
-# Since we know these operators are unique but not ordered, we will verify with element-wise comparison
-# This process is a bit awful as sympy mutable dense matrices, so we will convert to strings to have something hashable
-string_form_list = []
+# Comparison as hashable sets appears to have debug issues, so we will do the comparison as brute force
+# despite it being slow and suboptimal
 
-for quat_matrix_form in matrix_quat_list:
-    operator_list = []
-    for mat_row in np.arange(sp.shape(fcc_symms)[0]):
-        current_quat = fcc_symms.row(mat_row)
-        current_operator = quat_matrix_form.subs(
-            {
-                a: current_quat[0],
-                b: current_quat[1],
-                c: current_quat[2],
-                d: current_quat[3],
-            }
-        )
-        current_operator = str(current_operator)
-        operator_list.append(current_operator)
-    string_form_list.append(operator_list)
-
-# As strings, we can compare using set() without an iterable
 comparison_list = []
-comparison_target = set(string_form_list[0])
-for comparator in string_form_list:
-    current_comparison = set(comparator)
-    check_val = comparison_target == current_comparison
-    comparison_list.append(check_val)
-print(f"Matrix forms equal: {all(comparison_list)}")
+comparison_target = symbolic_form_list[0]
+
+for comparator in symbolic_form_list:
+    true_count = 0
+    for current_comparison in comparator:
+        if current_comparison in comparison_target:
+            true_count += 1
+
+    comparison_list.append(true_count)
+
+print(f'Comparison counts = {comparison_list}')
+
 
 # Comparison of vector forms after group operations
-# We will do a similar operation to above but with the added vector multiplication and simplification
-# We will also convert all group operators to numeric form first to prevent any symbol swap issues in string comparison
-# For readability, we will evaluate sqrt(2)/2 as 0.707
-numeric_form_list = []
-
-for quat_matrix_form in matrix_quat_list:
-    operator_list = []
-    for mat_row in np.arange(sp.shape(fcc_symms)[0]):
-        current_quat = fcc_symms.row(mat_row)
-        current_operator = quat_matrix_form.subs(
-            {
-                a: current_quat[0],
-                b: current_quat[1],
-                c: current_quat[2],
-                d: current_quat[3],
-            }
-        )
-        current_operator = current_operator.subs({h: 0.5, i: 0.707})
-        current_operator = np.array(current_operator)
-        operator_list.append(current_operator)
-    numeric_form_list.append(operator_list)
-
-# With numeric form, we apply operations to an arbitrary quaternion and convert the results to strings
-w, x, y, z = sp.symbols("w x y z")
+# First we apply operations to an arbitrary quaternion s
+w, x, y, z = sp.symbols('w x y z')
 test_quat = sp.Matrix([[w, x, y, z]])
 
 quat_list = []
 
-for numeric_form in numeric_form_list:
+for symbolic_form in symbolic_form_list:
     applied_list = []
-    for current_operator in numeric_form:
+    for current_operator in symbolic_form:
         # Apply operation
         current_quat = test_quat @ current_operator
-        # Convert to String
-        current_quat = str(current_quat)
         applied_list.append(current_quat)
     quat_list.append(applied_list)
 
-# As strings, we can (again) compare using set() without an iterable
-quat_comparison_list = []
-comparison_target = set(quat_list[0])
-for comparator in quat_list:
-    current_comparison = set(comparator)
-    check_val = comparison_target == current_comparison
-    quat_comparison_list.append(check_val)
-print(f"Quaternion forms equal: {all(quat_comparison_list)}")
 
-# It seems they are not equal... we can also check this manually
-print(quat_list[0])
-print(quat_list[1])
+quat_comparison_target = quat_list[0]
+quat_comparison_list = []
+
+for comparator in quat_list:
+    true_count = 0
+    for current_comparison in comparator:
+        if current_comparison in quat_comparison_target:
+            true_count += 1
+
+    quat_comparison_list.append(true_count)
+    # Do something with the matching operator
+
+    # test = []
+    # for q in quat_list[1]:
+    #     if q in quat_list[0]:
+    #         test.append(q)
+
+print(f'Quat comparison counts = {quat_comparison_list}')
+
+# Farebrother Comparisons
+[type1, type2] = quaternion_matrix_expression_farebrother.build_farebrother_forms()
+fare_full = type1+type2
+# Operators will be generated here and stored as a Python list of SymPy Matrix elements
+# SymPy subs() along with numpy numpy.array().astype() can be used to convert these into numpy arrays
+fare_matrix_quat_list = []
+for fare_form in fare_full:
+    current_matrix_quat = a*fare_form[0] + b*fare_form[1] + c*fare_form[2] +d*fare_form[3]
+    fare_matrix_quat_list.append(current_matrix_quat)
+
+fare_symb_form_list = []
+
+for quat_matrix_form in fare_matrix_quat_list:
+    operator_list = []
+    for mat_row in np.arange(sp.shape(fcc_symms)[0]):
+        current_quat = fcc_symms.row(mat_row)
+        current_operator = quat_matrix_form.subs(
+            {
+                a: current_quat[0],
+                b: current_quat[1],
+                c: current_quat[2],
+                d: current_quat[3],
+            }
+        )
+        operator_list.append(current_operator)
+    fare_symb_form_list.append(operator_list)
+
+# Test to Verify Equivalence of Matrix forms
+# Comparison as hashable sets appears to have debug issues, so we will do the comparison as brute force
+# despite it being slow and suboptimal
+
+comparison_list = []
+comparison_target = symbolic_form_list[0]
+# comparison_target = fare_symb_form_list[24]
+
+for comparator in fare_symb_form_list:
+    true_count = 0
+    for current_comparison in comparator:
+        if current_comparison in comparison_target:
+            true_count += 1
+
+    comparison_list.append(true_count)
+
+print(f'Fare Comparison counts = {comparison_list}')
+
+
+# Comparison of vector forms after group operations
+# First we apply operations to an arbitrary quaternion s
+w, x, y, z = sp.symbols('w x y z')
+test_quat = sp.Matrix([[w, x, y, z]])
+
+fare_quat_list = []
+
+for symbolic_form in fare_symb_form_list:
+    applied_list = []
+    for current_operator in symbolic_form:
+        # Apply operation
+        current_quat = test_quat @ current_operator
+        applied_list.append(current_quat)
+    fare_quat_list.append(applied_list)
+
+
+quat_comparison_target = quat_list[0]
+# quat_comparison_target = fare_quat_list[24]
+quat_comparison_list = []
+
+for comparator in fare_quat_list:
+    true_count = 0
+    for current_comparison in comparator:
+        if current_comparison in quat_comparison_target:
+            true_count += 1
+
+    quat_comparison_list.append(true_count)
+    # Do something with the matching operator
+
+    # test = []
+    # for q in quat_list[1]:
+    #     if q in quat_list[0]:
+    #         test.append(q)
+
+print(f'Fare Quat comparison counts = {quat_comparison_list}')
+
+
