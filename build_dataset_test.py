@@ -49,7 +49,7 @@ from post_processing.post_process import run_postprocess_from_config
 
 # from postprocess.run_postprocess_from_config import run_postprocess_from_config
 
-run_postprocess_from_config("experiments/IN718/debug_x4", max_samples=8)
+run_postprocess_from_config("experiments/IN718/debug_x4_kss_4", max_samples=8)
 
 # dataset_info = build_quaternion_sr_dataset(
 #     hr_dirs={

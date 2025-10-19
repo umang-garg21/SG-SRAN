@@ -5,7 +5,9 @@ __pycache__/
 .vscode/
 # C extensions
 *.so
-
+experiments/**/runs
+experiments/**/logs
+experiments/**/checkpoints
 # Distribution / packaging
 .Python
 build/

@@ -29,7 +29,7 @@ class Trainer:
         self.model.train()
         total_loss = 0.0
 
-        for lr, hr in tqdm(self.loaders["train"], desc=f"Epoch {self.epoch} [Train]"):
+        for lr, hr in self.loaders["train"]:
             lr = lr.to(self.device, non_blocking=True)
             hr = hr.to(self.device, non_blocking=True)
 
@@ -53,7 +53,7 @@ class Trainer:
         self.model.eval()
         total_loss = 0.0
 
-        for lr, hr in tqdm(self.loaders["val"], desc=f"Epoch {self.epoch} [Val]"):
+        for lr, hr in self.loaders["val"]:
             lr = lr.to(self.device, non_blocking=True)
             hr = hr.to(self.device, non_blocking=True)
             sr = self.model(lr)

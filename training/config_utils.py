@@ -12,6 +12,7 @@ import copy
 from pathlib import Path
 from typing import Dict, Any
 from utils.symmetry_utils import canon_symmetry_str, generate_symmetry_files
+from utils.config_utils import ConfigNamespace
 
 # from training.symmetry_utils import (
 #     prepare_symmetry_files,
@@ -175,6 +176,26 @@ def prepare_symmetry_files(cfg: Dict, base_dir: Path | None = None) -> Dict:
     return cfg
 
 
+def flatten_model_config(cfg: dict) -> dict:
+    """
+    Promote model subkeys to top-level cfg for convenience while
+    preserving cfg['model'] structure for readability.
+    """
+    if "model" in cfg and isinstance(cfg["model"], dict):
+        m = cfg["model"]
+        # model_type goes to top level
+        cfg["model_type"] = m.get("type", None)
+        # promote remaining model keys
+        for k, v in m.items():
+            if k != "type":
+                if k in cfg and cfg[k] != v:
+                    print(
+                        f"[config warning] '{k}' exists in both root and model block; using model value {v}"
+                    )
+                cfg[k] = v
+    return cfg
+
+
 def load_and_prepare_config(
     config_path: Path, save_path: Path | None = None
 ) -> Dict[str, Any]:
@@ -202,6 +223,10 @@ def load_and_prepare_config(
     # Save merged config
     if save_path:
         save_resolved_config(cfg, save_path)
+
+    cfg = flatten_model_config(cfg)
+
+    cfg = ConfigNamespace(cfg)
 
     return cfg
 

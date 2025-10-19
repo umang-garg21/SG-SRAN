@@ -378,38 +378,34 @@ class Reynolds_QSR(nn.Module):
     All modules wrapped with Reynolds equivariance.
     """
 
-    def __init__(self, args):
+    def __init__(self, cfg):
         super().__init__()
 
-        if isinstance(args, dict):
-
-            class _Temp:
-                pass
-
-            temp = _Temp()
-            for k, v in args.items():
-                setattr(temp, k, v)
-            args = temp
-
-        n_channels = 4
-        n_feats = getattr(args, "n_feats", 32)
-        scale = getattr(args, "scale", 4)
-        k = getattr(args, "kernel_size", 3)
-        dropout = getattr(args, "dropout", 0.0)
-        # load symmetry reps (G,4,4)
-        gt = torch.tensor(np.load(args.sym_np_path), dtype=torch.float32)
-        gti = torch.tensor(np.load(args.sym_inv_np_path), dtype=torch.float32)
+        # ------------------------------------------------------------------
+        # Load global symmetry group tensors
+        # ------------------------------------------------------------------
+        gt = torch.tensor(np.load(cfg.sym_np_path), dtype=torch.float32)
+        gti = torch.tensor(np.load(cfg.sym_inv_np_path), dtype=torch.float32)
         self.register_buffer("group_tensor", gt)
         self.register_buffer("group_tensor_inv", gti)
+
+        # ------------------------------------------------------------------
+        # Read model hyperparameters
+        # ------------------------------------------------------------------
+        self.n_channels = 4
+        self.n_feats = getattr(cfg, "n_feats", 32)
+        self.kernel_size = getattr(cfg, "kernel_size", 3)
+        self.dropout = getattr(cfg, "dropout", 0.0)
+        self.scale = getattr(cfg, "scale", 4)
 
         self.head = nn.Sequential(
             EquivariantReynoldsWrap(
                 QuaternionConv(
-                    in_channels=n_channels,
-                    out_channels=n_feats,
-                    kernel_size=k,
+                    in_channels=self.n_channels,
+                    out_channels=self.n_feats,
+                    kernel_size=self.kernel_size,
                     stride=1,
-                    padding=k // 2,
+                    padding=self.kernel_size // 2,
                 ),
                 self.group_tensor,
                 self.group_tensor_inv,
@@ -419,23 +415,23 @@ class Reynolds_QSR(nn.Module):
         self.tail = nn.Sequential(
             EquivariantReynoldsWrap(
                 UpsamplerQuaternionTransposeConv(
-                    kernel_size=k,
-                    scale=scale,
-                    n_feats=n_feats,
+                    kernel_size=self.kernel_size,
+                    scale=self.scale,
+                    n_feats=self.n_feats,
                     group_tensor=self.group_tensor,
                     group_tensor_inv=self.group_tensor_inv,
-                    dropout_prob=dropout,
+                    dropout_prob=self.dropout,
                 ),
                 self.group_tensor,
                 self.group_tensor_inv,
             ),
             EquivariantReynoldsWrap(
                 QuaternionConv(
-                    in_channels=n_feats,
-                    out_channels=n_channels,
-                    kernel_size=k,
+                    in_channels=self.n_feats,
+                    out_channels=self.n_channels,
+                    kernel_size=self.kernel_size,
                     stride=1,
-                    padding=k // 2,
+                    padding=self.kernel_size // 2,
                 ),
                 self.group_tensor,
                 self.group_tensor_inv,
@@ -461,10 +457,6 @@ class Reynolds_QSR(nn.Module):
                         raise
             elif strict and "tail" not in name:
                 raise KeyError(f"Unexpected key in state_dict: {name}")
-
-
-def make_model(args, debug: bool = False):
-    return Reynolds_QSR(args, debug=debug)
 
 
 # =============================================================================

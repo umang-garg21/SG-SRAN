@@ -1,16 +1,15 @@
-# models/__init__.py
 from models.reynolds_qsr import Reynolds_QSR
-
-# from models.qrbsa_1d import QRBSA_1D
+from models.quaternion_srnet import QuaternionSRNet
+from utils.config_utils import ConfigNamespace
 
 MODEL_REGISTRY = {
-    "Reynolds_QSR": Reynolds_QSR,
-    # "QRBSA_1D": QRBSA_1D,
+    "reynolds_qsr": Reynolds_QSR,
+    "quaternion_srnet": QuaternionSRNet,
 }
 
 
-def make_model(args):
-    model_type = args.model.get("type", "Reynolds_QSR")
+def build_model(cfg):
+    model_type = cfg.model_type.lower()
     if model_type not in MODEL_REGISTRY:
         raise ValueError(f"Unknown model type: {model_type}")
-    return MODEL_REGISTRY[model_type](args)
+    return MODEL_REGISTRY[model_type](cfg)

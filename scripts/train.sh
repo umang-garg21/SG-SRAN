@@ -27,7 +27,7 @@ fi
 # ---------------------------------------------------------------------------
 echo "   Starting training..."
 echo "   Project root: $PROJECT_ROOT"
-echo "   Experiment dir: $EXP_DIR\n"
+echo "   Experiment dir: $EXP_DIR"
 
 python -m training.train_sr --exp_dir "$EXP_DIR"
 

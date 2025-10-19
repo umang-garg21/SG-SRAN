@@ -7,7 +7,7 @@ def build_optimizer(model, cfg):
         return torch.optim.AdamW(
             model.parameters(),
             lr=cfg["lr"],
-            weight_decay=opt_cfg.get("weight_decay", 0),
+            weight_decay=getattr(opt_cfg, "weight_decay", 0),
         )
     elif opt_cfg["type"].lower() == "adam":
         return torch.optim.Adam(model.parameters(), lr=cfg["lr"])

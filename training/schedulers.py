@@ -11,14 +11,14 @@ import torch
 
 def build_scheduler(optimizer, cfg):
     """Build LR scheduler based on config."""
-    sched_cfg = cfg.get("scheduler", {})
-    sched_type = sched_cfg.get("type", "cosine")
+    sched_cfg = getattr(cfg, "scheduler", {})
+    sched_type = getattr(sched_cfg, "type", "cosine")
 
     if sched_type == "cosine":
-        warmup_epochs = sched_cfg.get("warmup_epochs", 1)
-        total_epochs = cfg["epochs"]
-        min_lr = sched_cfg.get("min_lr", 1e-6)
-        base_lr = cfg["lr"]
+        warmup_epochs = getattr(sched_cfg, "warmup_epochs", 1)
+        total_epochs = getattr(cfg, "epochs", None)
+        min_lr = getattr(sched_cfg, "min_lr", 1e-6)
+        base_lr = getattr(cfg, "lr", 1e-3)
 
         def lr_lambda(epoch):
             if epoch < warmup_epochs:
@@ -32,8 +32,8 @@ def build_scheduler(optimizer, cfg):
     elif sched_type == "step":
         return torch.optim.lr_scheduler.StepLR(
             optimizer,
-            step_size=sched_cfg.get("step_size", 10),
-            gamma=sched_cfg.get("gamma", 0.5),
+            step_size=getattr(sched_cfg, "step_size", 10),
+            gamma=getattr(sched_cfg, "gamma", 0.5),
         )
 
     else:

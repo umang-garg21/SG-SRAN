@@ -49,7 +49,7 @@ from .dataset_utils import (
     pick_patch_size_all,
     random_aligned_patches,
 )
-
+from .config_utils import ConfigNamespace
 
 __all__ = [
     # Layout
@@ -88,4 +88,5 @@ __all__ = [
     "get_dummy_quats",
     "to_torch_quat_spatial",
     "torch_to_numpy_quat",
+    "ConfigNamespace",
 ]
