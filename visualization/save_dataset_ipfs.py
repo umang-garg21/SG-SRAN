@@ -37,7 +37,7 @@ def _ipf_output_folder_name(which: str) -> str:
     """
     which_upper = which.upper()
     if which_upper == "ORIGINAL":
-        return "Original_IPF_Images"  # 👈 desired folder name
+        return "Original_IPF_Images"
     return f"{which_upper}_IPF_Images"
 
 
