@@ -67,7 +67,7 @@ def main():
             preload=cfg.preload,
             preload_torch=cfg.preload_torch,
             pin_memory=cfg.pin_memory,
-            take_first=128 if cfg.smoke_test else None,
+            take_first=8 if cfg.smoke_test else None,
         )
         for split in ["train", "val", "test"]
     }
@@ -117,11 +117,6 @@ def main():
             train_loss=f"{train_loss:.6f}", val_loss=f"{val_loss:.6f}"
         )
 
-        # Also print to console (clean log line)
-        print(
-            f"📊 Epoch {epoch+1}/{cfg.epochs} | Train Loss: {train_loss:.6f} | Val Loss: {val_loss:.6f}"
-        )
-
         trainer.maybe_save_best(val_loss)
 
     # ----------------------------------------------------------------------
@@ -137,7 +132,7 @@ def main():
 
     run_postprocess_from_config(
         exp_dir,
-        max_samples=8 if cfg.smoke_test else None,
+        max_samples=8 if cfg.smoke_test else 20,
     )
 
 

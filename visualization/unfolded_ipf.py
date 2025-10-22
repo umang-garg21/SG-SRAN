@@ -12,8 +12,160 @@ from utils.quat_ops import (
     reduce_to_fz_min_angle,
 )
 
+import numpy as np
+import matplotlib.pyplot as plt
+from orix.quaternion import Orientation, symmetry
+from orix.vector import Vector3d
+from utils.quat_ops import (
+    normalize_quaternions,
+    enforce_hemisphere,
+    reduce_to_fz_min_angle,
+)
 
-def fz_ipf_render(
+
+def plot_fz_ipf_helper(ax, q_flat, sym_class, ref_dir="Z", tol_deg=0.5, label=""):
+    """
+    Plot the FZ-IPF for quaternion data with:
+      - Inside FZ originally (IPF-colored circles, semi-transparent)
+      - Mapped from outside FZ (IPF-colored triangles)
+      - Outside FZ originally (IPF-colored diamonds with black edge)
+      - Blue symmetry axes for reference
+    """
+    # -------------------------------------------------------------
+    # Normalize and reduce quaternions to Fundamental Zone (FZ)
+    # -------------------------------------------------------------
+    sym = getattr(symmetry, sym_class) if isinstance(sym_class, str) else sym_class
+    q_flat = normalize_quaternions(q_flat, axis=-1)
+    q_flat = enforce_hemisphere(q_flat, scalar_first=True)
+
+    q_fz, op_map = reduce_to_fz_min_angle(
+        q_flat,
+        sym=sym,
+        normalize=False,
+        hemisphere=False,
+        return_op_map=True,
+    )
+
+    ori_fz = Orientation(q_fz, symmetry=sym).map_into_symmetry_reduced_zone()
+    ori_orig = Orientation(q_flat, symmetry=sym)
+    outside_mask = op_map != 0
+    frac_outside = outside_mask.mean() * 100
+
+    # -------------------------------------------------------------
+    # Reference direction & pole figure vectors
+    # -------------------------------------------------------------
+    ref_map = {
+        "X": Vector3d.xvector(),
+        "Y": Vector3d.yvector(),
+        "Z": Vector3d.zvector(),
+    }
+    v_ref = ref_map[ref_dir.upper()]
+    v_plot = ori_fz * v_ref
+    v_orig = ori_orig * v_ref
+
+    # -------------------------------------------------------------
+    # IPF colors
+    # -------------------------------------------------------------
+    from orix import plot as orix_plot
+
+    ckey = orix_plot.IPFColorKeyTSL(sym.laue)
+    ckey.direction = v_ref
+    colors = ckey.orientation2color(ori_fz)
+
+    # -------------------------------------------------------------
+    # Plot categories
+    # -------------------------------------------------------------
+    ax.set_title(
+        f"{label} — Outside FZ: {frac_outside:.2f}%",
+        pad=20,
+        fontsize=11,
+    )
+
+    # 1. Inside FZ originally — circle, transparent
+    ax.scatter(
+        v_plot[~outside_mask],
+        c=colors[~outside_mask],
+        s=12,
+        alpha=0.7,
+        marker="o",
+        edgecolors="none",
+        label="Inside FZ originally",
+    )
+
+    # 2. Mapped from outside FZ — triangle
+    if np.any(outside_mask):
+        ax.scatter(
+            v_plot[outside_mask],
+            c=colors[outside_mask],
+            s=20,
+            alpha=0.95,
+            marker="^",
+            edgecolors="black",
+            linewidths=0.4,
+            label="Mapped from outside FZ",
+        )
+
+    # 3. Original outside positions — diamond with black edge
+    if np.any(outside_mask):
+        ax.scatter(
+            v_orig[outside_mask],
+            c=colors[outside_mask],
+            s=24,
+            alpha=0.95,
+            marker="D",  # diamond shape
+            edgecolors="black",
+            linewidths=0.5,
+            label="Outside FZ originally",
+        )
+
+    # -------------------------------------------------------------
+    # Blue symmetry reference axes
+    # -------------------------------------------------------------
+    v4fold = Vector3d([[0, 0, 1], [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0]])
+    ax.draw_circle(v4fold, color="blue")
+
+    v3fold = Vector3d([[1, 1, 1], [1, -1, 1], [-1, -1, 1], [-1, 1, 1]])
+    ax.draw_circle(v3fold, color="blue")
+
+    v2fold = Vector3d(
+        [
+            [1, 0, 1],
+            [0, 1, 1],
+            [-1, 0, 1],
+            [0, -1, 1],
+            [1, 1, 0],
+            [-1, -1, 0],
+            [-1, 1, 0],
+            [1, -1, 0],
+        ]
+    )
+    ax.draw_circle(v2fold, color="blue")
+    # sector = sym.fundamental_sector
+    # original_pole = deepcopy(sector._pole)
+    # sector._pole = ax.pole
+    # edges = sector.edges
+    # sector._pole = original_pole
+    # x, y, _ = ax._pretransform_input((edges,))
+    # patch = mpatches.PathPatch(
+    #     mpath.Path(np.column_stack([x, y]), closed=True),
+    #     facecolor="none",
+    #     edgecolor="black",
+    #     linewidth=1.5,
+    #     alpha=0.9,
+    #     zorder=5,
+    # )
+    # ax.add_patch(patch)
+    # -------------------------------------------------------------
+    # Axis formatting
+    # -------------------------------------------------------------
+    ax.set_labels("RD", "TD", None)
+    ax.show_hemisphere_label()
+    ax.legend(loc="upper right", fontsize=8)
+
+    return frac_outside
+
+
+def fz_ipf_sr_hr_side_by_side(
     sr_quat: np.ndarray,
     hr_quat: np.ndarray,
     sym_class="Oh",
@@ -103,108 +255,108 @@ def fz_ipf_render(
     }
 
 
-def plot_fz_ipf_helper(ax, q_flat, sym_class, ref_dir="Z", tol_deg=0.5, label=""):
-    """
-    Helper function to plot the FZ-IPF for SR and HR quaternion data.
-    This is shared by both `fz_ipf_render` and `plot_fz_ipf` functions.
-    """
-    # Normalize quaternions and reduce to the Fundamental Zone (FZ)
-    sym = getattr(symmetry, sym_class) if isinstance(sym_class, str) else sym_class
-    q_flat = normalize_quaternions(q_flat, axis=-1)
-    q_flat = enforce_hemisphere(q_flat, scalar_first=True)
+# def plot_fz_ipf_helper(ax, q_flat, sym_class, ref_dir="Z", tol_deg=0.5, label=""):
+#     """
+#     Helper function to plot the FZ-IPF for SR and HR quaternion data.
+#     This is shared by both `fz_ipf_render` and `plot_fz_ipf` functions.
+#     """
+#     # Normalize quaternions and reduce to the Fundamental Zone (FZ)
+#     sym = getattr(symmetry, sym_class) if isinstance(sym_class, str) else sym_class
+#     q_flat = normalize_quaternions(q_flat, axis=-1)
+#     q_flat = enforce_hemisphere(q_flat, scalar_first=True)
 
-    q_fz, op_map = reduce_to_fz_min_angle(
-        q_flat,
-        sym=sym,
-        normalize=False,
-        hemisphere=False,
-        return_op_map=True,
-    )
+#     q_fz, op_map = reduce_to_fz_min_angle(
+#         q_flat,
+#         sym=sym,
+#         normalize=False,
+#         hemisphere=False,
+#         return_op_map=True,
+#     )
 
-    ori_fz = Orientation(q_fz, symmetry=sym).map_into_symmetry_reduced_zone()
-    ori_orig = Orientation(q_flat, symmetry=sym)
+#     ori_fz = Orientation(q_fz, symmetry=sym).map_into_symmetry_reduced_zone()
+#     ori_orig = Orientation(q_flat, symmetry=sym)
 
-    # Outside mask (non-identity operator)
-    outside_mask = op_map != 0
-    frac_outside = outside_mask.mean() * 100
+#     # Outside mask (non-identity operator)
+#     outside_mask = op_map != 0
+#     frac_outside = outside_mask.mean() * 100
 
-    # Reference direction (vector)
-    ref_map = {
-        "X": Vector3d.xvector(),
-        "Y": Vector3d.yvector(),
-        "Z": Vector3d.zvector(),
-    }
-    v_ref = ref_map[ref_dir.upper()]
-    v_plot = ori_fz * v_ref
-    v_orig = ori_orig * v_ref
+#     # Reference direction (vector)
+#     ref_map = {
+#         "X": Vector3d.xvector(),
+#         "Y": Vector3d.yvector(),
+#         "Z": Vector3d.zvector(),
+#     }
+#     v_ref = ref_map[ref_dir.upper()]
+#     v_plot = ori_fz * v_ref
+#     v_orig = ori_orig * v_ref
 
-    # Plot the title with fraction outside FZ
-    ax.set_title(
-        f"{label} — Outside FZ: {frac_outside:.2f}%",
-        pad=20,
-        fontsize=11,
-    )
+#     # Plot the title with fraction outside FZ
+#     ax.set_title(
+#         f"{label} — Outside FZ: {frac_outside:.2f}%",
+#         pad=20,
+#         fontsize=11,
+#     )
 
-    # Plot original (unreduced) orientations in red
-    ax.scatter(v_orig, c="red", s=5, alpha=0.35, label="Original (unreduced)")
+#     # Plot original (unreduced) orientations in red
+#     ax.scatter(v_orig, c="red", s=5, alpha=0.35, label="Original (unreduced)")
 
-    # Plot inside FZ (originally) in grey
-    ax.scatter(
-        v_plot[~outside_mask], c="grey", s=5, alpha=0.7, label="Inside FZ originally"
-    )
+#     # Plot inside FZ (originally) in grey
+#     ax.scatter(
+#         v_plot[~outside_mask], c="grey", s=5, alpha=0.7, label="Inside FZ originally"
+#     )
 
-    # Plot mapped from outside FZ in green
-    if np.any(outside_mask):
-        ax.scatter(
-            v_plot[outside_mask],
-            c="green",
-            s=5,
-            alpha=0.9,
-            label="Mapped from outside FZ",
-        )
+#     # Plot mapped from outside FZ in green
+#     if np.any(outside_mask):
+#         ax.scatter(
+#             v_plot[outside_mask],
+#             c="green",
+#             s=5,
+#             alpha=0.9,
+#             label="Mapped from outside FZ",
+#         )
 
-    v4fold = Vector3d([[0, 0, 1], [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0]])
-    ax.draw_circle(v4fold, color="blue")
+#     v4fold = Vector3d([[0, 0, 1], [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0]])
+#     ax.draw_circle(v4fold, color="blue")
 
-    v3fold = Vector3d([[1, 1, 1], [1, -1, 1], [-1, -1, 1], [-1, 1, 1]])
-    ax.draw_circle(v3fold, color="blue")
+#     v3fold = Vector3d([[1, 1, 1], [1, -1, 1], [-1, -1, 1], [-1, 1, 1]])
+#     ax.draw_circle(v3fold, color="blue")
 
-    v2fold = Vector3d(
-        [
-            [1, 0, 1],
-            [0, 1, 1],
-            [-1, 0, 1],
-            [0, -1, 1],
-            [1, 1, 0],
-            [-1, -1, 0],
-            [-1, 1, 0],
-            [1, -1, 0],
-        ]
-    )
-    ax.draw_circle(v2fold, color="blue")
-    # Draw the symmetry boundary (FZ boundary)
-    # sector = sym.fundamental_sector
-    # original_pole = deepcopy(sector._pole)
-    # sector._pole = ax.pole
-    # edges = sector.edges
-    # sector._pole = original_pole
-    # x, y, _ = ax._pretransform_input((edges,))
-    # patch = mpatches.PathPatch(
-    #     mpath.Path(np.column_stack([x, y]), closed=True),
-    #     facecolor="none",
-    #     edgecolor="black",
-    #     linewidth=2.0,
-    #     alpha=1.0,
-    #     zorder=5,
-    # )
-    # ax.add_patch(patch)
+#     v2fold = Vector3d(
+#         [
+#             [1, 0, 1],
+#             [0, 1, 1],
+#             [-1, 0, 1],
+#             [0, -1, 1],
+#             [1, 1, 0],
+#             [-1, -1, 0],
+#             [-1, 1, 0],
+#             [1, -1, 0],
+#         ]
+#     )
+#     ax.draw_circle(v2fold, color="blue")
+#     # Draw the symmetry boundary (FZ boundary)
+#     # sector = sym.fundamental_sector
+#     # original_pole = deepcopy(sector._pole)
+#     # sector._pole = ax.pole
+#     # edges = sector.edges
+#     # sector._pole = original_pole
+#     # x, y, _ = ax._pretransform_input((edges,))
+#     # patch = mpatches.PathPatch(
+#     #     mpath.Path(np.column_stack([x, y]), closed=True),
+#     #     facecolor="none",
+#     #     edgecolor="black",
+#     #     linewidth=2.0,
+#     #     alpha=1.0,
+#     #     zorder=5,
+#     # )
+#     # ax.add_patch(patch)
 
-    # Set labels and show hemisphere labels
-    ax.set_labels("RD", "TD", None)
-    ax.show_hemisphere_label()
-    ax.legend(loc="upper right", fontsize=8)
+#     # Set labels and show hemisphere labels
+#     ax.set_labels("RD", "TD", None)
+#     ax.show_hemisphere_label()
+#     ax.legend(loc="upper right", fontsize=8)
 
-    return frac_outside
+#     return frac_outside
 
 
 # import os

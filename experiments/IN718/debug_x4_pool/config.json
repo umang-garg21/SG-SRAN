@@ -1,14 +1,19 @@
 {
     "dataset_root": "/data/warren/materials/EBSD/IN718_FZ_2D_SR_x4",
-    "epochs": 3200,
+    "epochs": 50,
+    "lr": 1e-3,
     "batch_size": 64,
     "num_workers": 0,
-    "loss": "rotational_distance",
+    "loss": "rotational_distance_orientation",
     "preload": true,
     "preload_torch": true,
     "pin_memory": true,
     "smoke_test": false,
     "model": {
-        "type": "quaternion_srnet"
+        "type": "quaternion_pool_srnet",
+        "n_feats": 64,
+        "scale": 4,
+        "num_resblocks": 3,
+        "dropout": 0.0
     }
 }

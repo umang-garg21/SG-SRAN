@@ -1,10 +1,16 @@
 from models.reynolds_qsr import Reynolds_QSR
 from models.quaternion_srnet import QuaternionSRNet
+from models.quat_srnet import QuaternionSRNet as QuaternionResSRNet
+from models.quat_pool import QuaternionPoolSRNet
+from models.quat_k import ProgressiveQuaternionSRNet
 from utils.config_utils import ConfigNamespace
 
 MODEL_REGISTRY = {
     "reynolds_qsr": Reynolds_QSR,
     "quaternion_srnet": QuaternionSRNet,
+    "quaternion_res_srnet": QuaternionResSRNet,
+    "quaternion_pool_srnet": QuaternionPoolSRNet,
+    "quaternion_kernel": ProgressiveQuaternionSRNet,
 }
 
 

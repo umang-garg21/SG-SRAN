@@ -5,7 +5,7 @@ from visualization.visualize_sr_results import (
     render_sr_hr_side_by_side,
     render_sr_hr_lr_side_by_side,
 )
-from visualization.unfolded_ipf import fz_ipf_render  # plot_sr_hr_fz_ipf
+from visualization.unfolded_ipf import fz_ipf_sr_hr_side_by_side  # plot_sr_hr_fz_ipf
 
 from utils.quat_ops import torch_to_numpy_quat, to_spatial_quat
 from training.data_loading import build_dataloader
@@ -107,7 +107,7 @@ def run_postprocess_from_config(exp_dir: str, max_samples: int | None = 8):
                 overwrite=True,
             )
 
-            fz_ipf_render(
+            fz_ipf_sr_hr_side_by_side(
                 sr_np,
                 hr_np,
                 sym_class=getattr(cfg, "symmetry_group"),

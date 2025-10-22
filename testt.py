@@ -211,8 +211,8 @@ def reduce_to_fz_min_angle_torch_fast(
         q = F.normalize(q, p=2, dim=1, eps=eps)
 
     if hemisphere:
-        mask = (q[:, 0, :, :] < 0).unsqueeze(1)  # (B,1,H,W)
-        q = torch.where(mask, -q, q)
+        mask = q[:, 0] < 0
+        q[mask] = -q[mask]
 
     # Resolve symmetry operators
     if isinstance(sym, str):
@@ -278,107 +278,39 @@ def safe_normalize(q):
     return q / norm
 
 
-def rotational_distance_loss(q_pred, q_target, eps: float = 1e-12):
-    # supports (N,4) or (B,4,H,W)
-    if q_pred.dim() > 2:
-        # B, C, H, W = q_pred.shape
-        qp = q_pred.permute(0, 2, 3, 1).reshape(-1, 4)
-        qt = q_target.permute(0, 2, 3, 1).reshape(-1, 4)
-    else:
-        qp, qt = q_pred, q_target
-
-    qp = F.normalize(qp, p=2, dim=1, eps=eps)
-    qt = F.normalize(qt, p=2, dim=1, eps=eps)
-
-    w1, x1, y1, z1 = qp[:, 0], qp[:, 1], qp[:, 2], qp[:, 3]
-    w2, x2, y2, z2 = qt[:, 0], qt[:, 1], qt[:, 2], qt[:, 3]
-
-    # r = qt ⊗ conj(qp)
-    rw = w2 * w1 + x2 * (-x1) + y2 * (-y1) + z2 * (-z1)
-    rx = w2 * (-x1) + x2 * w1 + y2 * (-z1) + z2 * (y1)
-    ry = w2 * (-y1) + x2 * (z1) + y2 * w1 + z2 * (-x1)
-    rz = w2 * (-z1) + x2 * (-y1) + y2 * (x1) + z2 * w1
-
-    rw = rw.abs()  # hemisphere
-    v_norm = torch.sqrt(rx * rx + ry * ry + rz * rz + eps)
-    angle = 2.0 * torch.atan2(v_norm, torch.clamp(rw, min=eps))
-    return angle.mean()
-
-
-def orientation_gradient_loss(
-    q_pred: torch.Tensor, q_target: torch.Tensor, eps: float = 1e-8
-) -> torch.Tensor:
+def rotational_distance_loss(q_pred, q_target):
     """
-    Orientation gradient loss (fixed): L1 loss between gradient magnitudes of quaternion fields.
-    Pads gradient outputs to match original size.
+    Compute the rotational distance between two quaternions.
+
+    Parameters:
+    -----------
+    q_pred : torch.Tensor
+        Predicted quaternion tensor of shape (N, 4), where N is the batch size.
+    q_target : torch.Tensor
+        Target quaternion tensor of shape (N, 4), where N is the batch size.
+
+    Returns:
+    --------
+    torch.Tensor
+        The mean rotational distance loss.
     """
-    # Finite difference filters
-    kernel_x = torch.tensor([[[[-1, 1]]]], dtype=q_pred.dtype, device=q_pred.device)
-    kernel_y = torch.tensor([[[[-1], [1]]]], dtype=q_pred.dtype, device=q_pred.device)
+    eps = 1e-9  # Small epsilon to avoid numerical issues with acos
 
-    def grad_mag(q):
-        gx = F.conv2d(q, kernel_x.expand(q.size(1), 1, 1, 2), groups=q.size(1))
-        gy = F.conv2d(q, kernel_y.expand(q.size(1), 1, 2, 1), groups=q.size(1))
+    # Normalize the quaternions to ensure they are unit quaternions
+    q_pred = safe_normalize(q_pred)
+    q_target = safe_normalize(q_target)
 
-        # pad back to original shape (right and bottom edges)
-        gx = F.pad(gx, (0, 1, 0, 0), mode="replicate")  # (left, right, top, bottom)
-        gy = F.pad(gy, (0, 0, 0, 1), mode="replicate")
+    # Compute the dot product between the predicted and target quaternions
+    dot_product = torch.sum(q_pred * q_target, dim=1)
 
-        gmag = torch.sqrt(gx.pow(2) + gy.pow(2) + eps)
-        return gmag
+    # Clamp dot product to the valid range for acos [-1, 1], with an added epsilon for stability
+    dot_product = torch.clamp(dot_product, min=-1.0 + eps, max=1.0 - eps)
 
-    grad_pred = grad_mag(q_pred)
-    grad_target = grad_mag(q_target)
+    # Compute the angle (rotational distance)
+    rotational_distance = 2 * torch.acos(torch.abs(dot_product))
 
-    return F.l1_loss(grad_pred, grad_target)
-
-
-def rotational_distance_orientation_loss(
-    q_pred: torch.Tensor, q_target: torch.Tensor
-) -> torch.Tensor:
-    """
-    Orientation gradient loss (fixed): L1 loss between gradient magnitudes of quaternion fields.
-    Pads gradient outputs to match original size.
-    """
-    # Finite difference filters
-    return rotational_distance_loss(
-        q_pred=q_pred, q_target=q_target
-    ) + 0.05 * orientation_gradient_loss(q_pred=q_pred, q_target=q_target)
-
-
-# def rotational_distance_loss(q_pred, q_target):
-#     """
-#     Compute the rotational distance between two quaternions.
-
-#     Parameters:
-#     -----------
-#     q_pred : torch.Tensor
-#         Predicted quaternion tensor of shape (N, 4), where N is the batch size.
-#     q_target : torch.Tensor
-#         Target quaternion tensor of shape (N, 4), where N is the batch size.
-
-#     Returns:
-#     --------
-#     torch.Tensor
-#         The mean rotational distance loss.
-#     """
-#     eps = 1e-4  # Small epsilon to avoid numerical issues with acos
-
-#     # Normalize the quaternions to ensure they are unit quaternions
-#     q_pred = safe_normalize(q_pred)
-#     q_target = safe_normalize(q_target)
-
-#     # Compute the dot product between the predicted and target quaternions
-#     dot_product = torch.sum(q_pred * q_target, dim=1)
-
-#     # Clamp dot product to the valid range for acos [-1, 1], with an added epsilon for stability
-#     dot_product = torch.clamp(dot_product, min=-1.0 + eps, max=1.0 - eps)
-
-#     # Compute the angle (rotational distance)
-#     rotational_distance = 2 * torch.acos(torch.abs(dot_product))
-
-#     # Mean of the rotational distance
-#     return rotational_distance.mean()
+    # Mean of the rotational distance
+    return rotational_distance.mean()
 
 
 def fz_reduced_rotational_distance_loss(
@@ -413,8 +345,6 @@ def build_loss(cfg):
         )
     elif loss_type == "rotational_distance":
         return rotational_distance_loss
-    elif loss_type == "rotational_distance_orientation":
-        return rotational_distance_orientation_loss
     elif loss_type == "l1":
         return torch.nn.L1Loss()
     elif loss_type == "mse":
@@ -430,8 +360,8 @@ if __name__ == "__main__":
 
     from orix.quaternion import symmetry as SYM
 
-    q_pred = torch.randn(5, 4, 128, 128)
-    q_target = torch.randn(5, 4, 128, 128)
+    q_pred = torch.randn(5, 4, 1, 1)
+    q_target = torch.randn(5, 4, 1, 1)
 
     # Loss with cubic symmetry (Oh)
-    print(fz_reduced_rotational_distance_loss(q_pred, q_pred, sym=SYM.Oh))
+    print(rotational_distance_loss(q_pred, q_pred))
