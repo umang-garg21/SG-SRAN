@@ -15,10 +15,12 @@ export PYTHONPATH="$PROJECT_ROOT"
 # 2. Parse optional args
 # ---------------------------------------------------------------------------
 EXP_DIR="$1"
+shift || true
+EXTRA_ARGS="$@"
 
 if [ -z "$EXP_DIR" ]; then
-    echo "   Usage: $0 <experiment_dir>"
-    echo "   Example: $0 experiments/IN718/debug_x4"
+    echo "   Usage: $0 <experiment_dir> [--resume]"
+    echo "   Example: $0 experiments/IN718/debug_x4 --resume"
     exit 1
 fi
 
@@ -29,6 +31,6 @@ echo "   Starting training..."
 echo "   Project root: $PROJECT_ROOT"
 echo "   Experiment dir: $EXP_DIR"
 
-python -m training.train_sr --exp_dir "$EXP_DIR"
+python -m training.train_sr --exp_dir "$EXP_DIR" $EXTRA_ARGS
 
 echo "Training completed for $EXP_DIR"

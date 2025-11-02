@@ -210,7 +210,7 @@ class QuaternionTransposeConv(nn.Module):
 # ------------------------------------------------------------------------------ #
 # Quaternion SR Net
 # ------------------------------------------------------------------------------ #
-class QuaternionSRNet(nn.Module):
+class Quaternion_DeepConv_SRNet(nn.Module):
     def __init__(self, cfg):
         """
         Quaternion super-resolution network built from config.
@@ -226,13 +226,14 @@ class QuaternionSRNet(nn.Module):
         """
         super().__init__()
         self.cfg = cfg
-
+        
         in_ch = 16  # lifted quaternion channels (4x4)
         mid_ch = getattr(cfg, "n_feats", 32)
         out_ch = 16
         scale_factor = getattr(cfg, "scale", 4)
         overlap = getattr(cfg, "overlap", False)
         k = getattr(cfg, "kernel_size", 3)
+        n_resblocks = getattr(cfg, "n_resblocks", 4)
 
         # auto groups to respect quaternion structure
         g_in = in_ch // 4
@@ -242,6 +243,122 @@ class QuaternionSRNet(nn.Module):
         self.enc1 = QuaternionConv(in_ch, mid_ch, k, padding=k // 2, groups=g_in)
         self.enc2 = QuaternionConv(mid_ch, mid_ch, k, padding=k // 2, groups=g_mid)
 
+        # Hyena-like gated conv blocks:
+        # These blocks emulate attention-like multiplicative gating and long-range
+        # mixing using inexpensive convolutional primitives. The design below
+        # keeps quaternion channel divisibility and strives for the ``effectiveness
+        # of attention with the compute profile of convolutions'' by combining
+        # pointwise gating (GLU-like) and a spatial mixer (depthwise grouped conv).
+        class HyenaResidualBlock(nn.Module):
+            def __init__(self, channels, kernel=k, reduction=2, groups=None):
+                super().__init__()
+                # ensure bottleneck is divisible by 4 (quaternion groups)
+                bottleneck = max(4, (channels // reduction) // 4 * 4)
+                if bottleneck == 0:
+                    bottleneck = 4
+
+                # pointwise projections to compute content and gate (GLU-style)
+                # both outputs maintain quaternion channel alignment
+                self.content_proj = QuaternionConv(channels, bottleneck, 1, padding=0, groups=groups)
+                self.gate_proj = QuaternionConv(channels, bottleneck, 1, padding=0, groups=groups)
+
+                # spatial mixer: grouped quaternion conv with a reasonably large kernel
+                # acts like a long-range depthwise mixer when groups == bottleneck//4
+                grp = bottleneck // 4 if groups is None else groups
+                self.spatial_mixer = QuaternionConv(
+                    bottleneck, bottleneck, kernel, padding=kernel // 2, groups=grp
+                )
+
+                # final pointwise projection back to channels
+                self.out_proj = QuaternionConv(bottleneck, channels, 1, padding=0, groups=groups)
+
+                # small normalization & non-linearity to stabilise gating + residual
+                self.act = nn.SiLU()
+                # optional lightweight channel-wise normalization to help training
+                # use GroupNorm with groups divisible by quaternion groups for stability
+                gn_groups = max(1, (bottleneck // 4))
+                # GroupNorm expects channel dimension as raw channels (4 * q channels)
+                self.norm = nn.GroupNorm(gn_groups * 4, bottleneck)
+
+            def forward(self, x):
+                # compute content and gate pathways
+                content = self.content_proj(x)
+                gate = self.gate_proj(x)
+
+                # multiplicative gating (GLU-like but using sigmoid gate)
+                gated = content * torch.sigmoid(gate)
+
+                # spatial mixing (cheap convolutional alternative to attention)
+                mixed = self.spatial_mixer(gated)
+
+                # normalization + non-linearity before projection back
+                # (norm expects raw channel count; our QuaternionConv returns raw channels)
+                mixed = self.norm(mixed)
+                mixed = self.act(mixed)
+
+                out = self.out_proj(mixed)
+
+                # residual connection
+                return x + out
+
+        # Lightweight global attention block that computes attention on a small
+        # downsampled spatial grid (e.g. 8x8) and broadcasts the result back.
+        # This captures global context cheaply and helps produce smooth boundaries
+        # similar to self-attention but with much lower cost.
+        class GlobalDownsampleAttention(nn.Module):
+            def __init__(self, channels, attn_spatial=8):
+                super().__init__()
+                assert channels % 4 == 0
+                self.channels = channels
+                # keep quaternion alignment by using a QuaternionConv before/after
+                self.pre_proj = QuaternionConv(channels, channels, 1, padding=0)
+                # use regular 1x1 convs for q/k/v on raw channels
+                self.qkv = nn.Conv2d(channels, channels * 3, 1)
+                self.out_proj = QuaternionConv(channels, channels, 1, padding=0)
+                self.attn_spatial = attn_spatial
+
+            def forward(self, x):
+                # x: (B, C, H, W) where C is raw channels (4*q)
+                B, C, H, W = x.shape
+                y = self.pre_proj(x)
+                qkv = self.qkv(y)
+                # downsample spatially to small grid for attention
+                ps = min(self.attn_spatial, H, W)
+                if ps <= 1:
+                    # degenerate case: fallback to identity
+                    return x
+                qkv_ds = F.adaptive_avg_pool2d(qkv, (ps, ps))
+                # split q,k,v and reshape to (B, N, C)
+                Craw = C
+                q, k, v = torch.chunk(qkv_ds, 3, dim=1)
+                N = ps * ps
+                q = q.view(B, Craw, N).permute(0, 2, 1)  # (B, N, C)
+                k = k.view(B, Craw, N).permute(0, 2, 1)
+                v = v.view(B, Craw, N).permute(0, 2, 1)
+
+                # scaled dot-product attention over small N
+                scale = Craw ** 0.5
+                attn = torch.softmax(torch.bmm(q, k.transpose(1, 2)) / scale, dim=-1)  # (B,N,N)
+                out = torch.bmm(attn, v)  # (B,N,C)
+
+                # project back to spatial grid and upsample
+                out = out.permute(0, 2, 1).contiguous().view(B, Craw, ps, ps)
+                out = F.interpolate(out, size=(H, W), mode="bilinear", align_corners=False)
+                out = self.out_proj(out)
+                return x + out
+
+        # Build a mixed stack: interleave HyenaResidualBlock and occasional
+        # lightweight global attention blocks to get smoothing similar to
+        # full self-attention while keeping compute low.
+        blocks = []
+        for i in range(n_resblocks):
+            blocks.append(HyenaResidualBlock(mid_ch, kernel=k))
+            # insert an attention block every 2 residuals (configurable)
+            if (i + 1) % 2 == 0:
+                blocks.append(GlobalDownsampleAttention(mid_ch, attn_spatial=8))
+
+        self.body = nn.Sequential(*blocks)
+
         self.up = QuaternionTransposeConv(
             in_q_channels=mid_ch,
             out_q_channels=mid_ch,
@@ -249,7 +366,6 @@ class QuaternionSRNet(nn.Module):
             overlap=overlap,
             groups=g_mid,
         )
-
         self.outc = QuaternionConv(mid_ch, out_ch, k, padding=k // 2, groups=g_out)
         # self.act = nn.ReLU(inplace=True)
 
@@ -261,6 +377,7 @@ class QuaternionSRNet(nn.Module):
         # x = self.act(self.up(x))
         x = self.enc1(x)
         x = self.enc2(x)
+        x = self.body(x)
         x = self.up(x)
         x = self.outc(x)
         q_out = lmat_to_quat(x)
@@ -309,18 +426,13 @@ if __name__ == "__main__":
     scale = 4
 
     print("\nNon-overlapping SR")
-    # Build a small config object expected by the constructor
-    from types import SimpleNamespace
-
-    cfg = SimpleNamespace(n_feats=32, scale=scale, overlap=False, kernel_size=3)
-    net_clean = QuaternionSRNet(cfg)
+    net_clean = Quaternion_res_SRNet(base_q_channels=32, scale_factor=scale, overlap=False)
     q_lr = torch.randn(B, 4, H, W)
     q_lr = q_lr / q_lr.norm(dim=1, keepdim=True).clamp_min(1e-8)
     q_sr = net_clean(q_lr)
     print("Output shape (clean):", q_sr.shape)  # expected (B, 4, 128, 128)
 
     print("\nOverlapping SR")
-    cfg2 = SimpleNamespace(n_feats=64, scale=scale, overlap=True, kernel_size=3)
-    net_overlap = QuaternionSRNet(cfg2)
+    net_overlap = Quaternion_res_SRNet(base_q_channels=64, scale_factor=scale, overlap=True)
     q_sr2 = net_overlap(q_lr)
     print("Output shape (overlap):", q_sr2.shape)

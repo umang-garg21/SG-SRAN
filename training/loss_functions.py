@@ -312,7 +312,11 @@ def orientation_gradient_loss(
     Orientation gradient loss (fixed): L1 loss between gradient magnitudes of quaternion fields.
     Pads gradient outputs to match original size.
     """
-    # Finite difference filters
+    # This function is kept for compatibility but not used directly in the
+    # build_loss dispatch when using the optimized module below.
+    # Finite difference filters (constructed per-call previously) are
+    # intentionally cheap here, but for heavy training loops prefer the
+    # RotationalDistanceOrientationLoss module which caches kernels as buffers.
     kernel_x = torch.tensor([[[[-1, 1]]]], dtype=q_pred.dtype, device=q_pred.device)
     kernel_y = torch.tensor([[[[-1], [1]]]], dtype=q_pred.dtype, device=q_pred.device)
 
@@ -331,6 +335,48 @@ def orientation_gradient_loss(
     grad_target = grad_mag(q_target)
 
     return F.l1_loss(grad_pred, grad_target)
+
+
+class RotationalDistanceOrientationLoss(torch.nn.Module):
+    """
+    Combined rotational distance + orientation-gradient loss as a Module.
+    This caches the finite-difference kernels as buffers to avoid allocating
+    small tensors on the device each batch (which is slow and can force
+    synchronizations).
+    """
+
+    def __init__(self, weight: float = 0.05):
+        super().__init__()
+        # store small kernels as buffers (float32); they will be moved to the
+        # correct device when this Module is .to(device)
+        self.register_buffer("kernel_x", torch.tensor([[[[-1.0, 1.0]]]], dtype=torch.float32))
+        self.register_buffer("kernel_y", torch.tensor([[[[-1.0], [1.0]]]], dtype=torch.float32))
+        self.weight = weight
+
+    def grad_mag(self, q: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+        # kernels are registered buffers and reside on the same device/dtype as
+        # this module when it's moved via .to(device)
+        kx = self.kernel_x
+        ky = self.kernel_y
+        gx = F.conv2d(q, kx.expand(q.size(1), 1, 1, 2).to(q.dtype), groups=q.size(1))
+        gy = F.conv2d(q, ky.expand(q.size(1), 1, 2, 1).to(q.dtype), groups=q.size(1))
+
+        gx = F.pad(gx, (0, 1, 0, 0), mode="replicate")
+        gy = F.pad(gy, (0, 0, 0, 1), mode="replicate")
+
+        gmag = torch.sqrt(gx.pow(2) + gy.pow(2) + eps)
+        return gmag
+
+    def rotational_distance(self, q_pred: torch.Tensor, q_target: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
+        # reuse the existing function for rotational distance
+        return rotational_distance_loss(q_pred, q_target, eps=eps)
+
+    def forward(self, q_pred: torch.Tensor, q_target: torch.Tensor) -> torch.Tensor:
+        rd = self.rotational_distance(q_pred, q_target)
+        grad_pred = self.grad_mag(q_pred)
+        grad_target = self.grad_mag(q_target)
+        og = F.l1_loss(grad_pred, grad_target)
+        return rd + self.weight * og
 
 
 def rotational_distance_orientation_loss(
@@ -414,7 +460,10 @@ def build_loss(cfg):
     elif loss_type == "rotational_distance":
         return rotational_distance_loss
     elif loss_type == "rotational_distance_orientation":
-        return rotational_distance_orientation_loss
+        # Return a Module instance that caches kernels as buffers. This
+        # reduces CPU/GPU sync overhead caused by allocating small tensors
+        # on-device each training step.
+        return RotationalDistanceOrientationLoss()
     elif loss_type == "l1":
         return torch.nn.L1Loss()
     elif loss_type == "mse":

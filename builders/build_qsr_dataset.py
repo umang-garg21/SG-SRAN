@@ -8,6 +8,14 @@ Description: Runner script for building Quaternion Super-Resolution datasets
              using build_quaternion_sr_dataset() from dataset_builder.py
 """
 
+import sys
+from pathlib import Path
+
+# Add parent directory to path to allow imports from utils and visualization
+parent_dir = Path(__file__).resolve().parent.parent
+if str(parent_dir) not in sys.path:
+    sys.path.insert(0, str(parent_dir))
+
 from dataset_builder import build_quaternion_sr_dataset
 from visualization.save_dataset_ipfs import save_dataset_ipfs
 import os
@@ -16,7 +24,7 @@ import os
 # USER CONFIGURATION
 # ==========================
 DATASET_NAME = "Open718_QSR_x4"
-DATASET_OUT_ROOT = "/data/warren/materials/EBSD/IN718_FZ_2D_SR_x4"
+DATASET_OUT_ROOT = "/data/home/umang/Materials/Materials_data_mount/EBSD/IN718_FZ_2D_SR_x4/Open718_QSR_x4/"
 SCALE = 4
 SYMMETRY = "Oh"
 NORMALIZE = True
@@ -25,9 +33,9 @@ REDUCE_TO_FZ = True
 CREATOR = "Warren Zamudio"
 CONTACT = "wzamudio@ucsb.edu"
 
-HR_TRAIN = "/data/warren/materials/materials_data_mount/fz_reduced/Open_718/Train/HR_Images/*.npy"
-HR_VAL = "/data/warren/materials/materials_data_mount/fz_reduced/Open_718/Val/HR_Images/preprocessed_imgs_all_Blocks/*.npy"
-HR_TEST = "/data/warren/materials/materials_data_mount/fz_reduced/Open_718/Test/HR_Images/*.npy"
+HR_TRAIN = "/data/home/umang/Materials/Materials_data_mount/fz_reduced/Open_718/Train/HR_Images/*.npy"
+HR_VAL = "/data/home/umang/Materials/Materials_data_mount/fz_reduced/Open_718/Val/HR_Images/preprocessed_imgs_all_Blocks/*.npy"
+HR_TEST = "/data/home/umang/Materials/Materials_data_mount/fz_reduced/Open_718/Test/HR_Images/*.npy"
 
 # ==========================
 # BUILD DATASET

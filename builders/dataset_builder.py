@@ -21,6 +21,14 @@ from tqdm import tqdm
 # ---------------------------
 # Imports from utils
 # ---------------------------
+import sys
+from pathlib import Path
+
+# Add parent directory to path to allow imports from utils
+parent_dir = Path(__file__).resolve().parent.parent
+if str(parent_dir) not in sys.path:
+    sys.path.insert(0, str(parent_dir))
+
 from utils.quat_ops import format_quaternions
 from utils.symmetry_utils import canon_symmetry_str, resolve_symmetry
 from utils.dataset_utils import (

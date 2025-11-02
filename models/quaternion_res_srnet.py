@@ -1,5 +1,6 @@
 import math
 import warnings
+from Archive.model.quat_utils.Qops_with_QSN import Residual_SA
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -206,11 +207,10 @@ class QuaternionTransposeConv(nn.Module):
             self.dilation,
         )
 
-
 # ------------------------------------------------------------------------------ #
 # Quaternion SR Net
 # ------------------------------------------------------------------------------ #
-class QuaternionSRNet(nn.Module):
+class Quaternion_res_SRNet(nn.Module):
     def __init__(self, cfg):
         """
         Quaternion super-resolution network built from config.
@@ -226,13 +226,14 @@ class QuaternionSRNet(nn.Module):
         """
         super().__init__()
         self.cfg = cfg
-
+        
         in_ch = 16  # lifted quaternion channels (4x4)
         mid_ch = getattr(cfg, "n_feats", 32)
         out_ch = 16
         scale_factor = getattr(cfg, "scale", 4)
         overlap = getattr(cfg, "overlap", False)
         k = getattr(cfg, "kernel_size", 3)
+        n_resblocks = getattr(cfg, "n_resblocks", 4)
 
         # auto groups to respect quaternion structure
         g_in = in_ch // 4
@@ -242,6 +243,10 @@ class QuaternionSRNet(nn.Module):
         self.enc1 = QuaternionConv(in_ch, mid_ch, k, padding=k // 2, groups=g_in)
         self.enc2 = QuaternionConv(mid_ch, mid_ch, k, padding=k // 2, groups=g_mid)
 
+        self.body = nn.Sequential(
+            *[Residual_SA(mid_ch, mid_ch) for _ in range(n_resblocks)]
+        )
+
         self.up = QuaternionTransposeConv(
             in_q_channels=mid_ch,
             out_q_channels=mid_ch,
@@ -249,7 +254,6 @@ class QuaternionSRNet(nn.Module):
             overlap=overlap,
             groups=g_mid,
         )
-
         self.outc = QuaternionConv(mid_ch, out_ch, k, padding=k // 2, groups=g_out)
         # self.act = nn.ReLU(inplace=True)
 
@@ -261,6 +265,7 @@ class QuaternionSRNet(nn.Module):
         # x = self.act(self.up(x))
         x = self.enc1(x)
         x = self.enc2(x)
+        x = x+self.body(x)
         x = self.up(x)
         x = self.outc(x)
         q_out = lmat_to_quat(x)
@@ -309,18 +314,13 @@ if __name__ == "__main__":
     scale = 4
 
     print("\nNon-overlapping SR")
-    # Build a small config object expected by the constructor
-    from types import SimpleNamespace
-
-    cfg = SimpleNamespace(n_feats=32, scale=scale, overlap=False, kernel_size=3)
-    net_clean = QuaternionSRNet(cfg)
+    net_clean = Quaternion_res_SRNet(base_q_channels=32, scale_factor=scale, overlap=False)
     q_lr = torch.randn(B, 4, H, W)
     q_lr = q_lr / q_lr.norm(dim=1, keepdim=True).clamp_min(1e-8)
     q_sr = net_clean(q_lr)
     print("Output shape (clean):", q_sr.shape)  # expected (B, 4, 128, 128)
 
     print("\nOverlapping SR")
-    cfg2 = SimpleNamespace(n_feats=64, scale=scale, overlap=True, kernel_size=3)
-    net_overlap = QuaternionSRNet(cfg2)
+    net_overlap = Quaternion_res_SRNet(base_q_channels=64, scale_factor=scale, overlap=True)
     q_sr2 = net_overlap(q_lr)
     print("Output shape (overlap):", q_sr2.shape)

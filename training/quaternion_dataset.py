@@ -117,6 +117,14 @@ class QuaternionDataset(Dataset):
                 lr_fp, hr_fp = pair
                 lr_arr = np.load(lr_fp, mmap_mode=None)
                 hr_arr = np.load(hr_fp, mmap_mode=None)
+                # Ensure preloaded numpy arrays are writable. np.load may
+                # sometimes return read-only arrays depending on platform and
+                # file format; copying here avoids later warnings from
+                # torch.from_numpy when converting to tensors.
+                if not lr_arr.flags.writeable:
+                    lr_arr = np.array(lr_arr, copy=True)
+                if not hr_arr.flags.writeable:
+                    hr_arr = np.array(hr_arr, copy=True)
                 if preload_torch:
                     return torch.from_numpy(lr_arr), torch.from_numpy(hr_arr)
                 return lr_arr, hr_arr
@@ -164,13 +172,24 @@ class QuaternionDataset(Dataset):
         # Lazy load with memmap fallback
         else:
             lr_fp, hr_fp = self.pairs[idx]
-            lr_t = torch.from_numpy(self._open_memmap(lr_fp))
-            hr_t = torch.from_numpy(self._open_memmap(hr_fp))
+            lr_arr = self._open_memmap(lr_fp)
+            hr_arr = self._open_memmap(hr_fp)
 
-        if self.pin_memory and torch.cuda.is_available():
-            if not lr_t.is_cuda:
-                lr_t = lr_t.pin_memory()
-                hr_t = hr_t.pin_memory()
+            # Some numpy memmap objects may be non-writable. torch.from_numpy
+            # requires a writable array; if the memmap is read-only, make a
+            # writable copy. We only copy when necessary to avoid extra memory
+            # overhead when the array is already writable.
+            if not lr_arr.flags.writeable:
+                lr_arr = np.array(lr_arr, copy=True)
+            if not hr_arr.flags.writeable:
+                hr_arr = np.array(hr_arr, copy=True)
+
+            lr_t = torch.from_numpy(lr_arr)
+            hr_t = torch.from_numpy(hr_arr)
+
+        # Note: do NOT call .pin_memory() here inside the worker process.
+        # Let the DataLoader handle pinning (it will pin the collated batch
+        # in the main process when DataLoader(pin_memory=True) is used).
         return lr_t, hr_t
 
     def get_numpy_spatial_quat(self, idx: int) -> Tuple[np.ndarray, np.ndarray]:

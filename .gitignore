@@ -210,3 +210,9 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# folder segment-anything
+evaluation/segment-anything/
+
+# mount point for datasets
+mount_data.sh

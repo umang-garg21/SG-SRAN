@@ -16,7 +16,7 @@ from training.config_utils import (
 )
 
 
-def run_postprocess_from_config(exp_dir: str, max_samples: int | None = 8):
+def run_postprocess_from_config(exp_dir: str, max_samples: int | None = 8, ckpt_path: str | None = None):
     """
     Post-process trained model results using the resolved run_config.json in exp_dir.
 
@@ -29,11 +29,25 @@ def run_postprocess_from_config(exp_dir: str, max_samples: int | None = 8):
     """
     exp_dir = Path(exp_dir)
     config_path = exp_dir / "logs" / "run_config.json"
-    ckpt_path = exp_dir / "checkpoints" / "best_model.pt"
+    # Determine checkpoint to use: prefer passed-in path, then best_model, then last_checkpoint
+    if ckpt_path is None:
+        best_ckpt = exp_dir / "checkpoints" / "best_model.pt"
+        last_ckpt = exp_dir / "checkpoints" / "last_checkpoint.pt"
+        if best_ckpt.exists():
+            ckpt_path = best_ckpt
+        elif last_ckpt.exists():
+            ckpt_path = last_ckpt
+        else:
+            # Nothing to visualize yet; return gracefully (caller wraps this in try/except)
+            raise FileNotFoundError(
+                f"❌ No checkpoint found in {exp_dir / 'checkpoints'} (searched for best_model.pt and last_checkpoint.pt)"
+            )
+    else:
+        ckpt_path = Path(ckpt_path)
 
     if not config_path.exists():
         raise FileNotFoundError(f"❌ Missing config: {config_path}")
-    if not ckpt_path.exists():
+    if not Path(ckpt_path).exists():
         raise FileNotFoundError(f"❌ Missing checkpoint: {ckpt_path}")
 
     # --------------------------
@@ -64,7 +78,30 @@ def run_postprocess_from_config(exp_dir: str, max_samples: int | None = 8):
     # --------------------------
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = build_model(cfg).to(device)
-    model.load_state_dict(torch.load(ckpt_path, map_location=device))
+
+    # Support both raw state_dicts and full checkpoint dicts produced by Trainer
+    ckpt_obj = torch.load(ckpt_path, map_location=device)
+    # If loader returned a full checkpoint dictionary, extract the model_state_dict
+    if isinstance(ckpt_obj, dict) and "model_state_dict" in ckpt_obj:
+        state_dict = ckpt_obj["model_state_dict"]
+    else:
+        state_dict = ckpt_obj
+
+    # Try loading, with a fallback that strips a potential 'module.' prefix
+    try:
+        model.load_state_dict(state_dict)
+    except RuntimeError as e:
+        # Attempt to fix common mismatch where checkpoints were saved from nn.DataParallel/DistributedDataParallel
+        try:
+            new_state = {}
+            for k, v in state_dict.items():
+                new_key = k.replace("module.", "") if isinstance(k, str) else k
+                new_state[new_key] = v
+            model.load_state_dict(new_state)
+            print("Loaded checkpoint after stripping 'module.' prefixes from state_dict keys")
+        except Exception:
+            # Re-raise original with more context
+            raise RuntimeError(f"Failed to load model state_dict from {ckpt_path}: {e}")
     model.eval()
     print(f"✅ Loaded checkpoint from {ckpt_path}")
 

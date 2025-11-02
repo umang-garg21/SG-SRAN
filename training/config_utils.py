@@ -50,6 +50,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "type": "AdamW",
         "weight_decay": 0.0001,
     },
+    # How often (in epochs) to save visualizations during training. Set to
+    # a positive integer (e.g., 100) to generate visualizations every N epochs.
+    # Set to 0 or a negative value to disable periodic visualizations.
+    "save_every": 100,
     "model": {
         "type": "Reynolds_QSR",
         "dropout": 0.0,

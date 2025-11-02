@@ -1,9 +1,9 @@
 {
     "dataset_root": "/data/home/umang/Materials/Materials_data_mount/EBSD/IN718_FZ_2D_SR_x4/Open718_QSR_x4/",
-    "epochs": 1000,
+    "epochs": 2000,
     "lr": 1e-3,
-    "batch_size": 1,
-    "num_workers": 8,
+    "batch_size": 4,
+    "num_workers": 0,
     "loss": "rotational_distance_orientation",
     "preload": false,
     "preload_torch": false,
@@ -12,9 +12,10 @@
     "debug_profile": false,
     "profile_steps": 3,
     "model": {
-        "type": "Reynolds_QSR",
-        "n_feats": 128,
-        "scale": 4,
-        "n_resblocks": 1
-    }
+        "type": "Quaternion_DeepConv_SRNet",
+        "n_feats": 64,
+        "n_resblocks": 4,
+        "scale": 4
+    },
+    "save_every": 10
 }

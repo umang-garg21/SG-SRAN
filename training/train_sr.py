@@ -32,6 +32,17 @@ def parse_args():
         type=str,
         help="Path to experiment directory containing config.json",
     )
+    parser.add_argument(
+        "--gpu_ids",
+        type=str,
+        default=None,
+        help="Optional comma-separated list of GPU ids to make visible (e.g. '0' or '0,1'). Sets CUDA_VISIBLE_DEVICES before training starts.",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="If set, resume training from the best checkpoint found in the experiment checkpoints directory",
+    )
     return parser.parse_args()
 
 
@@ -47,6 +58,11 @@ def main():
     config_path = exp_dir / "config.json"
     run_config_path = exp_dir / "logs" / "run_config.json"
     cfg = load_and_prepare_config(config_path, run_config_path)
+
+    # If user supplied GPU ids, restrict visible GPUs via env var before torch picks device
+    if args_cli.gpu_ids is not None:
+        os.environ["CUDA_VISIBLE_DEVICES"] = args_cli.gpu_ids
+        print(f"CUDA_VISIBLE_DEVICES set to: {args_cli.gpu_ids}")
 
     # --- Device ---
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -75,12 +91,84 @@ def main():
     # --- Model ---
     model = build_model(cfg).to(device)
 
+    # print model summary for verification
+    print("\n" + "="*80)
+    print("MODEL ARCHITECTURE & PARAMETER BREAKDOWN")
+    print("="*80)
+    
+    # Print model structure
+    print("\nModel Structure:")
+    print(model)
+    
+    # Detailed parameter breakdown
+    print("\n" + "="*80)
+    print("PARAMETER BREAKDOWN BY LAYER")
+    print("="*80)
+    
+    total_params = 0
+    trainable_params = 0
+    
+    print(f"\n{'Layer Name':<50} {'Parameters':>15} {'Trainable':>12}")
+    print("-" * 80)
+    
+    for name, param in model.named_parameters():
+        num_params = param.numel()
+        total_params += num_params
+        if param.requires_grad:
+            trainable_params += num_params
+        
+        trainable_str = "Yes" if param.requires_grad else "No"
+        print(f"{name:<50} {num_params:>15,} {trainable_str:>12}")
+    
+    print("-" * 80)
+    print(f"{'TOTAL':<50} {total_params:>15,}")
+    print(f"{'TRAINABLE':<50} {trainable_params:>15,}")
+    print(f"{'NON-TRAINABLE':<50} {total_params - trainable_params:>15,}")
+    
+    # Group by module type
+    print("\n" + "="*80)
+    print("PARAMETER SUMMARY BY MODULE TYPE")
+    print("="*80)
+    
+    module_params = {}
+    for name, param in model.named_parameters():
+        # Extract module type (first part of name before first dot or number)
+        parts = name.split('.')
+        if len(parts) > 0:
+            module_type = parts[0]
+            if module_type not in module_params:
+                module_params[module_type] = 0
+            module_params[module_type] += param.numel()
+    
+    for module_name, params in sorted(module_params.items(), key=lambda x: x[1], reverse=True):
+        percentage = (params / total_params) * 100
+        print(f"{module_name:<30} {params:>15,} ({percentage:>5.1f}%)")
+    
+    # Memory estimation
+    print("\n" + "="*80)
+    print("MEMORY ESTIMATES")
+    print("="*80)
+    param_size_mb = (total_params * 4) / (1024**2)  # 4 bytes per float32
+    print(f"Model parameters size: {param_size_mb:.2f} MB (float32)")
+    print(f"Approx. training memory: {param_size_mb * 4:.2f} MB (params + gradients + optimizer states)")
+    print("="*80 + "\n")
+
     # --- Optimizer & Scheduler ---
     optimizer = build_optimizer(model, cfg)
     scheduler = build_scheduler(optimizer, cfg)
 
     # --- Loss ---
     loss_fn = build_loss(cfg)
+    # If the loss is a torch.nn.Module instance, move it to the device so its
+    # registered buffers (e.g. finite-difference kernels) live on the same
+    # device as model inputs and avoid implicit device transfers per-batch.
+    try:
+        if isinstance(loss_fn, torch.nn.Module):
+            loss_fn = loss_fn.to(device)
+    except Exception:
+        # Be conservative: if moving the loss fails, continue with function API
+        # (some loss builders return plain functions).
+        pass
 
     # --- TensorBoard ---
     writer = SummaryWriter(log_dir=exp_dir / "runs")
@@ -101,9 +189,33 @@ def main():
     # ----------------------------------------------------------------------
     # 🏋️ Epoch-level tqdm progress bar
     # ----------------------------------------------------------------------
-    epoch_bar = tqdm(range(cfg.epochs), desc="Training Epochs", dynamic_ncols=True)
+    # Prefer resuming from an exact last checkpoint (most recent epoch) if available.
+    last_ckpt = Path(cfg.checkpoints_dir) / "last_checkpoint.pt"
+    best_ckpt = Path(cfg.checkpoints_dir) / "best_model.pt"
+    start_epoch = 0
+    if args_cli.resume:
+        ckpt_to_load = None
+        if last_ckpt.exists():
+            ckpt_to_load = last_ckpt
+            reason = "last checkpoint"
+        elif best_ckpt.exists():
+            ckpt_to_load = best_ckpt
+            reason = "best checkpoint"
+
+        if ckpt_to_load is not None:
+            try:
+                trainer.load_checkpoint(ckpt_to_load)
+                start_epoch = trainer.epoch + 1
+                print(f"Resuming training from {reason} at epoch {start_epoch} (loaded {ckpt_to_load})")
+            except Exception as e:
+                print(f"Warning: failed to resume from checkpoint {ckpt_to_load}: {e}. Starting from scratch.")
+        else:
+            print("No checkpoint found to resume from; starting from scratch.")
+
+    epoch_bar = tqdm(range(start_epoch, cfg.epochs), desc="Training Epochs", dynamic_ncols=True)
 
     for epoch in epoch_bar:
+        trainer.epoch = epoch
         trainer.epoch = epoch
 
         train_loss = trainer.train()
@@ -118,7 +230,59 @@ def main():
         )
 
         trainer.maybe_save_best(val_loss)
+        # save a 'last checkpoint' every epoch so resume can continue exactly
+        try:
+            trainer.save_last_checkpoint()
+        except Exception as e:
+            print(f"Warning: failed to save last checkpoint: {e}")
+        
+        # ------------------------------------------------------------------
+        # Periodic visualizations: create loss plot and run postprocessing
+        # visualizations based on `save_every` setting in the resolved config
+        # (e.g. every 100 epochs, every 5 epochs, etc.). Uses current
+        # checkpoint (best_model.pt preferred, falls back to last_checkpoint.pt).
+        # ------------------------------------------------------------------
+        try:
+            save_every = getattr(cfg, "save_every", 100)
+            # allow int-like strings in configs
+            try:
+                save_every = int(save_every)
+            except Exception:
+                save_every = 100
 
+            if save_every > 0 and (epoch + 1) % save_every == 0:
+                viz_dir = exp_dir / "visualizations"
+                viz_dir.mkdir(parents=True, exist_ok=True)
+
+                # save intermediate loss plot
+                plot_loss(
+                    train_losses,
+                    val_losses,
+                    save_path=str(viz_dir / f"loss_plot_epoch_{epoch+1:04d}.png"),
+                )
+
+                # run postprocess (renders sr/hr/lr comparisons) using best/last checkpoint
+                # keep sample size modest to avoid long pauses
+                import traceback
+                print(f"🖼️ Generating visualizations at epoch {epoch+1}...")
+                # Call postprocessing and explicitly pass string path to avoid type issues
+                run_postprocess_from_config(
+                    str(exp_dir),
+                    max_samples=4 if getattr(cfg, "smoke_test", False) else 8,
+                )
+
+                # After postprocess returns, list produced visualization files so user can see IPF images
+                from pathlib import Path as _P
+                viz_dir_p = _P(viz_dir)
+                ipf_files = sorted(viz_dir_p.glob('fz_ipf_sr_hr_*.png'))
+                comp_files = sorted(viz_dir_p.glob('sr_hr_lr_comparison_*.png'))
+                loss_files = sorted(viz_dir_p.glob('loss_plot_epoch_*.png'))
+                print(f"🖼️ Visualizations saved to: {viz_dir} (loss plots: {len(loss_files)}, comparisons: {len(comp_files)}, ipf: {len(ipf_files)})")
+                if ipf_files:
+                    print(f"  Example IPF file: {ipf_files[0]}")
+        except Exception as e:
+            # Don't crash training for visualization errors; log and continue
+            print(f"⚠️ Visualization step failed at epoch {epoch+1}: {e}")
     # ----------------------------------------------------------------------
     # ✅ Post-training
     # ----------------------------------------------------------------------
@@ -158,6 +322,7 @@ def plot_loss(train_losses, val_losses, save_path=None):
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
         plt.savefig(save_path)
         print(f"📈 Plot saved to {save_path}")
+        plt.close()
 
 
 # ----------------------------------------------------------------------

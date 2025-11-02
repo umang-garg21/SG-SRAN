@@ -3,7 +3,7 @@ import warnings
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+import numpy as np
 # ------------------------------------------------------------------------------ #
 # Quaternion lifting and projection
 # ------------------------------------------------------------------------------ #
@@ -206,11 +206,188 @@ class QuaternionTransposeConv(nn.Module):
             self.dilation,
         )
 
+class SmartResidualBlock(nn.Module):
+    def __init__(self, channels, kernel=k, reduction=2, groups=None):
+        super().__init__()
+        # ensure bottleneck is divisible by 4 (quaternion groups)
+        bottleneck = max(4, (channels // reduction) // 4 * 4)
+        if bottleneck == 0:
+            bottleneck = 4
+        # pointwise reduce
+        self.pw1 = QuaternionConv(channels, bottleneck, 1, padding=0, groups=groups)
+        # grouped spatial conv (acts like depthwise-ish when groups == bottleneck//4)
+        # choose groups so quaternion structure is respected
+        grp = bottleneck // 4 if groups is None else groups
+        self.dw = QuaternionConv(bottleneck, bottleneck, kernel, padding=kernel // 2, groups=grp)
+        # pointwise expand
+        self.pw2 = QuaternionConv(bottleneck, channels, 1, padding=0, groups=groups)
+        self.act = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        out = self.act(self.pw1(x))
+        out = self.act(self.dw(out))
+        out = self.pw2(out)
+        return x + out
+
+# =============================================================================
+# Reynolds-averaged equivariance wrapper
+# =============================================================================
+
+class EquivariantReynoldsWrap(nn.Module):
+    """
+    Reynolds operator wrapper: enforces equivariance for any module `fn`
+    under a group action represented by group_tensor (G, Cg, Cg).
+    Input/output channel dims must be multiples of Cg (=4 for quats).
+    Works with inputs (B, C, *spatial).
+    """
+
+    def __init__(
+        self, fn: nn.Module, group_tensor: torch.Tensor, group_tensor_inv: torch.Tensor
+    ):
+        super().__init__()
+        self.fn = fn
+        self.register_buffer("group_tensor", group_tensor)  # (G, Cg, Cg)
+        self.register_buffer("group_tensor_inv", group_tensor_inv)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        B, C, *spatial = x.shape
+        G, Cg, _ = self.group_tensor.shape
+        assert C % Cg == 0, f"Channels {C} must be multiple of {Cg}"
+        n_feats = C // Cg
+
+        # Lift (apply group action on quaternion axis)
+        x = x.view(B, n_feats, Cg, *spatial)  # (B,n,Cg,*)
+        # gamma_x[b,g,n,c,...] = sum_i group[g,c,i] * x[b,n,i,...]
+        gamma_x = torch.einsum("gci,bni...->bg nc...", self.group_tensor, x).reshape(
+            B * G, n_feats * Cg, *spatial
+        )
+
+        # Apply wrapped op
+        fx = self.fn(gamma_x)  # (B*G, Cout, *s')
+        BG, Cout, *spatial_out = fx.shape
+        assert BG == B * G and Cout % Cg == 0
+        n_out = Cout // Cg
+
+        fx = fx.view(B, G, n_out, Cg, *spatial_out)  # (B,G,n_out,Cg,*)
+        # project back: sum_i group_inv[g,c,i] * fx[b,g,n,i,...]
+        fx = torch.einsum("gci,bgni...->bgnc...", self.group_tensor_inv, fx)
+
+        # Average over group
+        return fx.mean(dim=1).reshape(B, Cout, *spatial_out)
 
 # ------------------------------------------------------------------------------ #
-# Quaternion SR Net
+# Reynolds deep conv SR Net
 # ------------------------------------------------------------------------------ #
-class QuaternionSRNet(nn.Module):
+
+class Reynolds_Deepconv_SRNet(nn.Module):
+    """
+    Simple SR backbone:
+      head:   quat conv (4 -> n_feats)
+      tail:   quat deconv upsampler + quat conv (n_feats -> 4)
+    All modules wrapped with Reynolds equivariance.
+    """
+
+    def __init__(self, cfg):
+        super().__init__()
+        self.cfg = cfg
+        # ------------------------------------------------------------------
+        # Load global symmetry group tensors
+        # ------------------------------------------------------------------
+        gt = torch.tensor(np.load(cfg.sym_np_path), dtype=torch.float32)
+        gti = torch.tensor(np.load(cfg.sym_inv_np_path), dtype=torch.float32)
+        self.register_buffer("group_tensor", gt)
+        self.register_buffer("group_tensor_inv", gti)
+
+        # ------------------------------------------------------------------
+        # Read model hyperparameters
+        # ------------------------------------------------------------------
+        in_ch = 16  # lifted quaternion channels (4x4)
+        mid_ch = getattr(cfg, "n_feats", 32)
+        out_ch = 16
+        scale_factor = getattr(cfg, "scale", 4)
+        overlap = getattr(cfg, "overlap", False)
+        k = getattr(cfg, "kernel_size", 3)
+        n_resblocks = getattr(cfg, "n_resblocks", 4)
+
+        # auto groups to respect quaternion structure
+        g_in = in_ch // 4
+        g_mid = mid_ch // 4
+        g_out = out_ch // 4
+
+        self.enc1 = nn.Sequential(
+            EquivariantReynoldsWrap(
+                QuaternionConv(in_ch, mid_ch, k, padding=k // 2, groups=g_in),
+                self.group_tensor,
+                self.group_tensor_inv,
+            )
+        )
+
+        self.enc2 = nn.Sequential(
+            EquivariantReynoldsWrap(
+                QuaternionConv(mid_ch, mid_ch, k, padding=k // 2, groups=g_mid),
+                self.group_tensor,
+                self.group_tensor_inv,
+            )
+        )
+
+        # Smart, memory-efficient deep conv blocks:
+        self.body = nn.Sequential(
+            *[EquivariantReynoldsWrap(
+                QuaternionConv(mid_ch, mid_ch, k, padding=k // 2, groups=g_mid),
+                self.group_tensor,
+                self.group_tensor_inv,
+            ) for _ in range(n_resblocks)]
+        )
+
+        self.tail = nn.Sequential(
+            EquivariantReynoldsWrap(
+                UpsamplerQuaternionTransposeConv(
+                    kernel_size=self.kernel_size,
+                    scale=self.scale,
+                    n_feats=self.n_feats,
+                    group_tensor=self.group_tensor,
+                    group_tensor_inv=self.group_tensor_inv,
+                    dropout_prob=self.dropout,
+                ),
+                self.group_tensor,
+                self.group_tensor_inv,
+            ),
+            EquivariantReynoldsWrap(
+                QuaternionConv(
+                    in_channels=self.n_feats,
+                    out_channels=self.n_channels,
+                    kernel_size=self.kernel_size,
+                    stride=1,
+                    padding=self.kernel_size // 2,
+                ),
+                self.group_tensor,
+                self.group_tensor_inv,
+            ),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.head(x)
+        x= x+self.body(x)
+        x = self.tail(x)
+        return x
+
+    # allow partial load (ignore tail size mismatches when strict=False)
+    def load_state_dict(self, state_dict, strict: bool = True):
+        own = self.state_dict()
+        for name, param in state_dict.items():
+            if name in own:
+                try:
+                    own[name].copy_(
+                        param if not isinstance(param, nn.Parameter) else param.data
+                    )
+                except Exception:
+                    if strict and "tail" not in name:
+                        raise
+            elif strict and "tail" not in name:
+                raise KeyError(f"Unexpected key in state_dict: {name}")
+
+
+class Quaternion_DeepConv_SRNet(nn.Module):
     def __init__(self, cfg):
         """
         Quaternion super-resolution network built from config.
@@ -226,13 +403,14 @@ class QuaternionSRNet(nn.Module):
         """
         super().__init__()
         self.cfg = cfg
-
+        
         in_ch = 16  # lifted quaternion channels (4x4)
         mid_ch = getattr(cfg, "n_feats", 32)
         out_ch = 16
         scale_factor = getattr(cfg, "scale", 4)
         overlap = getattr(cfg, "overlap", False)
         k = getattr(cfg, "kernel_size", 3)
+        n_resblocks = getattr(cfg, "n_resblocks", 4)
 
         # auto groups to respect quaternion structure
         g_in = in_ch // 4
@@ -242,6 +420,13 @@ class QuaternionSRNet(nn.Module):
         self.enc1 = QuaternionConv(in_ch, mid_ch, k, padding=k // 2, groups=g_in)
         self.enc2 = QuaternionConv(mid_ch, mid_ch, k, padding=k // 2, groups=g_mid)
 
+        # Smart, memory-efficient deep conv blocks:
+        # Each block is a bottleneck (1x1) -> grouped conv (k x k) -> expand (1x1) with
+        # a residual connection. We ensure all channel counts remain divisible by 4
+        # so the quaternion conv helpers remain valid.
+        
+        self.body = nn.Sequential(*[SmartResidualBlock(mid_ch, kernel=k) for _ in range(n_resblocks)])
+
         self.up = QuaternionTransposeConv(
             in_q_channels=mid_ch,
             out_q_channels=mid_ch,
@@ -249,7 +434,6 @@ class QuaternionSRNet(nn.Module):
             overlap=overlap,
             groups=g_mid,
         )
-
         self.outc = QuaternionConv(mid_ch, out_ch, k, padding=k // 2, groups=g_out)
         # self.act = nn.ReLU(inplace=True)
 
@@ -261,6 +445,7 @@ class QuaternionSRNet(nn.Module):
         # x = self.act(self.up(x))
         x = self.enc1(x)
         x = self.enc2(x)
+        x = self.body(x)
         x = self.up(x)
         x = self.outc(x)
         q_out = lmat_to_quat(x)
@@ -309,18 +494,13 @@ if __name__ == "__main__":
     scale = 4
 
     print("\nNon-overlapping SR")
-    # Build a small config object expected by the constructor
-    from types import SimpleNamespace
-
-    cfg = SimpleNamespace(n_feats=32, scale=scale, overlap=False, kernel_size=3)
-    net_clean = QuaternionSRNet(cfg)
+    net_clean = Quaternion_res_SRNet(base_q_channels=32, scale_factor=scale, overlap=False)
     q_lr = torch.randn(B, 4, H, W)
     q_lr = q_lr / q_lr.norm(dim=1, keepdim=True).clamp_min(1e-8)
     q_sr = net_clean(q_lr)
     print("Output shape (clean):", q_sr.shape)  # expected (B, 4, 128, 128)
 
     print("\nOverlapping SR")
-    cfg2 = SimpleNamespace(n_feats=64, scale=scale, overlap=True, kernel_size=3)
-    net_overlap = QuaternionSRNet(cfg2)
+    net_overlap = Quaternion_res_SRNet(base_q_channels=64, scale_factor=scale, overlap=True)
     q_sr2 = net_overlap(q_lr)
     print("Output shape (overlap):", q_sr2.shape)

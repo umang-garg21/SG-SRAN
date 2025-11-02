@@ -3,15 +3,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 # from torch.autograd import Variable
-from model.quat_utils.quaternion_layers import (
+from Archive.model.quat_utils.quaternion_layers import (
     QuaternionConv,
     QuaternionLinear,
 )  # , QuaternionTransposeConv #, QuaternionLinear
 
 # from torch.nn import Parameter
-from model.quat_utils.QBN_Vecchi2 import QuaternionBatchNorm2d as QBatchNorm
-from model.quat_utils.QBN_Vecchi2 import QuatLayerNorm
-from model.quat_utils.QSN2 import Qspectral_norm
+from Archive.model.quat_utils.QBN_Vecchi2 import QuaternionBatchNorm2d as QBatchNorm
+from Archive.model.quat_utils.QBN_Vecchi2 import QuatLayerNorm
+from Archive.model.quat_utils.QSN2 import Qspectral_norm
 
 from einops import rearrange
 

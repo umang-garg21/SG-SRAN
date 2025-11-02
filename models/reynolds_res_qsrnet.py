@@ -1,5 +1,7 @@
 import math
 import warnings
+import numpy as np
+from Archive.model.quat_utils.Qops_with_QSN import Residual_SA
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -65,10 +67,55 @@ def quaternion_block_weight(r, i, j, k):
     return torch.cat([k_rr, k_ri, k_rj, k_rk], dim=0)
 
 
+# =============================================================================
+# Reynolds-averaged equivariance wrapper
+# =============================================================================
+
+class EquivariantReynoldsWrap(nn.Module):
+    """
+    Reynolds operator wrapper: enforces equivariance for any module `fn`
+    under a group action represented by group_tensor (G, Cg, Cg).
+    Input/output channel dims must be multiples of Cg (=4 for quats).
+    Works with inputs (B, C, *spatial).
+    """
+
+    def __init__(
+        self, fn: nn.Module, group_tensor: torch.Tensor, group_tensor_inv: torch.Tensor
+    ):
+        super().__init__()
+        self.fn = fn
+        self.register_buffer("group_tensor", group_tensor)  # (G, Cg, Cg)
+        self.register_buffer("group_tensor_inv", group_tensor_inv)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        B, C, *spatial = x.shape
+        G, Cg, _ = self.group_tensor.shape
+        assert C % Cg == 0, f"Channels {C} must be multiple of {Cg}"
+        n_feats = C // Cg
+
+        # Lift (apply group action on quaternion axis)
+        x = x.view(B, n_feats, Cg, *spatial)  # (B,n,Cg,*)
+        # gamma_x[b,g,n,c,...] = sum_i group[g,c,i] * x[b,n,i,...]
+        gamma_x = torch.einsum("gci,bni...->bg nc...", self.group_tensor, x).reshape(
+            B * G, n_feats * Cg, *spatial
+        )
+
+        # Apply wrapped op
+        fx = self.fn(gamma_x)  # (B*G, Cout, *s')
+        BG, Cout, *spatial_out = fx.shape
+        assert BG == B * G and Cout % Cg == 0
+        n_out = Cout // Cg
+
+        fx = fx.view(B, G, n_out, Cg, *spatial_out)  # (B,G,n_out,Cg,*)
+        # project back: sum_i group_inv[g,c,i] * fx[b,g,n,i,...]
+        fx = torch.einsum("gci,bgni...->bgnc...", self.group_tensor_inv, fx)
+
+        # Average over group
+        return fx.mean(dim=1).reshape(B, Cout, *spatial_out)
+
 # ------------------------------------------------------------------------------ #
 # Quaternion Conv and Transpose Conv
 # ------------------------------------------------------------------------------ #
-
 
 class QuaternionConv(nn.Module):
     def __init__(
@@ -210,7 +257,7 @@ class QuaternionTransposeConv(nn.Module):
 # ------------------------------------------------------------------------------ #
 # Quaternion SR Net
 # ------------------------------------------------------------------------------ #
-class QuaternionSRNet(nn.Module):
+class Reynolds_res_QSRNet(nn.Module):
     def __init__(self, cfg):
         """
         Quaternion super-resolution network built from config.
@@ -226,32 +273,69 @@ class QuaternionSRNet(nn.Module):
         """
         super().__init__()
         self.cfg = cfg
-
+        
+        # ------------------------------------------------------------------
+        # Load global symmetry group tensors
+        # ------------------------------------------------------------------
+        gt = torch.tensor(np.load(cfg.sym_np_path), dtype=torch.float32)
+        gti = torch.tensor(np.load(cfg.sym_inv_np_path), dtype=torch.float32)
+        self.register_buffer("group_tensor", gt)
+        self.register_buffer("group_tensor_inv", gti)
+        
         in_ch = 16  # lifted quaternion channels (4x4)
         mid_ch = getattr(cfg, "n_feats", 32)
         out_ch = 16
         scale_factor = getattr(cfg, "scale", 4)
         overlap = getattr(cfg, "overlap", False)
         k = getattr(cfg, "kernel_size", 3)
+        n_resblocks = getattr(cfg, "n_resblocks", 4)
 
         # auto groups to respect quaternion structure
         g_in = in_ch // 4
         g_mid = mid_ch // 4
         g_out = out_ch // 4
 
-        self.enc1 = QuaternionConv(in_ch, mid_ch, k, padding=k // 2, groups=g_in)
-        self.enc2 = QuaternionConv(mid_ch, mid_ch, k, padding=k // 2, groups=g_mid)
-
-        self.up = QuaternionTransposeConv(
-            in_q_channels=mid_ch,
-            out_q_channels=mid_ch,
-            scale_factor=scale_factor,
-            overlap=overlap,
-            groups=g_mid,
+        self.enc1 = nn.Sequential(
+            EquivariantReynoldsWrap(
+                QuaternionConv(in_ch, mid_ch, k, padding=k // 2, groups=g_in),
+                self.group_tensor,
+                self.group_tensor_inv,
+            )
         )
 
-        self.outc = QuaternionConv(mid_ch, out_ch, k, padding=k // 2, groups=g_out)
-        # self.act = nn.ReLU(inplace=True)
+        self.enc2 = nn.Sequential(
+            EquivariantReynoldsWrap(
+                QuaternionConv(mid_ch, mid_ch, k, padding=k // 2, groups=g_mid),
+                self.group_tensor,
+                self.group_tensor_inv,
+            )
+        )
+
+        # body with residual blocks
+        self.body = nn.Sequential(
+            *[EquivariantReynoldsWrap(
+                Residual_SA(mid_ch, mid_ch),
+                self.group_tensor,
+                self.group_tensor_inv,
+            ) for _ in range(n_resblocks)]
+        )
+
+        self.up = EquivariantReynoldsWrap(
+                QuaternionTransposeConv(
+                in_q_channels=mid_ch,
+                out_q_channels=mid_ch,
+                scale_factor=scale_factor,
+                overlap=overlap,
+                groups=g_mid,
+            ),
+                self.group_tensor,
+                self.group_tensor_inv
+        )
+        self.outc = EquivariantReynoldsWrap(
+                QuaternionConv(mid_ch, out_ch, k, padding=k // 2, groups=g_out),
+                self.group_tensor,
+                self.group_tensor_inv,
+            )
 
     def forward(self, q_in):
         # Lift quaternions to 16-channel real representation
@@ -261,6 +345,7 @@ class QuaternionSRNet(nn.Module):
         # x = self.act(self.up(x))
         x = self.enc1(x)
         x = self.enc2(x)
+        x = x+self.body(x)
         x = self.up(x)
         x = self.outc(x)
         q_out = lmat_to_quat(x)
@@ -309,18 +394,13 @@ if __name__ == "__main__":
     scale = 4
 
     print("\nNon-overlapping SR")
-    # Build a small config object expected by the constructor
-    from types import SimpleNamespace
-
-    cfg = SimpleNamespace(n_feats=32, scale=scale, overlap=False, kernel_size=3)
-    net_clean = QuaternionSRNet(cfg)
+    net_clean = Quaternion_res_SRNet(base_q_channels=32, scale_factor=scale, overlap=False)
     q_lr = torch.randn(B, 4, H, W)
     q_lr = q_lr / q_lr.norm(dim=1, keepdim=True).clamp_min(1e-8)
     q_sr = net_clean(q_lr)
     print("Output shape (clean):", q_sr.shape)  # expected (B, 4, 128, 128)
 
     print("\nOverlapping SR")
-    cfg2 = SimpleNamespace(n_feats=64, scale=scale, overlap=True, kernel_size=3)
-    net_overlap = QuaternionSRNet(cfg2)
+    net_overlap = Quaternion_res_SRNet(base_q_channels=64, scale_factor=scale, overlap=True)
     q_sr2 = net_overlap(q_lr)
     print("Output shape (overlap):", q_sr2.shape)
