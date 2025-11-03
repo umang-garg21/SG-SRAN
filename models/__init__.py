@@ -6,6 +6,7 @@ from models.quat_k import ProgressiveQuaternionSRNet
 from utils.config_utils import ConfigNamespace
 from models.quaternion_deepconv_srnet import Quaternion_DeepConv_SRNet
 from models.reynolds_res_qsrnet import Reynolds_res_QSRNet
+from models.reynolds_deepconv_qsrnet import Reynolds_DeepConv_QSRNet
 
 MODEL_REGISTRY = {
     "reynolds_qsr": Reynolds_QSR,
@@ -15,6 +16,7 @@ MODEL_REGISTRY = {
     "quaternion_kernel": ProgressiveQuaternionSRNet,
     "quaternion_deepconv_srnet": Quaternion_DeepConv_SRNet,
     "reynolds_res_qsrnet": Reynolds_res_QSRNet,  # Assuming Reynolds_QSR is the correct class for this type
+    "reynolds_deepconv_qsrnet": Reynolds_DeepConv_QSRNet,
 }
 
 

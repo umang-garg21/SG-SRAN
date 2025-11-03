@@ -41,6 +41,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "preload": True,
     "preload_torch": True,
     "pin_memory": True,
+    "seed": 42,  # Random seed for reproducibility
     "scheduler": {
         "type": "cosine",
         "warmup_epochs": 2,

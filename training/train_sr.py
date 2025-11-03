@@ -13,6 +13,7 @@ from training.optimizer_utils import build_optimizer
 from training.schedulers import build_scheduler
 from training.trainer import Trainer
 from training.loss_functions import build_loss
+from training.seed_utils import set_seed, get_seed_from_config
 from models import build_model
 from post_processing.post_process import run_postprocess_from_config
 
@@ -59,6 +60,10 @@ def main():
     run_config_path = exp_dir / "logs" / "run_config.json"
     cfg = load_and_prepare_config(config_path, run_config_path)
 
+    # --- Set Random Seed for Reproducibility ---
+    seed = get_seed_from_config(cfg)
+    set_seed(seed)
+
     # If user supplied GPU ids, restrict visible GPUs via env var before torch picks device
     if args_cli.gpu_ids is not None:
         os.environ["CUDA_VISIBLE_DEVICES"] = args_cli.gpu_ids
@@ -84,12 +89,45 @@ def main():
             preload_torch=cfg.preload_torch,
             pin_memory=cfg.pin_memory,
             take_first=8 if cfg.smoke_test else None,
+            seed=seed,  # Pass seed for reproducibility
         )
         for split in ["train", "val", "test"]
     }
 
     # --- Model ---
     model = build_model(cfg).to(device)
+    
+    # --- Multi-GPU Support ---
+    use_multi_gpu = getattr(cfg, 'use_multi_gpu', True)  # default to True
+    if torch.cuda.is_available() and torch.cuda.device_count() > 1 and use_multi_gpu:
+        print(f"\n{'='*80}")
+        print(f"MULTI-GPU TRAINING ENABLED")
+        print(f"{'='*80}")
+        print(f"Number of GPUs available: {torch.cuda.device_count()}")
+        
+        # Get GPU IDs to use (either from config or all available)
+        gpu_ids = getattr(cfg, 'gpu_ids', None)
+        if gpu_ids is not None:
+            # Convert string or list to list of ints
+            if isinstance(gpu_ids, str):
+                gpu_ids = [int(x.strip()) for x in gpu_ids.split(',')]
+            elif not isinstance(gpu_ids, list):
+                gpu_ids = [gpu_ids]
+            print(f"Using GPUs: {gpu_ids}")
+            model = torch.nn.DataParallel(model, device_ids=gpu_ids)
+        else:
+            print(f"Using all available GPUs: {list(range(torch.cuda.device_count()))}")
+            model = torch.nn.DataParallel(model)
+        
+        # Adjust effective batch size
+        effective_batch_size = cfg.batch_size * torch.cuda.device_count()
+        print(f"Batch size per GPU: {cfg.batch_size}")
+        print(f"Effective batch size: {effective_batch_size}")
+        print(f"{'='*80}\n")
+    elif torch.cuda.is_available() and use_multi_gpu:
+        print(f"Only 1 GPU available, using single GPU training.")
+    else:
+        print(f"Multi-GPU disabled or not available.")
 
     # print model summary for verification
     print("\n" + "="*80)

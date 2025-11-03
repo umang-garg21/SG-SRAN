@@ -133,7 +133,9 @@ class Trainer:
 
         avg_loss = total_loss / len(self.loaders["train"])
         self.scheduler.step()
-        self.writer.add_scalar("Loss/Train", avg_loss, self.epoch)
+        # Only write to TensorBoard if writer is available (main process in DDP)
+        if self.writer is not None:
+            self.writer.add_scalar("Loss/Train", avg_loss, self.epoch)
 
         return avg_loss
 
@@ -156,7 +158,9 @@ class Trainer:
             total_loss += loss.item()
 
         avg_val_loss = total_loss / len(self.loaders["val"])
-        self.writer.add_scalar("Loss/Val", avg_val_loss, self.epoch)
+        # Only write to TensorBoard if writer is available (main process in DDP)
+        if self.writer is not None:
+            self.writer.add_scalar("Loss/Val", avg_val_loss, self.epoch)
         return avg_val_loss
 
     def maybe_save_best(self, val_loss):
@@ -165,9 +169,11 @@ class Trainer:
             ckpt = Path(self.cfg["checkpoints_dir"]) / "best_model.pt"
             # Save a full checkpoint with optimizer and scheduler state so training
             # can be resumed exactly from this point.
+            # Handle DataParallel wrapper
+            model_to_save = self.model.module if isinstance(self.model, torch.nn.DataParallel) else self.model
             ckpt_data = {
                 "epoch": int(self.epoch),
-                "model_state_dict": self.model.state_dict(),
+                "model_state_dict": model_to_save.state_dict(),
                 "optimizer_state_dict": self.optimizer.state_dict(),
                 "scheduler_state_dict": self.scheduler.state_dict()
                 if self.scheduler is not None
@@ -184,9 +190,11 @@ class Trainer:
         best checkpoint was saved earlier in training.
         """
         ckpt = Path(self.cfg["checkpoints_dir"]) / "last_checkpoint.pt"
+        # Handle DataParallel wrapper
+        model_to_save = self.model.module if isinstance(self.model, torch.nn.DataParallel) else self.model
         ckpt_data = {
             "epoch": int(self.epoch),
-            "model_state_dict": self.model.state_dict(),
+            "model_state_dict": model_to_save.state_dict(),
             "optimizer_state_dict": self.optimizer.state_dict(),
             "scheduler_state_dict": self.scheduler.state_dict()
             if self.scheduler is not None
@@ -212,12 +220,16 @@ class Trainer:
         # Backwards-compat: ckpt may be a raw state_dict
         if not isinstance(ckpt, dict) or "model_state_dict" not in ckpt:
             # assume ckpt is a model state_dict
-            self.model.load_state_dict(ckpt)
+            # Handle DataParallel wrapper when loading
+            model_to_load = self.model.module if isinstance(self.model, torch.nn.DataParallel) else self.model
+            model_to_load.load_state_dict(ckpt)
             print(f"Loaded model state_dict from {ckpt_path} (no optimizer state present)")
             return
 
         # Load model weights
-        self.model.load_state_dict(ckpt["model_state_dict"])
+        # Handle DataParallel wrapper when loading
+        model_to_load = self.model.module if isinstance(self.model, torch.nn.DataParallel) else self.model
+        model_to_load.load_state_dict(ckpt["model_state_dict"])
 
         # Optionally load optimizer and scheduler
         if load_optimizer and "optimizer_state_dict" in ckpt and ckpt["optimizer_state_dict"] is not None:

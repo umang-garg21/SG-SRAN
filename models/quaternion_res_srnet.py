@@ -57,7 +57,6 @@ def _he_init_like(wr, wi, wj, wk, criterion="glorot"):
     for p in (wr, wi, wj, wk):
         nn.init.normal_(p, mean=0.0, std=s / 2.0)
 
-
 def quaternion_block_weight(r, i, j, k):
     k_rr = torch.cat([r, -i, -j, -k], dim=1)
     k_ri = torch.cat([i, r, -k, j], dim=1)

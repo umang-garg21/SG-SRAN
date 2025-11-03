@@ -56,6 +56,10 @@ def build_dataloader(
     preload_torch: bool = False,
     persistent_workers: bool = False,
     take_first: Optional[int] = None,
+    distributed: bool = False,
+    rank: int = 0,
+    world_size: int = 1,
+    seed: int = 42,  # Seed parameter for reproducibility
 ) -> DataLoader:
     """
     Build a DataLoader for quaternion SR datasets.
@@ -82,6 +86,14 @@ def build_dataloader(
         Keep workers alive between epochs for performance.
     take_first : int, optional
         For debugging: limit dataset size.
+    distributed : bool
+        Enable DDP-aware sampling
+    rank : int
+        Process rank for DDP
+    world_size : int
+        Total number of processes for DDP
+    seed : int
+        Random seed for reproducibility (default: 42)
 
     Returns
     -------
@@ -98,17 +110,32 @@ def build_dataloader(
 
     # Generator for deterministic shuffling
     g = torch.Generator()
-    g.manual_seed(42)
+    g.manual_seed(seed)
+
+    # Setup sampler for DDP
+    sampler = None
+    if distributed:
+        from torch.utils.data.distributed import DistributedSampler
+        sampler = DistributedSampler(
+            ds,
+            num_replicas=world_size,
+            rank=rank,
+            shuffle=shuffle if split == "Train" else False,
+            seed=seed,
+        )
+        # When using DistributedSampler, shuffle must be False in DataLoader
+        shuffle = False
 
     dl = DataLoader(
         ds,
         batch_size=batch_size,
-        shuffle=shuffle if split == "Train" else False,
+        shuffle=shuffle if split == "Train" and sampler is None else False,
         num_workers=num_workers,
         pin_memory=pin_memory,
         persistent_workers=persistent_workers and num_workers > 0,
         worker_init_fn=seed_worker,
-        generator=g,
+        generator=g if sampler is None else None,
+        sampler=sampler,
     )
 
     return dl

@@ -2,6 +2,8 @@
    1. save_dataset_ipfs saves the datasets ipf iamges.
 2. Create experiments/{data_name}/{experiment_name}/config.json
    1.  This trains the model ./scripts/train.sh experiments/{data_name}/{experiment_name}
+   2. (optional) To run multi-gpu DDP framework
+   CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 ./scripts/train_ddp.sh experiments/{data_name}/{experiment_name} {num_gpus}
    2.  NOTE: it will overwrite the exepirment if it already exists
 3.  This runs python tests 
-    1.  ./scripts/run_tests.sh
+   1.  ./scripts/run_tests.sh
