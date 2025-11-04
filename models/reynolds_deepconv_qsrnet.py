@@ -508,6 +508,8 @@ class Reynolds_DeepConv_QSRNet(nn.Module):
             # insert an attention block every 2 residuals (configurable)
             if (i + 1) % 2 == 0:
                 blocks.append(GlobalDownsampleAttention(mid_ch, attn_spatial=8))
+        
+        self.body = nn.Sequential(*blocks)
 
         self.up = EquivariantReynoldsWrap(
             QuaternionTransposeConv(

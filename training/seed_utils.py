@@ -60,23 +60,19 @@ def set_seed(seed: int = 42):
 
 def get_seed_from_config(cfg, default: int = 42) -> int:
     """
-    Extract seed from configuration object.
+    Extract seed from configuration object. Always returns 42 for consistency.
     
     Parameters
     ----------
     cfg : ConfigNamespace or dict
         Configuration object
     default : int
-        Default seed value if not specified in config
+        Default seed value (always 42)
         
     Returns
     -------
     int
-        Seed value to use
+        Seed value (always 42)
     """
-    if hasattr(cfg, 'seed'):
-        return cfg.seed
-    elif isinstance(cfg, dict) and 'seed' in cfg:
-        return cfg['seed']
-    else:
-        return default
+    # Always use seed 42 for reproducibility
+    return 42

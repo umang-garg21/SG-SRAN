@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """
 DDP Training with Alternating Batch Size Schedule
-Alternates between batch_size=1 and batch_size=4 every 100 epochs
+Alternates between batch_size=2 and batch_size=4 every 100 epochs
 """
 
 import os
@@ -60,9 +60,9 @@ def main():
     
     # Training schedule: alternating batch sizes
     # Starting from epoch 2000, going to epoch 3000 (1000 epochs total)
-    # Batch size 1: epochs 2000-2100 (first 100)
+    # Batch size 2: epochs 2000-2100 (first 100)
     # Batch size 4: epochs 2100-2200 (next 100)
-    # Batch size 1: epochs 2200-2300 (next 100)
+    # Batch size 2: epochs 2200-2300 (next 100)
     # ... and so on
     
     start_epoch = 2000
@@ -72,7 +72,7 @@ def main():
     current_epoch = start_epoch
     end_epoch = start_epoch + total_epochs
     
-    batch_sizes = [1, 4]  # Alternating pattern
+    batch_sizes = [2, 4]  # Alternating pattern between 2 and 4
     batch_idx = 0
     
     while current_epoch < end_epoch:

@@ -34,6 +34,20 @@ from post_processing.post_process import run_postprocess_from_config
 torch.autograd.set_detect_anomaly(True)
 
 
+def set_seed(seed: int = 42):
+    """Set random seed for reproducibility."""
+    import random
+    import numpy as np
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
+
 def setup_ddp():
     """Initialize DDP training."""
     # These environment variables are set by torchrun
@@ -73,16 +87,53 @@ def parse_args():
     return parser.parse_args()
 
 
-def plot_loss(train_losses, val_losses, save_path):
-    """Create and save loss plot."""
-    plt.figure(figsize=(10, 6))
-    plt.plot(train_losses, label='Train Loss', linewidth=2)
-    plt.plot(val_losses, label='Val Loss', linewidth=2)
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss')
-    plt.title('Training and Validation Loss')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
+def plot_loss(train_losses, val_losses, learning_rates, save_path, start_epoch=1):
+    """Create and save loss and learning rate plots."""
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10))
+    
+    # Create epoch array starting from the correct epoch
+    epochs = list(range(start_epoch, start_epoch + len(train_losses)))
+    
+    # Plot losses
+    ax1.plot(epochs, train_losses, label='Train Loss', linewidth=2)
+    ax1.plot(epochs, val_losses, label='Val Loss', linewidth=2)
+    ax1.set_xlabel('Epoch')
+    ax1.set_ylabel('Loss')
+    ax1.set_title('Training and Validation Loss')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+    
+    # Plot learning rate
+    ax2.plot(epochs, learning_rates, label='Learning Rate', linewidth=2, color='green')
+    ax2.set_xlabel('Epoch')
+    ax2.set_ylabel('Learning Rate')
+    ax2.set_title('Learning Rate Schedule')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+    ax2.set_yscale('log')  # Log scale for better visualization
+    
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close()
+
+
+def plot_learning_rate(learning_rates, save_path, start_epoch=1):
+    """Create and save standalone learning rate plot."""
+    fig, ax = plt.subplots(1, 1, figsize=(10, 6))
+    
+    # Create epoch array starting from the correct epoch
+    epochs = list(range(start_epoch, start_epoch + len(learning_rates)))
+    
+    # Plot learning rate
+    ax.plot(epochs, learning_rates, label='Learning Rate', linewidth=2, color='green', marker='o', markersize=3)
+    ax.set_xlabel('Epoch')
+    ax.set_ylabel('Learning Rate')
+    ax.set_title('Learning Rate Schedule over Epochs')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    ax.set_yscale('log')  # Log scale for better visualization
+    
+    plt.tight_layout()
     plt.savefig(save_path, dpi=150, bbox_inches='tight')
     plt.close()
 
@@ -91,6 +142,11 @@ def main():
     # --- Setup DDP ---
     rank, local_rank, world_size = setup_ddp()
     is_main_process = rank == 0
+    
+    # --- Set seed for reproducibility ---
+    # Use seed + rank to ensure different random behavior per process
+    # but still reproducible across runs
+    set_seed(42 + rank)
     
     # --- CLI ---
     args_cli = parse_args()
@@ -104,6 +160,8 @@ def main():
     # Track losses for plotting
     train_losses = []
     val_losses = []
+    learning_rates = []
+    start_epoch = 1  # Will be updated if resuming from checkpoint
     
     # --- Device ---
     device = torch.device(f"cuda:{local_rank}")
@@ -201,10 +259,12 @@ def main():
             if is_main_process:
                 print(f"Resuming from {last_ckpt}")
             trainer.load_checkpoint(last_ckpt, load_optimizer=True)
+            start_epoch = trainer.epoch + 1
         elif best_ckpt.exists():
             if is_main_process:
                 print(f"Resuming from {best_ckpt}")
             trainer.load_checkpoint(best_ckpt, load_optimizer=True)
+            start_epoch = trainer.epoch + 1
         else:
             if is_main_process:
                 print(f"No checkpoint found, starting from scratch")
@@ -238,12 +298,15 @@ def main():
             train_losses.append(train_loss)
             val_losses.append(val_loss)
             
+            # Track learning rate
+            current_lr = scheduler.get_last_lr()[0] if scheduler is not None else optimizer.param_groups[0]['lr']
+            learning_rates.append(current_lr)
+            
             # Logging
             if writer is not None:
                 writer.add_scalar("Loss/train", train_loss, epoch)
                 writer.add_scalar("Loss/val", val_loss, epoch)
-                if scheduler is not None:
-                    writer.add_scalar("LR", scheduler.get_last_lr()[0], epoch)
+                writer.add_scalar("LR", current_lr, epoch)
             
             # Save checkpoints
             trainer.maybe_save_best(val_loss)
@@ -257,28 +320,42 @@ def main():
                     viz_dir = exp_dir / "visualizations"
                     viz_dir.mkdir(parents=True, exist_ok=True)
                     
-                    # Save loss plot
+                    # Save loss plot (single file, overwritten each time with cumulative data)
                     print(f"🖼️ Generating visualizations at epoch {epoch}...")
                     plot_loss(
                         train_losses,
                         val_losses,
-                        save_path=str(viz_dir / f"loss_plot_epoch_{epoch:04d}.png"),
+                        learning_rates,
+                        save_path=str(viz_dir / "loss_plot.png"),
+                        start_epoch=start_epoch,
                     )
                     
-                    # Generate SR/HR/LR comparisons and IPF images
+                    # Save standalone learning rate plot
+                    plot_learning_rate(
+                        learning_rates,
+                        save_path=str(viz_dir / "learning_rate.png"),
+                        start_epoch=start_epoch,
+                    )
+                    
+                    # Generate SR/HR/LR comparisons and IPF images with epoch-specific folder
+                    epoch_viz_dir = viz_dir / f"epoch_{epoch:04d}"
+                    epoch_viz_dir.mkdir(parents=True, exist_ok=True)
+                    
                     run_postprocess_from_config(
                         str(exp_dir),
                         max_samples=4 if getattr(cfg, "smoke_test", False) else 8,
+                        output_dir=str(epoch_viz_dir),
                     )
                     
                     # List generated files
-                    ipf_files = sorted(viz_dir.glob('fz_ipf_sr_hr_*.png'))
-                    comp_files = sorted(viz_dir.glob('sr_hr_lr_comparison_*.png'))
-                    loss_files = sorted(viz_dir.glob('loss_plot_epoch_*.png'))
-                    print(f"✅ Visualizations saved to: {viz_dir}")
-                    print(f"   Loss plots: {len(loss_files)}, Comparisons: {len(comp_files)}, IPF: {len(ipf_files)}")
+                    ipf_files = sorted(epoch_viz_dir.glob('fz_ipf_sr_hr_*.png'))
+                    comp_files = sorted(epoch_viz_dir.glob('sr_hr_lr_comparison_*.png'))
+                    print(f"✅ Visualizations saved to: {epoch_viz_dir}")
+                    print(f"   Loss plot: {viz_dir / 'loss_plot.png'}")
+                    print(f"   Learning rate plot: {viz_dir / 'learning_rate.png'}")
+                    print(f"   Epoch {epoch} samples: Comparisons: {len(comp_files)}, IPF: {len(ipf_files)}")
                     if ipf_files:
-                        print(f"   Latest IPF: {ipf_files[-1].name}")
+                        print(f"   Example: {ipf_files[0].name}")
                 except Exception as e:
                     print(f"⚠️ Visualization failed at epoch {epoch}: {e}")
         

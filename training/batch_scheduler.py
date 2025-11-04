@@ -17,9 +17,9 @@ class BatchSizeScheduler:
     - Epochs 600-699: batch_size = 16 (divide by 2)
     - Epochs 700-799: batch_size = 8 (divide by 2)
     - Epochs 800-899: batch_size = 4 (divide by 2, reached minimum)
-    - Epochs 900-999: batch_size = 1 (alternate)
+    - Epochs 900-999: batch_size = 2 (alternate)
     - Epochs 1000-1099: batch_size = 4 (alternate)
-    - ... continue alternating between 4 and 1 every 100 epochs until epoch 2000
+    - ... continue alternating between 4 and 2 every 100 epochs until epoch 2000
     """
     
     def __init__(self, initial_batch_size=64, min_batch_size=4):
@@ -63,7 +63,7 @@ class BatchSizeScheduler:
         # Calculate current batch size after divisions
         batch_size = self.initial_batch_size // (2 ** division_periods)
         
-        # Phase 3: Once we reach min_batch_size, alternate between min and 1
+        # Phase 3: Once we reach min_batch_size, alternate between min and min/2
         if batch_size <= self.min_batch_size:
             # Calculate how many divisions it takes to reach min from initial
             import math
@@ -75,14 +75,14 @@ class BatchSizeScheduler:
             block_number = epochs_since_min // 100
             
             # First block (0): use min_batch_size (4)
-            # Second block (1): use 1
+            # Second block (1): use min_batch_size / 2 (2)
             # Third block (2): use min_batch_size (4)
-            # Fourth block (3): use 1
+            # Fourth block (3): use min_batch_size / 2 (2)
             # Continue alternating...
             if block_number % 2 == 0:
                 return self.min_batch_size  # Blocks 0, 2, 4, ...: use 4
             else:
-                return 1  # Blocks 1, 3, 5, ...: use 1
+                return max(self.min_batch_size // 2, 1)  # Blocks 1, 3, 5, ...: use 2
         
         return max(batch_size, 1)  # Safety: never go below 1
     

@@ -61,7 +61,7 @@ def main():
     cfg = load_and_prepare_config(config_path, run_config_path)
 
     # --- Set Random Seed for Reproducibility ---
-    seed = get_seed_from_config(cfg)
+    seed = 42  # Always use seed 42
     set_seed(seed)
 
     # If user supplied GPU ids, restrict visible GPUs via env var before torch picks device
@@ -223,6 +223,8 @@ def main():
     )
 
     train_losses, val_losses = [], []
+    learning_rates = []
+    start_epoch = 0
 
     # ----------------------------------------------------------------------
     # 🏋️ Epoch-level tqdm progress bar
@@ -261,10 +263,14 @@ def main():
 
         train_losses.append(train_loss)
         val_losses.append(val_loss)
+        
+        # Track learning rate
+        current_lr = scheduler.get_last_lr()[0] if scheduler is not None else optimizer.param_groups[0]['lr']
+        learning_rates.append(current_lr)
 
         # Update tqdm bar with current loss
         epoch_bar.set_postfix(
-            train_loss=f"{train_loss:.6f}", val_loss=f"{val_loss:.6f}"
+            train_loss=f"{train_loss:.6f}", val_loss=f"{val_loss:.6f}", lr=f"{current_lr:.2e}"
         )
 
         trainer.maybe_save_best(val_loss)
@@ -292,12 +298,25 @@ def main():
                 viz_dir = exp_dir / "visualizations"
                 viz_dir.mkdir(parents=True, exist_ok=True)
 
-                # save intermediate loss plot
+                # Save loss plot (single file, overwritten each time with cumulative data)
                 plot_loss(
                     train_losses,
                     val_losses,
-                    save_path=str(viz_dir / f"loss_plot_epoch_{epoch+1:04d}.png"),
+                    learning_rates,
+                    save_path=str(viz_dir / "loss_plot.png"),
+                    start_epoch=start_epoch,
                 )
+                
+                # Save standalone learning rate plot
+                plot_learning_rate(
+                    learning_rates,
+                    save_path=str(viz_dir / "learning_rate.png"),
+                    start_epoch=start_epoch,
+                )
+
+                # Create epoch-specific subfolder for SR/HR/LR comparisons and IPF images
+                epoch_viz_dir = viz_dir / f"epoch_{epoch+1:04d}"
+                epoch_viz_dir.mkdir(parents=True, exist_ok=True)
 
                 # run postprocess (renders sr/hr/lr comparisons) using best/last checkpoint
                 # keep sample size modest to avoid long pauses
@@ -307,17 +326,20 @@ def main():
                 run_postprocess_from_config(
                     str(exp_dir),
                     max_samples=4 if getattr(cfg, "smoke_test", False) else 8,
+                    output_dir=str(epoch_viz_dir),
                 )
 
                 # After postprocess returns, list produced visualization files so user can see IPF images
                 from pathlib import Path as _P
-                viz_dir_p = _P(viz_dir)
+                viz_dir_p = _P(epoch_viz_dir)
                 ipf_files = sorted(viz_dir_p.glob('fz_ipf_sr_hr_*.png'))
                 comp_files = sorted(viz_dir_p.glob('sr_hr_lr_comparison_*.png'))
-                loss_files = sorted(viz_dir_p.glob('loss_plot_epoch_*.png'))
-                print(f"🖼️ Visualizations saved to: {viz_dir} (loss plots: {len(loss_files)}, comparisons: {len(comp_files)}, ipf: {len(ipf_files)})")
+                print(f"🖼️ Visualizations saved to: {epoch_viz_dir}")
+                print(f"   Loss plot: {viz_dir / 'loss_plot.png'}")
+                print(f"   Learning rate plot: {viz_dir / 'learning_rate.png'}")
+                print(f"   Epoch {epoch+1} samples: Comparisons: {len(comp_files)}, IPF: {len(ipf_files)}")
                 if ipf_files:
-                    print(f"  Example IPF file: {ipf_files[0]}")
+                    print(f"  Example IPF file: {ipf_files[0].name}")
         except Exception as e:
             # Don't crash training for visualization errors; log and continue
             print(f"⚠️ Visualization step failed at epoch {epoch+1}: {e}")
@@ -329,37 +351,91 @@ def main():
     plot_loss(
         train_losses,
         val_losses,
+        learning_rates,
         save_path=str(exp_dir / "visualizations" / "loss_plot.png"),
+        start_epoch=start_epoch,
+    )
+    
+    plot_learning_rate(
+        learning_rates,
+        save_path=str(exp_dir / "visualizations" / "learning_rate.png"),
+        start_epoch=start_epoch,
     )
 
     run_postprocess_from_config(
         exp_dir,
         max_samples=8 if cfg.smoke_test else 20,
+        output_dir=str(exp_dir / "visualizations" / "final"),
     )
 
 
 # ----------------------------------------------------------------------
 # Plotting helper
 # ----------------------------------------------------------------------
-def plot_loss(train_losses, val_losses, save_path=None):
+def plot_loss(train_losses, val_losses, learning_rates=None, save_path=None, start_epoch=1):
     """
     Plot training and validation losses, and optionally save the plot to a file.
     """
-    epochs = range(1, len(train_losses) + 1)
+    epochs = list(range(start_epoch, start_epoch + len(train_losses)))
 
-    plt.figure(figsize=(10, 6))
-    plt.plot(epochs, train_losses, label="Training Loss", color="blue", marker="o")
-    plt.plot(epochs, val_losses, label="Validation Loss", color="orange", marker="o")
-    plt.xlabel("Epoch")
-    plt.ylabel("Loss")
-    plt.title("Training and Validation Loss over Epochs")
-    plt.legend()
-    plt.grid(True)
+    if learning_rates is not None and len(learning_rates) > 0:
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10))
+        
+        # Plot losses
+        ax1.plot(epochs, train_losses, label="Training Loss", color="blue", marker="o")
+        ax1.plot(epochs, val_losses, label="Validation Loss", color="orange", marker="o")
+        ax1.set_xlabel("Epoch")
+        ax1.set_ylabel("Loss")
+        ax1.set_title("Training and Validation Loss over Epochs")
+        ax1.legend()
+        ax1.grid(True)
+        
+        # Plot learning rate
+        ax2.plot(epochs, learning_rates, label="Learning Rate", color="green", marker="o", linewidth=2)
+        ax2.set_xlabel("Epoch")
+        ax2.set_ylabel("Learning Rate")
+        ax2.set_title("Learning Rate Schedule")
+        ax2.legend()
+        ax2.grid(True)
+        ax2.set_yscale('log')  # Log scale for better visualization
+        
+        plt.tight_layout()
+    else:
+        plt.figure(figsize=(10, 6))
+        plt.plot(epochs, train_losses, label="Training Loss", color="blue", marker="o")
+        plt.plot(epochs, val_losses, label="Validation Loss", color="orange", marker="o")
+        plt.xlabel("Epoch")
+        plt.ylabel("Loss")
+        plt.title("Training and Validation Loss over Epochs")
+        plt.legend()
+        plt.grid(True)
 
     if save_path:
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
         plt.savefig(save_path)
         print(f"📈 Plot saved to {save_path}")
+        plt.close()
+
+
+def plot_learning_rate(learning_rates, save_path=None, start_epoch=1):
+    """
+    Plot learning rate schedule and save to file.
+    """
+    epochs = list(range(start_epoch, start_epoch + len(learning_rates)))
+    
+    plt.figure(figsize=(10, 6))
+    plt.plot(epochs, learning_rates, label="Learning Rate", color="green", marker="o", linewidth=2, markersize=3)
+    plt.xlabel("Epoch")
+    plt.ylabel("Learning Rate")
+    plt.title("Learning Rate Schedule over Epochs")
+    plt.legend()
+    plt.grid(True)
+    plt.yscale('log')  # Log scale for better visualization
+    
+    if save_path:
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        plt.savefig(save_path)
+        print(f"📈 Learning rate plot saved to {save_path}")
         plt.close()
 
 

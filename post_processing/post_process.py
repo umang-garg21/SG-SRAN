@@ -16,7 +16,7 @@ from training.config_utils import (
 )
 
 
-def run_postprocess_from_config(exp_dir: str, max_samples: int | None = 8, ckpt_path: str | None = None):
+def run_postprocess_from_config(exp_dir: str, max_samples: int | None = 8, ckpt_path: str | None = None, output_dir: str | None = None):
     """
     Post-process trained model results using the resolved run_config.json in exp_dir.
 
@@ -26,6 +26,8 @@ def run_postprocess_from_config(exp_dir: str, max_samples: int | None = 8, ckpt_
         Path to experiment directory containing logs/run_config.json and checkpoints.
     max_samples : int, default=8
         Number of test samples to visualize.
+    output_dir : str, optional
+        Custom output directory for visualizations. If None, uses exp_dir/visualizations.
     """
     exp_dir = Path(exp_dir)
     config_path = exp_dir / "logs" / "run_config.json"
@@ -108,7 +110,10 @@ def run_postprocess_from_config(exp_dir: str, max_samples: int | None = 8, ckpt_
     # --------------------------
     # Visualization output dir
     # --------------------------
-    out_dir = exp_dir / "visualizations"
+    if output_dir is not None:
+        out_dir = Path(output_dir)
+    else:
+        out_dir = exp_dir / "visualizations"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     sym_class = resolve_symmetry(getattr(cfg, "symmetry_group"))

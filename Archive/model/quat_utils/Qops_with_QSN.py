@@ -178,7 +178,7 @@ class Residual_SA(nn.Module):
             spectral_normed=spectral_normed,
         )
 
-        #self.relu = nn.ReLU()
+        self.relu = nn.ReLU()
 
         self.conv2 = conv2d(
             in_channels,
@@ -193,7 +193,7 @@ class Residual_SA(nn.Module):
 
     def forward(self, x):
         y = self.conv1(x)
-        y = self.relu(y)
+        #y = self.relu(y)
         y = self.conv2(y)
 
         y = self.sa(y)

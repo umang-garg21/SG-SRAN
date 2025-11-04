@@ -94,7 +94,7 @@ def train_worker(rank, world_size, args_cli, exp_dir, cfg):
     setup_ddp(rank, world_size)
     
     # Set seed for reproducibility (different for each rank to ensure different data augmentation if used)
-    seed = get_seed_from_config(cfg)
+    seed = 42  # Always use seed 42
     set_seed(seed + rank)  # Each process gets a slightly different seed
     
     # Set device for this process
@@ -270,28 +270,35 @@ def train_worker(rank, world_size, args_cli, exp_dir, cfg):
                 if save_every > 0 and (epoch + 1) % save_every == 0:
                     viz_dir = exp_dir / "visualizations"
                     viz_dir.mkdir(parents=True, exist_ok=True)
-                    
-                    # Save intermediate loss plot
+
+                    # Save intermediate loss plot (single file, overwritten each visualization)
                     plot_loss(
                         train_losses,
                         val_losses,
-                        save_path=str(viz_dir / f"loss_plot_epoch_{epoch+1:04d}.png"),
+                        save_path=str(viz_dir / "loss_plot.png"),
                     )
-                    
-                    # Run postprocessing
+
+                    # Create an epoch-specific folder so sample images are not overwritten
+                    epoch_viz_dir = viz_dir / f"epoch_{epoch+1:04d}"
+                    epoch_viz_dir.mkdir(parents=True, exist_ok=True)
+
+                    # Run postprocessing and write sample visualizations into epoch folder
                     print(f"🖼️  Generating visualizations at epoch {epoch+1}...")
                     run_postprocess_from_config(
                         str(exp_dir),
                         max_samples=4 if getattr(cfg, "smoke_test", False) else 8,
+                        output_dir=str(epoch_viz_dir),
                     )
-                    
-                    # List generated files
+
+                    # List generated files inside the epoch folder
                     from pathlib import Path as _P
-                    viz_dir_p = _P(viz_dir)
+                    viz_dir_p = _P(epoch_viz_dir)
                     ipf_files = sorted(viz_dir_p.glob('fz_ipf_sr_hr_*.png'))
                     comp_files = sorted(viz_dir_p.glob('sr_hr_lr_comparison_*.png'))
-                    loss_files = sorted(viz_dir_p.glob('loss_plot_epoch_*.png'))
-                    print(f"🖼️  Visualizations saved to: {viz_dir} (loss plots: {len(loss_files)}, comparisons: {len(comp_files)}, ipf: {len(ipf_files)})")
+                    # Only a single loss plot is kept (overwritten each time)
+                    loss_file = viz_dir / "loss_plot.png"
+                    loss_files = [loss_file] if loss_file.exists() else []
+                    print(f"🖼️  Visualizations saved to: {epoch_viz_dir} (loss plots: {len(loss_files)}, comparisons: {len(comp_files)}, ipf: {len(ipf_files)})")
                     if ipf_files:
                         print(f"  Example IPF file: {ipf_files[0]}")
             except Exception as e:
