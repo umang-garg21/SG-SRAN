@@ -277,8 +277,10 @@ class Reynolds_res_QSRNet(nn.Module):
         # ------------------------------------------------------------------
         # Load global symmetry group tensors
         # ------------------------------------------------------------------
-        gt = torch.tensor(np.load(cfg.sym_np_path), dtype=torch.float32)
-        gti = torch.tensor(np.load(cfg.sym_inv_np_path), dtype=torch.float32)
+        gt_path= "/data/home/umang/Materials/Reynolds-QSR/symmetry_groups/O_group.npy"
+        gti_path= "/data/home/umang/Materials/Reynolds-QSR/symmetry_groups/O_group_inv.npy"
+        gt = torch.tensor(np.load(gt_path), dtype=torch.float32)
+        gti = torch.tensor(np.load(gti_path), dtype=torch.float32)
         self.register_buffer("group_tensor", gt)
         self.register_buffer("group_tensor_inv", gti)
         
@@ -312,13 +314,13 @@ class Reynolds_res_QSRNet(nn.Module):
         )
 
         # body with residual blocks
-        self.body = nn.Sequential(
-            *[EquivariantReynoldsWrap(
-                Residual_SA(mid_ch, mid_ch),
-                self.group_tensor,
-                self.group_tensor_inv,
-            ) for _ in range(n_resblocks)]
-        )
+        # self.body = nn.Sequential(
+        #     *[EquivariantReynoldsWrap(
+        #         Residual_SA(mid_ch, mid_ch),
+        #         self.group_tensor,
+        #         self.group_tensor_inv,
+        #     ) for _ in range(n_resblocks)]
+        # )
 
         self.up = EquivariantReynoldsWrap(
                 QuaternionTransposeConv(
@@ -337,20 +339,33 @@ class Reynolds_res_QSRNet(nn.Module):
                 self.group_tensor_inv,
             )
 
+        self.lmat_to_quat = EquivariantReynoldsWrap(
+                lmat_to_quat,
+                self.group_tensor,
+                self.group_tensor_inv,
+            )
+
+        self.quat_to_lmat = EquivariantReynoldsWrap(
+                quat_to_lmat,
+                self.group_tensor,
+                self.group_tensor_inv,
+            )
+
     def forward(self, q_in):
         # Lift quaternions to 16-channel real representation
-        x = quat_to_lmat(q_in)
+        x = self.quat_to_lmat(q_in)
         # x = self.act(self.enc1(x))
         # x = self.act(self.enc2(x))
         # x = self.act(self.up(x))
         x = self.enc1(x)
-        x = self.enc2(x)
-        x = x+self.body(x)
+        #x = self.enc2(x)
+        #x = x+self.body(x)
         x = self.up(x)
         x = self.outc(x)
-        q_out = lmat_to_quat(x)
+        q_out = self.lmat_to_quat(x)
         # Normalize to unit quaternion after possible blending
         # q_out = q_out / q_out.norm(dim=1, keepdim=True).clamp_min(1e-8)
+        return x
         return q_out
 
 

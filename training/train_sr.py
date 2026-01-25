@@ -1,5 +1,8 @@
-import argparse
+import sys
 import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+import argparse
 from pathlib import Path
 import torch
 from torch.utils.tensorboard import SummaryWriter
@@ -18,7 +21,6 @@ from models import build_model
 from post_processing.post_process import run_postprocess_from_config
 
 torch.autograd.set_detect_anomaly(True)
-
 
 # ----------------------------------------------------------------------
 # CLI Argument Parsing
@@ -368,7 +370,6 @@ def main():
         output_dir=str(exp_dir / "visualizations" / "final"),
     )
 
-
 # ----------------------------------------------------------------------
 # Plotting helper
 # ----------------------------------------------------------------------
@@ -714,9 +715,7 @@ if __name__ == "__main__":
 # #     # --- Optimizer & Scheduler ---
 # #     optimizer = build_optimizer(model, cfg)
 # #     scheduler = build_scheduler(optimizer, cfg)
-
-# #     # --- Loss ---
-# #     loss_fn = build_loss(cfg)
+# #     loss_fn = build_loss()
 
 # #     # --- TensorBoard ---
 # #     writer = SummaryWriter(log_dir=exp_dir / "runs")

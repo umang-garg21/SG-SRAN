@@ -94,7 +94,7 @@ def train_worker(rank, world_size, args_cli, exp_dir, cfg):
     setup_ddp(rank, world_size)
     
     # Set seed for reproducibility (different for each rank to ensure different data augmentation if used)
-    seed = 42  # Always use seed 42
+    seed = get_seed_from_config(cfg)
     set_seed(seed + rank)  # Each process gets a slightly different seed
     
     # Set device for this process
@@ -132,6 +132,8 @@ def train_worker(rank, world_size, args_cli, exp_dir, cfg):
                 preload=cfg.preload,
                 preload_torch=cfg.preload_torch,
                 pin_memory=cfg.pin_memory,
+                persistent_workers=True,
+                prefetch_factor=4,
                 take_first=8 if getattr(cfg, 'smoke_test', False) else None,
                 distributed=True,  # Enable DDP-aware sampling
                 rank=rank,
@@ -145,7 +147,9 @@ def train_worker(rank, world_size, args_cli, exp_dir, cfg):
     
     # Build model and wrap with DDP
     model = build_model(cfg).to(device)
-    model = DDP(model, device_ids=[rank], output_device=rank, find_unused_parameters=False)
+    # enable detection of unused parameters to avoid DDP reduction errors
+    # (some model branches may not use every parameter on every input)
+    model = DDP(model, device_ids=[rank], output_device=rank, find_unused_parameters=True)
     
     if is_main_process:
         print("\n" + "="*80)
@@ -188,7 +192,7 @@ def train_worker(rank, world_size, args_cli, exp_dir, cfg):
     best_ckpt = Path(cfg.checkpoints_dir) / "best_model.pt"
     start_epoch = 0
     
-    if args_cli.resume and is_main_process:
+    if args_cli.resume:
         ckpt_to_load = None
         if last_ckpt.exists():
             ckpt_to_load = last_ckpt
@@ -201,9 +205,11 @@ def train_worker(rank, world_size, args_cli, exp_dir, cfg):
             try:
                 trainer.load_checkpoint(ckpt_to_load)
                 start_epoch = trainer.epoch + 1
-                print(f"Resuming training from {reason} at epoch {start_epoch}")
+                if is_main_process:
+                    print(f"Resuming training from {reason} at epoch {start_epoch}")
             except Exception as e:
-                print(f"Warning: failed to resume from checkpoint: {e}")
+                if is_main_process:
+                    print(f"Warning: failed to resume from checkpoint: {e}")
     
     # Synchronize start epoch across all processes
     if world_size > 1:
@@ -270,35 +276,34 @@ def train_worker(rank, world_size, args_cli, exp_dir, cfg):
                 if save_every > 0 and (epoch + 1) % save_every == 0:
                     viz_dir = exp_dir / "visualizations"
                     viz_dir.mkdir(parents=True, exist_ok=True)
-
-                    # Save intermediate loss plot (single file, overwritten each visualization)
+                    
+                    # Save intermediate loss plot
+                    # Save cumulative loss plot (overwrite single file)
                     plot_loss(
                         train_losses,
                         val_losses,
                         save_path=str(viz_dir / "loss_plot.png"),
                     )
-
-                    # Create an epoch-specific folder so sample images are not overwritten
+                    
+                    # Create epoch-specific subfolder for SR/HR/LR comparisons and IPF images
                     epoch_viz_dir = viz_dir / f"epoch_{epoch+1:04d}"
                     epoch_viz_dir.mkdir(parents=True, exist_ok=True)
-
-                    # Run postprocessing and write sample visualizations into epoch folder
+                    
+                    # Run postprocessing with epoch-specific output directory
                     print(f"🖼️  Generating visualizations at epoch {epoch+1}...")
                     run_postprocess_from_config(
                         str(exp_dir),
                         max_samples=4 if getattr(cfg, "smoke_test", False) else 8,
                         output_dir=str(epoch_viz_dir),
                     )
-
-                    # List generated files inside the epoch folder
+                    
+                    # List generated files
                     from pathlib import Path as _P
-                    viz_dir_p = _P(epoch_viz_dir)
-                    ipf_files = sorted(viz_dir_p.glob('fz_ipf_sr_hr_*.png'))
-                    comp_files = sorted(viz_dir_p.glob('sr_hr_lr_comparison_*.png'))
-                    # Only a single loss plot is kept (overwritten each time)
-                    loss_file = viz_dir / "loss_plot.png"
-                    loss_files = [loss_file] if loss_file.exists() else []
-                    print(f"🖼️  Visualizations saved to: {epoch_viz_dir} (loss plots: {len(loss_files)}, comparisons: {len(comp_files)}, ipf: {len(ipf_files)})")
+                    epoch_viz_dir_p = _P(epoch_viz_dir)
+                    ipf_files = sorted(epoch_viz_dir_p.glob('fz_ipf_sr_hr_*.png'))
+                    comp_files = sorted(epoch_viz_dir_p.glob('sr_hr_lr_comparison_*.png'))
+                    print(f"🖼️  Visualizations saved to: {epoch_viz_dir} (comparisons: {len(comp_files)}, ipf: {len(ipf_files)})")
+                    print(f"🖼️  Loss plot updated: {viz_dir / 'loss_plot.png'}")
                     if ipf_files:
                         print(f"  Example IPF file: {ipf_files[0]}")
             except Exception as e:
@@ -318,9 +323,14 @@ def train_worker(rank, world_size, args_cli, exp_dir, cfg):
             save_path=str(exp_dir / "visualizations" / "loss_plot.png"),
         )
         
+        # Final postprocessing to separate "final" folder
+        final_viz_dir = exp_dir / "visualizations" / "final"
+        final_viz_dir.mkdir(parents=True, exist_ok=True)
+        
         run_postprocess_from_config(
             str(exp_dir),
             max_samples=8 if getattr(cfg, 'smoke_test', False) else 20,
+            output_dir=str(final_viz_dir),
         )
     
     # Cleanup

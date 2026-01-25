@@ -55,6 +55,7 @@ def build_dataloader(
     preload: bool = False,
     preload_torch: bool = False,
     persistent_workers: bool = False,
+    prefetch_factor: int = 2,
     take_first: Optional[int] = None,
     distributed: bool = False,
     rank: int = 0,
@@ -84,6 +85,8 @@ def build_dataloader(
         Preload directly as torch tensors.
     persistent_workers : bool
         Keep workers alive between epochs for performance.
+    prefetch_factor : int
+        Number of batches to prefetch per worker.
     take_first : int, optional
         For debugging: limit dataset size.
     distributed : bool
@@ -133,6 +136,7 @@ def build_dataloader(
         num_workers=num_workers,
         pin_memory=pin_memory,
         persistent_workers=persistent_workers and num_workers > 0,
+        prefetch_factor=prefetch_factor if num_workers > 0 else None,
         worker_init_fn=seed_worker,
         generator=g if sampler is None else None,
         sampler=sampler,

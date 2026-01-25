@@ -144,9 +144,8 @@ def main():
     is_main_process = rank == 0
     
     # --- Set seed for reproducibility ---
-    # Use seed + rank to ensure different random behavior per process
-    # but still reproducible across runs
-    set_seed(42 + rank)
+    # All processes use the same seed 42 for consistent results
+    set_seed(42)
     
     # --- CLI ---
     args_cli = parse_args()

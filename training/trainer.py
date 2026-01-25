@@ -59,12 +59,29 @@ class Trainer:
                 # --- Forward + loss ---
                 self.optimizer.zero_grad()
                 t_fwd_start = time.perf_counter()
-                sr = self.model(lr)
+
+                # --- CHANGE 1: Handle Tuple Return (SR, Weights) ---
+                out = self.model(lr)
+                if isinstance(out, tuple):
+                    sr, weights = out
+                else:
+                    sr, weights = out, None
+
                 if torch.cuda.is_available():
                     torch.cuda.synchronize()
                 t_fwd_end = time.perf_counter()
 
-                loss = self.loss_fn(sr, hr)
+
+                # Inside training loop, after forward pass:
+                # weights shape: (B, K, H, W)
+                avg_max_weight = weights.max(dim=1)[0].mean().item()
+                # Only print on Rank 0 to avoid DDP spam/clutter
+                # (If you aren't using DDP, you can remove the 'if' check)
+                if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+                    print(f"[Epoch {self.epoch} Batch {batch_idx}] Confidence: {avg_max_weight:.4f}", flush=True)
+                
+                # --- CHANGE 2: Pass Weights to Loss ---
+                loss = self.loss_fn(sr, hr, selection_weights=weights)
 
                 # --- Backward ---
                 t_bwd_start = time.perf_counter()
@@ -113,8 +130,20 @@ class Trainer:
                 # Use AMP autocast during forward to speed up and reduce memory
                 if self.amp_enabled:
                     with torch.cuda.amp.autocast():
-                        sr = self.model(lr)
-                        loss = self.loss_fn(sr, hr)
+                        # --- CHANGE 1: Handle Tuple Return ---
+                        out = self.model(lr)
+                        if isinstance(out, tuple):
+                            sr, weights = out
+                        else:
+                            sr, weights = out, None
+
+                        # Inside training loop, after forward pass:
+                        # weights shape: (B, K, H, W)
+                        avg_max_weight = weights.max(dim=1)[0].mean().item()
+                        if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+                            print(f"[Epoch {self.epoch} Batch {batch_idx}] Confidence: {avg_max_weight:.4f}", flush=True)
+                        
+                        loss = self.loss_fn(sr, hr, selection_weights=weights)
                     # scale the loss and call backward on scaled loss
                     self.scaler.scale(loss).backward()
                     # unscale and clip grads, then step via scaler
@@ -123,8 +152,13 @@ class Trainer:
                     self.scaler.step(self.optimizer)
                     self.scaler.update()
                 else:
-                    sr = self.model(lr)
-                    loss = self.loss_fn(sr, hr)
+                    # --- CHANGE 1: Handle Tuple Return ---
+                    out = self.model(lr)
+                    if isinstance(out, tuple):
+                        sr, weights = out
+                    else:
+                        sr, weights = out, None
+                    loss = self.loss_fn(sr, hr, selection_weights=weights)
                     loss.backward()
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.cfg["clip"])
                     self.optimizer.step()
@@ -133,7 +167,6 @@ class Trainer:
 
         avg_loss = total_loss / len(self.loaders["train"])
         self.scheduler.step()
-        # Only write to TensorBoard if writer is available (main process in DDP)
         if self.writer is not None:
             self.writer.add_scalar("Loss/Train", avg_loss, self.epoch)
 
@@ -150,15 +183,39 @@ class Trainer:
             # Use AMP autocast during validation forward for speed/memory
             if self.amp_enabled:
                 with torch.cuda.amp.autocast():
-                    sr = self.model(lr)
-                    loss = self.loss_fn(sr, hr)
+                    out = self.model(lr)
+                    if isinstance(out, tuple):
+                        sr, weights = out
+                    else:
+                        sr, weights = out, None
+
+                    # Inside training loop, after forward pass:
+                    # weights shape: (B, K, H, W)
+                    avg_max_weight = weights.max(dim=1)[0].mean().item()
+                    # Only print on Rank 0 to avoid DDP spam/clutter
+                    # (If you aren't using DDP, you can remove the 'if' check)
+                    if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+                        print(f"[Epoch {self.epoch} Batch {batch_idx}] Confidence: {avg_max_weight:.4f}", flush=True)
+
+                    loss = self.loss_fn(sr, hr, selection_weights=weights)
             else:
-                sr = self.model(lr)
-                loss = self.loss_fn(sr, hr)
+
+                out = self.model(lr)
+                if isinstance(out, tuple):
+                    sr, weights = out
+                else:
+                    sr, weights = out, None
+
+                    # Inside training loop, after forward pass:
+                    # weights shape: (B, K, H, W)
+                    avg_max_weight = weights.max(dim=1)[0].mean().item()
+                    if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+                        print(f"[Epoch {self.epoch} Batch {batch_idx}] Confidence: {avg_max_weight:.4f}", flush=True)
+
+                loss = self.loss_fn(sr, hr, selection_weights=weights)
             total_loss += loss.item()
 
         avg_val_loss = total_loss / len(self.loaders["val"])
-        # Only write to TensorBoard if writer is available (main process in DDP)
         if self.writer is not None:
             self.writer.add_scalar("Loss/Val", avg_val_loss, self.epoch)
         return avg_val_loss
@@ -169,11 +226,9 @@ class Trainer:
             ckpt = Path(self.cfg["checkpoints_dir"]) / "best_model.pt"
             # Save a full checkpoint with optimizer and scheduler state so training
             # can be resumed exactly from this point.
-            # Handle DataParallel wrapper
-            model_to_save = self.model.module if isinstance(self.model, torch.nn.DataParallel) else self.model
             ckpt_data = {
                 "epoch": int(self.epoch),
-                "model_state_dict": model_to_save.state_dict(),
+                "model_state_dict": self.model.state_dict(),
                 "optimizer_state_dict": self.optimizer.state_dict(),
                 "scheduler_state_dict": self.scheduler.state_dict()
                 if self.scheduler is not None
@@ -190,11 +245,9 @@ class Trainer:
         best checkpoint was saved earlier in training.
         """
         ckpt = Path(self.cfg["checkpoints_dir"]) / "last_checkpoint.pt"
-        # Handle DataParallel wrapper
-        model_to_save = self.model.module if isinstance(self.model, torch.nn.DataParallel) else self.model
         ckpt_data = {
             "epoch": int(self.epoch),
-            "model_state_dict": model_to_save.state_dict(),
+            "model_state_dict": self.model.state_dict(),
             "optimizer_state_dict": self.optimizer.state_dict(),
             "scheduler_state_dict": self.scheduler.state_dict()
             if self.scheduler is not None
@@ -220,16 +273,25 @@ class Trainer:
         # Backwards-compat: ckpt may be a raw state_dict
         if not isinstance(ckpt, dict) or "model_state_dict" not in ckpt:
             # assume ckpt is a model state_dict
-            # Handle DataParallel wrapper when loading
-            model_to_load = self.model.module if isinstance(self.model, torch.nn.DataParallel) else self.model
-            model_to_load.load_state_dict(ckpt)
+            self.model.load_state_dict(ckpt)
             print(f"Loaded model state_dict from {ckpt_path} (no optimizer state present)")
             return
 
         # Load model weights
-        # Handle DataParallel wrapper when loading
-        model_to_load = self.model.module if isinstance(self.model, torch.nn.DataParallel) else self.model
-        model_to_load.load_state_dict(ckpt["model_state_dict"])
+        try:
+            self.model.load_state_dict(ckpt["model_state_dict"])
+        except RuntimeError as e:
+            # Attempt to fix common mismatch where checkpoints were saved from single GPU but loading into DDP
+            try:
+                new_state = {}
+                for k, v in ckpt["model_state_dict"].items():
+                    new_key = "module." + k if not k.startswith("module.") else k
+                    new_state[new_key] = v
+                self.model.load_state_dict(new_state)
+                print("Loaded checkpoint after adding 'module.' prefixes to state_dict keys")
+            except Exception:
+                # Re-raise original with more context
+                raise RuntimeError(f"Failed to load model state_dict from {ckpt_path}: {e}")
 
         # Optionally load optimizer and scheduler
         if load_optimizer and "optimizer_state_dict" in ckpt and ckpt["optimizer_state_dict"] is not None:

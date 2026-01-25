@@ -123,9 +123,41 @@ def run_postprocess_from_config(exp_dir: str, max_samples: int | None = 8, ckpt_
     # Inference + render
     # --------------------------
     sample_counter = 0
-    for idx, (lr, hr) in enumerate(test_loader):
+    for idx, batch in enumerate(test_loader):
+        # Robustly extract (lr, hr) from whatever the dataloader yields
+        if isinstance(batch, dict):
+            # common keys: 'lr'/'input' and 'hr'/'target'
+            lr = batch.get('lr') or batch.get('input') or batch.get('low_res') or None
+            hr = batch.get('hr') or batch.get('target') or batch.get('high_res') or None
+            if lr is None or hr is None:
+                # fallback: take first two values
+                vals = list(batch.values())
+                if len(vals) >= 2:
+                    lr, hr = vals[0], vals[1]
+                else:
+                    raise ValueError(f"Unexpected batch dict keys: {list(batch.keys())}")
+        else:
+            try:
+                lr, hr = batch
+            except Exception:
+                # If batch is a tuple/list with >2 items, assume first two are lr/hr
+                if isinstance(batch, (list, tuple)) and len(batch) >= 2:
+                    lr, hr = batch[0], batch[1]
+                else:
+                    raise ValueError(f"Unexpected batch format from dataloader: {type(batch)}")
+
+        # If lr/hr are nested (e.g., (tensor, meta)), unwrap them
+        if isinstance(lr, (list, tuple)):
+            lr = lr[0]
+        if isinstance(hr, (list, tuple)):
+            hr = hr[0]
+
         with torch.no_grad():
             sr = model(lr.to(device, non_blocking=True))
+
+        # Some models return (output, aux) tuples — grab the first element
+        if isinstance(sr, (list, tuple)):
+            sr = sr[0]
 
         batch_size = sr.shape[0]
         for b in range(batch_size):

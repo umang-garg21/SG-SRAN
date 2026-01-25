@@ -195,7 +195,6 @@ class Residual_SA(nn.Module):
         y = self.conv1(x)
         #y = self.relu(y)
         y = self.conv2(y)
-
         y = self.sa(y)
 
         y += x

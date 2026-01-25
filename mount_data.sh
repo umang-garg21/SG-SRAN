@@ -2,7 +2,7 @@ sshfs -o reconnect \
       -o ServerAliveInterval=15 \
       -o ServerAliveCountMax=3 \
       -o allow_other \
-      [warrenz]@[vrl-h200.ece.ucsb.edu]:/data/warrenz/materials /data/warren/materials/materials_data_mount
+      umang@[vrl-h200.ece.ucsb.edu]:/data/umang/materials /data/home/umang/Materials/Materials_data_mount
       
 # (base) umang@vrl-h200:~$ sudo systemctl status sshd
 # [sudo] password for umang: 

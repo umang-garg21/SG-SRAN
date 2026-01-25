@@ -379,6 +379,158 @@ class RotationalDistanceOrientationLoss(torch.nn.Module):
         return rd + self.weight * og
 
 
+class EdgeWeightedRotationalDistanceOrientationLoss(torch.nn.Module):
+    """
+    Combined rotational distance + orientation-gradient loss as a Module.
+    This caches the finite-difference kernels as buffers to avoid allocating
+    small tensors on the device each batch (which is slow and can force
+    synchronizations).
+    """
+
+    def __init__(self, group_quats, edge_factor=20.0, grad_loss_weight=0.05, entropy_factor=0.2):
+        super().__init__()
+        # Register small kernels for gradient calculation
+        self.register_buffer("kernel_x", torch.tensor([[[[-1.0, 1.0]]]], dtype=torch.float32))
+        self.register_buffer("kernel_y", torch.tensor([[[[-1.0], [1.0]]]], dtype=torch.float32))
+        
+        self.entropy_factor = entropy_factor
+        # Register Symmetry Group (24, 4)
+        # Ensure input is a tensor
+        group_quats = np.load(group_quats) if isinstance(group_quats, str) else group_quats
+        if not torch.is_tensor(group_quats):
+            group_quats = torch.tensor(group_quats, dtype=torch.float32)
+        self.register_buffer("group_quats", group_quats)
+        
+        self.edge_factor = edge_factor
+        self.grad_loss_weight = grad_loss_weight
+
+    def grad_mag(self, q: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+        # kernels are registered buffers and reside on the same device/dtype as
+        # this module when it's moved via .to(device)
+        kx = self.kernel_x
+        ky = self.kernel_y
+        gx = F.conv2d(q, kx.expand(q.size(1), 1, 1, 2).to(q.dtype), groups=q.size(1))
+        gy = F.conv2d(q, ky.expand(q.size(1), 1, 2, 1).to(q.dtype), groups=q.size(1))
+
+        gx = F.pad(gx, (0, 1, 0, 0), mode="replicate")
+        gy = F.pad(gy, (0, 0, 0, 1), mode="replicate")
+
+        gmag = torch.sqrt(gx.pow(2) + gy.pow(2) + eps)
+        return gmag
+
+    def rotational_distance(self, q_pred: torch.Tensor, q_target: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
+        # reuse the existing function for rotational distance
+        return rotational_distance_loss(q_pred, q_target, eps=eps)
+
+    def forward(self, q_pred: torch.Tensor, q_target: torch.Tensor, selection_weights=None) -> torch.Tensor:
+        rd = self.rotational_distance(q_pred, q_target)
+        entropy_factor = self.entropy_factor if hasattr(self, 'entropy_factor') else 0.0
+        grad_pred = self.grad_mag(q_pred)
+        grad_target = self.grad_mag(q_target)
+
+        # Edge weighting based on symmetry group
+        # Sum channels to get a single intensity map
+        target_edges = grad_target.sum(dim=1) # (B, H, W)
+            
+        # Normalize to [0, 1] using tanh to squash high gradients
+        edge_prob = torch.tanh(target_edges * 5.0)
+        # Create Weight Map:
+        # Interior (prob~0) -> 1.0
+        # Boundary (prob~1) -> edge_factor (e.g., 20.0)
+        weights = 1.0 + (self.edge_factor - 1.0) * edge_prob
+
+        weighted_pixel_loss= (rd * weights.unsqueeze(1)).mean()  # (B,1,H,W)
+        rd = weighted_pixel_loss.mean()
+        og = F.l1_loss(grad_pred, grad_target)
+
+        total_loss= weighted_pixel_loss + self.grad_loss_weight * og
+        if selection_weights is not None:
+            entropy= -torch.sum(selection_weights * torch.log(selection_weights + 1e-12), dim=1)  # (B,H,W)
+            entropy_loss = entropy.mean()
+
+            total_loss += entropy_factor*entropy_loss
+
+        return total_loss
+
+
+class SymmetryAwareRotationalLoss(torch.nn.Module):
+    def __init__(self, sym_group_path, weight_gradient=0.05):
+        super().__init__()
+        # Load symmetries: (24, 4)
+        syms = torch.tensor(np.load(sym_group_path), dtype=torch.float32)
+        self.register_buffer("syms", syms)
+        self.weight_gradient = weight_gradient
+        
+        # Gradient kernels
+        self.register_buffer("kernel_x", torch.tensor([[[[-1.0, 1.0]]]], dtype=torch.float32))
+        self.register_buffer("kernel_y", torch.tensor([[[[-1.0], [1.0]]]], dtype=torch.float32))
+
+    def grad_mag(self, q: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+        # Increased eps to 1e-6 for safety
+        gx = F.conv2d(q, self.kernel_x.expand(q.size(1), 1, 1, 2).to(q.dtype), groups=q.size(1))
+        gy = F.conv2d(q, self.kernel_y.expand(q.size(1), 1, 2, 1).to(q.dtype), groups=q.size(1))
+        gx = F.pad(gx, (0, 1, 0, 0), mode="replicate")
+        gy = F.pad(gy, (0, 0, 0, 1), mode="replicate")
+        return torch.sqrt(gx.pow(2) + gy.pow(2) + eps)
+
+    def forward(self, q_pred, q_target, eps=1e-6): # <--- CHANGED DEFAULT TO 1e-6
+        """
+        q_pred: (B, 4, H, W)
+        q_target: (B, 4, H, W)
+        """
+        # 1. Strict Flattening with Contiguous Memory
+        qp = q_pred.permute(0, 2, 3, 1).contiguous().view(-1, 4)
+        qt = q_target.permute(0, 2, 3, 1).contiguous().view(-1, 4)
+        
+        # Safe normalization to prevent 0-division gradient explosion
+        qp = F.normalize(qp, dim=1, eps=eps)
+        qt = F.normalize(qt, dim=1, eps=eps)
+
+        # 2. Compute Relative Rotation: Q_rel = q_target * conj(q_pred)
+        w1, x1, y1, z1 = qp[:, 0], qp[:, 1], qp[:, 2], qp[:, 3]
+        w2, x2, y2, z2 = qt[:, 0], qt[:, 1], qt[:, 2], qt[:, 3]
+
+        rw = w2 * w1 - x2 * (-x1) - y2 * (-y1) - z2 * (-z1)
+        rx = w2 * (-x1) + x2 * w1 + y2 * (-z1) - z2 * (-y1)
+        ry = w2 * (-y1) - x2 * (-z1) + y2 * w1 + z2 * (-x1)
+        rz = w2 * (-z1) + x2 * (-y1) - y2 * (-x1) + z2 * w1
+        
+        # 3. Apply Symmetries
+        s_w, s_x, s_y, s_z = self.syms[:, 0], self.syms[:, 1], self.syms[:, 2], self.syms[:, 3]
+        
+        # Reshape for broadcasting
+        rw = rw.reshape(-1, 1)
+        rx = rx.reshape(-1, 1)
+        ry = ry.reshape(-1, 1)
+        rz = rz.reshape(-1, 1)
+
+        s_w = s_w.reshape(1, -1)
+        s_x = s_x.reshape(1, -1)
+        s_y = s_y.reshape(1, -1)
+        s_z = s_z.reshape(1, -1)
+        
+        # Real part of (S * Q_rel)
+        w_dist = (rw * s_w - rx * s_x - ry * s_y - rz * s_z)
+        
+        # 4. Find Minimum Rotation
+        # We want to maximize the real part (closest to Identity)
+        max_w_val, _ = torch.max(torch.abs(w_dist), dim=1) 
+
+        # --- CRITICAL FIX: Safe Clamping for acos ---
+        # Ensure values stay strictly within (-1, 1)
+        # 1e-6 leaves enough margin for float32 gradients to remain finite.
+        max_w_val = torch.clamp(max_w_val, min=-(1.0 - eps), max=(1.0 - eps))
+        
+        angle = 2.0 * torch.acos(max_w_val)
+        loss_rot = angle.mean()
+
+        # 5. Gradient Loss
+        grad_pred = self.grad_mag(q_pred, eps=eps)
+        grad_target = self.grad_mag(q_target, eps=eps)
+        loss_grad = F.l1_loss(grad_pred, grad_target)
+
+        return loss_rot + self.weight_gradient * loss_grad
+    
 def rotational_distance_orientation_loss(
     q_pred: torch.Tensor, q_target: torch.Tensor
 ) -> torch.Tensor:
@@ -464,6 +616,18 @@ def build_loss(cfg):
         # reduces CPU/GPU sync overhead caused by allocating small tensors
         # on-device each training step.
         return RotationalDistanceOrientationLoss()
+    elif loss_type == "edge_weighted_rotational_distance_orientation":
+        return EdgeWeightedRotationalDistanceOrientationLoss(
+            group_quats=cfg.get("symmetry_group_path", "/data/home/umang/Materials/Reynolds-QSR/symmetry_groups/O_group.npy"),
+            edge_factor=cfg.get("edge_factor", 20.0),
+            grad_loss_weight=cfg.get("weight_gradient", 0.05),
+            entropy_factor=cfg.get("entropy_factor", 0.2)
+        )
+    elif loss_type == "symmetry_aware_rotational":
+        return SymmetryAwareRotationalLoss(
+            sym_group_path=cfg.get("symmetry_group_path", "/data/home/umang/Materials/Reynolds-QSR/symmetry_groups/O_group.npy"),
+            weight_gradient=cfg.get("weight_gradient", 0.05)
+        )
     elif loss_type == "l1":
         return torch.nn.L1Loss()
     elif loss_type == "mse":
