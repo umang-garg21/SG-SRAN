@@ -87,6 +87,7 @@ def render_ipf_image(
     include_key: bool = True,
     overwrite: bool = False,
     format_input: bool = True,
+    gutter_px: int = 0,
 ):
     """
     Render quaternion orientation array to an IPF image with consistent formatting.
@@ -165,6 +166,29 @@ def render_ipf_image(
         os.makedirs(os.path.dirname(out_png) or ".", exist_ok=True)
         fig.savefig(out_png, bbox_inches="tight", dpi=300)
         plt.close(fig)
+        # If multiple ref directions (3 columns) and a gutter is requested,
+        # post-process the saved PNG to insert gutters between the three IPF columns
+        if show_all and gutter_px and gutter_px > 0:
+            try:
+                from PIL import Image as _Image
+
+                im = _Image.open(out_png).convert('RGB')
+                w, h = im.size
+                # Try to split into three equal tiles horizontally
+                tile_w = w // 3
+                tiles = [im.crop((i * tile_w, 0, (i + 1) * tile_w, h)) for i in range(3)]
+                new_w = tile_w * 3 + gutter_px * 2
+                new_im = _Image.new('RGB', (new_w, h), (255, 255, 255))
+                x = 0
+                for t in tiles:
+                    new_im.paste(t, (x, 0))
+                    x += tile_w + gutter_px
+                new_im.save(out_png)
+                im.close()
+            except Exception:
+                # If PIL not available or processing fails, leave original image
+                pass
+
         return out_png
     else:
         return None
