@@ -216,3 +216,19 @@ evaluation/segment-anything/
 
 # mount point for datasets
 mount_data.sh
+
+# Model checkpoints and training artifacts
+# Common checkpoint file extensions and folders
+*.ckpt
+*.pth
+*.pt
+*.pt.tar
+*.tar
+*.tar.gz
+checkpoints/
+**/checkpoints/
+runs/
+**/runs/
+# TensorFlow checkpoints
+checkpoint
+checkpoint_*/

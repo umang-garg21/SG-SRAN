@@ -3,6 +3,84 @@ import torch.nn as nn
 import math
 from e3nn import o3, nn as e3nn_nn
 
+import torch.nn.functional as F
+import numpy as _np
+
+
+def _make_gaussian_kernel(kernel_size: int, sigma: float, device=None, dtype=torch.float32):
+    # 1D gaussian
+    k = _np.arange(kernel_size) - (kernel_size - 1) / 2.0
+    g = _np.exp(-(k ** 2) / (2 * (sigma ** 2)))
+    g = g / g.sum()
+    g = _np.outer(g, g).astype(_np.float32)
+    g_t = torch.from_numpy(g).to(device=device).to(dtype)
+    return g_t
+
+
+def smooth_boundary_map(boundary_map: torch.Tensor, kernel_size: int = 5, sigma: float = 1.0) -> torch.Tensor:
+    """Gaussian-smooth a boundary map tensor of shape (B,1,H,W) or (1,1,H,W).
+
+    Returns a tensor of same shape and dtype.
+    """
+    if boundary_map is None:
+        return None
+    if not isinstance(boundary_map, torch.Tensor):
+        boundary_map = torch.tensor(boundary_map)
+
+    if boundary_map.dim() != 4 or boundary_map.size(1) != 1:
+        raise ValueError('boundary_map must have shape (B,1,H,W)')
+
+    device = boundary_map.device
+    dtype = boundary_map.dtype
+
+    kernel = _make_gaussian_kernel(kernel_size, sigma, device=device, dtype=dtype)
+    kernel = kernel.view(1, 1, kernel_size, kernel_size)
+
+    pad = kernel_size // 2
+    out = F.conv2d(boundary_map.to(dtype), kernel, padding=pad, groups=1)
+    return out.to(boundary_map.dtype)
+
+
+def clean_boundary_map(boundary_map: torch.Tensor, thresh: float = 0.087, open_kernel: int = 3, close_kernel: int = 3) -> torch.Tensor:
+    """Simple morphological cleaning of a boundary map.
+
+    Steps:
+      - Binarize by `thresh`
+      - Apply morphological open (erosion then dilation) with `open_kernel`
+      - Apply morphological close (dilation then erosion) with `close_kernel`
+      - Multiply original soft values by cleaned binary mask to preserve intensities
+    """
+    if boundary_map is None:
+        return None
+    if not isinstance(boundary_map, torch.Tensor):
+        boundary_map = torch.tensor(boundary_map)
+
+    if boundary_map.dim() != 4 or boundary_map.size(1) != 1:
+        raise ValueError('boundary_map must have shape (B,1,H,W)')
+
+    device = boundary_map.device
+    dtype = boundary_map.dtype
+
+    bin_map = (boundary_map >= float(thresh)).to(dtype)
+
+    def erosion(x, k):
+        # erosion = min filter; implement via negative max_pool
+        if k <= 1:
+            return x
+        return -F.max_pool2d(-x, kernel_size=k, stride=1, padding=k // 2)
+
+    def dilation(x, k):
+        if k <= 1:
+            return x
+        return F.max_pool2d(x, kernel_size=k, stride=1, padding=k // 2)
+
+    opened = dilation(erosion(bin_map, open_kernel), open_kernel)
+    closed = erosion(dilation(opened, close_kernel), close_kernel)
+
+    # Apply mask to original (soft) values
+    soft = boundary_map * closed
+    return soft
+
 # ==============================================================================
 # 0. MATH & PHYSICS PRIMITIVES (Unchanged)
 # ==============================================================================
@@ -271,53 +349,100 @@ class EquivariantIrrepUpsample(nn.Module):
         return torch.cat(outputs, dim=1)
 
 # ==============================================================================
-# 4. DECODER: Spherical Harmonic Readout
-# ==============================================================================
-class SHTensorDecoder(nn.Module):
+# 4. DECODER: Spherical Sampling Peak-Finding Decoder
+# =============================================================================
+class SphericalSamplingDecoder(nn.Module):
+    """Decoder that samples a dense Fibonacci sphere and finds spherical harmonic peaks.
+
+    This implementation uses L=4 spherical harmonics to locate cube-face peaks
+    and then finds an orthogonal secondary axis to form a full rotation.
+    Returns quaternions representing the recovered rotation.
     """
-    Decodes L=4, L=6 coefficients into Quaternions using Grid Search (Argmax).
-    Strictly handles FCC symmetry by finding the peak of the probability function.
-    """
-    def __init__(self, physics, grid_res=200):
+    def __init__(self, physics, grid_res=50):
         super().__init__()
+        # Reduced to 10k for faster processing by default (adjustable)
+        self.n_fib_samples = 10000
         self.physics = physics
-        # Generate a search grid of random quaternions (for demo purposes)
-        # In prod: Use a uniform SO3 sampling grid (Hopf fibration or Cubochoric)
-        self.register_buffer('grid_quats', torch.randn(grid_res, 4))
-        self.grid_quats = self.grid_quats / self.grid_quats.norm(dim=1, keepdim=True)
-        
-        # Precompute Wigner Matrices for the grid
-        R = o3.quaternion_to_matrix(self.grid_quats)
-        alpha, beta, gamma = o3.matrix_to_angles(R)
-        self.register_buffer('D4_grid', wigner_D_cuda(4, alpha, beta, gamma)) # (Grid, 9, 9)
-        self.register_buffer('D6_grid', wigner_D_cuda(6, alpha, beta, gamma)) # (Grid, 13, 13)
-        
-    def forward(self, f4, f6):
+
+        # A. Precompute a Scanning Grid (Fibonacci Sphere)
+        self.grid_vecs = self._fibonacci_sphere(samples=self.n_fib_samples, device=physics.device)
+
+        # B. Precompute Spherical Harmonics for this grid (L=4, m=-4..4 -> 9 components)
+        # Shape: (N_grid, 9)
+        self.Y4_grid = o3.spherical_harmonics(4, self.grid_vecs, normalize=True)
+
+    def forward(self, f4, f6=None):
+        """Find canonical quaternion per input using spherical sampling peak-finding.
+
+        Parameters
+        ----------
+        f4 : Tensor[N, 9]
+            Predicted L=4 coefficients per sample.
+        f6 : Tensor or None
+            Ignored in this decoder (kept for API compatibility).
+
+        Returns
+        -------
+        Tensor[N, 4]
+            Quaternions (w,x,y,z) per input.
         """
-        f4: (N, 9) coefficients
-        f6: (N, 13) coefficients
-        Returns: (N, 4) best matching quaternions
-        """
-        # 1. Reconstruct Probability Function P(R) on the grid
-        # P(R) ~ sum( f_l * D_l(R) * s_l )
-        # Here we simplify: Signal = <f_pred, D_grid * s_physics>
-        
-        # Project physics constants onto grid (creating the "Ideal FCC Patterns" at every grid point)
-        # Pattern_l = D_l_grid^T @ s_l
-        pat4 = torch.einsum("gij,j->gi", self.D4_grid, self.physics.s4) # (Grid, 9)
-        pat6 = torch.einsum("gij,j->gi", self.D6_grid, self.physics.s6) # (Grid, 13)
-        
-        # 2. Dot product between Predicted Coeffs and Grid Patterns
-        # Score = f4 . pat4 + f6 . pat6
-        score4 = torch.einsum("ni,gi->ng", f4, pat4)
-        score6 = torch.einsum("ni,gi->ng", f6, pat6)
-        total_score = score4 + score6 # (N_pixels, Grid_Size)
-        
-        # 3. Argmax
-        best_idx = torch.argmax(total_score, dim=1) # (N_pixels,)
-        best_quats = self.grid_quats[best_idx]
-        
-        return best_quats
+        batch_size = f4.shape[0]
+
+        # 1. EVALUATE SHAPE ON SPHERE
+        # signal = dot(f4, Y4_grid) -> (Batch, N_grid)
+        signal = torch.einsum("bi,gi->bg", f4, self.Y4_grid)
+
+        # 2. FIND PRIMARY AXIS (Z) - pick highest peak per sample
+        z_vals, z_indices = torch.max(signal, dim=1)
+        z_axis = self.grid_vecs[z_indices]  # (Batch, 3)
+
+        # 3. FIND SECONDARY AXIS (X) - pick a peak near the equator orthogonal to Z
+        # Compute dot products of all grid points with our found Z-axis
+        dots = torch.einsum(
+            "bij,gj->bg",
+            z_axis.unsqueeze(1).expand(-1, self.n_fib_samples, -1),
+            self.grid_vecs,
+        )
+        # Mask out points that are not near-orthogonal (keep points within ~+/- 10 deg)
+        mask = (dots.abs() < 0.2)
+
+        masked_signal = signal.clone()
+        masked_signal[~mask] = -float('inf')
+
+        x_vals, x_indices = torch.max(masked_signal, dim=1)
+        x_axis = self.grid_vecs[x_indices]
+
+        # 4. GRAM-SCHMIDT CLEANUP
+        z_axis = torch.nn.functional.normalize(z_axis, dim=-1)
+        proj = torch.sum(x_axis * z_axis, dim=-1, keepdim=True) * z_axis
+        x_axis = torch.nn.functional.normalize(x_axis - proj, dim=-1)
+        y_axis = torch.cross(z_axis, x_axis, dim=-1)
+
+        # Build rotation matrix with columns [x, y, z]
+        R_rec = torch.stack([x_axis, y_axis, z_axis], dim=-1)
+
+        # Ensure R_rec is a proper rotation matrix (orthogonal with det=1)
+        Q, _ = torch.linalg.qr(R_rec)
+        det_Q = torch.det(Q)
+        sign_det = torch.sign(det_Q)
+        Q = Q * sign_det.unsqueeze(-1).unsqueeze(-1)
+
+        return o3.matrix_to_quaternion(Q)
+
+    def _fibonacci_sphere(self, samples, device):
+        # Creates evenly distributed points on a sphere
+        points = []
+        phi = math.pi * (3. - math.sqrt(5.))  # golden angle
+
+        for i in range(samples):
+            y = 1 - (i / float(samples - 1)) * 2
+            radius = math.sqrt(max(0.0, 1 - y * y))
+            theta = phi * i
+            x = math.cos(theta) * radius
+            z = math.sin(theta) * radius
+            points.append([x, y, z])
+
+        return torch.tensor(points, dtype=torch.float32, device=device)
 
 # ==============================================================================
 # 5. FULL SUPER-RESOLUTION TRANSFORMER
@@ -351,7 +476,7 @@ class CrystalTransformerSR(nn.Module):
         self.proj = o3.Linear(self.hidden_irreps, self.input_irreps)
         
         # 6. Decoder (Readout)
-        self.decoder = SHTensorDecoder(physics)
+        self.decoder = SphericalSamplingDecoder(physics)
         # Build masks that select only allowed cubic 'seeds' within L=4 and L=6
         # physics.s4 (9,) and physics.s6 (13,) have non-zero entries at allowed seed indices
         mask4 = (physics.s4 != 0).to(torch.bool)
@@ -396,8 +521,10 @@ class CrystalTransformerSR(nn.Module):
         mask = self.hidden_mask.to(x.device).float().view(1, -1, 1, 1)
         return x * mask
 
-    def forward(self, f0, f1, f4, f6, img_shape):
+    def forward(self, f0, f1, f4, f6, img_shape, return_intermediate=False, return_all_intermediates=False):
         H, W = img_shape
+        
+        intermediates = [] if return_all_intermediates else None
         
         # Prepare Input
         # Enforce allowed cubic seeds: zero out disallowed coefficient channels
@@ -422,16 +549,69 @@ class CrystalTransformerSR(nn.Module):
         # 1. Embed
         x = self.embedding(x, boundary_map=f0_img)
         
+        if return_all_intermediates:
+            x_temp = x.permute(0, 2, 3, 1)
+            coeffs_temp = self.proj(x_temp)
+            coeffs_temp = coeffs_temp.reshape(-1, 22)
+            coeffs_temp = coeffs_temp.clone()
+            dis_all = (~self.mask_all).to(coeffs_temp.device)
+            if dis_all.any():
+                coeffs_temp[:, dis_all] = 0.0
+            f4_temp = coeffs_temp[:, :9]
+            f6_temp = coeffs_temp[:, 9:]
+            q_temp = self.decoder(f4_temp, f6_temp)
+            intermediates.append(q_temp)
+        
         # 2. Transformer Layers (Low Res)
         for layer in self.layers:
             x = layer(x, boundary_map=f0_img)
             x = self._apply_hidden_mask(x)
+            
+        if return_all_intermediates:
+            x_temp = x.permute(0, 2, 3, 1)
+            coeffs_temp = self.proj(x_temp)
+            coeffs_temp = coeffs_temp.reshape(-1, 22)
+            coeffs_temp = coeffs_temp.clone()
+            dis_all = (~self.mask_all).to(coeffs_temp.device)
+            if dis_all.any():
+                coeffs_temp[:, dis_all] = 0.0
+            f4_temp = coeffs_temp[:, :9]
+            f6_temp = coeffs_temp[:, 9:]
+            q_temp = self.decoder(f4_temp, f6_temp)
+            intermediates.append(q_temp)
             
         # 3. Upsample
         x = self.upsample(x) # Now (B, C, 4H, 4W)
 
         # Apply hidden mask after upsampling (note: mask repeats across spatial dims)
         x = self._apply_hidden_mask(x)
+        
+        if return_all_intermediates:
+            x_temp = x.permute(0, 2, 3, 1)
+            coeffs_temp = self.proj(x_temp)
+            coeffs_temp = coeffs_temp.reshape(-1, 22)
+            coeffs_temp = coeffs_temp.clone()
+            dis_all = (~self.mask_all).to(coeffs_temp.device)
+            if dis_all.any():
+                coeffs_temp[:, dis_all] = 0.0
+            f4_temp = coeffs_temp[:, :9]
+            f6_temp = coeffs_temp[:, 9:]
+            q_temp = self.decoder(f4_temp, f6_temp)
+            intermediates.append(q_temp)
+        
+        # Compute intermediate f4/f6 after upsample (before refinement)
+        if return_intermediate:
+            x_inter = x.permute(0, 2, 3, 1)
+            out_coeffs_inter = self.proj(x_inter)
+            out_coeffs_inter = out_coeffs_inter.reshape(-1, 22)
+            if out_coeffs_inter.dim() == 2 and out_coeffs_inter.size(1) == 22:
+                out_coeffs_inter = out_coeffs_inter.clone()
+                dis_all = (~self.mask_all).to(out_coeffs_inter.device)
+                if dis_all.any():
+                    out_coeffs_inter[:, dis_all] = 0.0
+            f4_inter = out_coeffs_inter[:, :9]
+            f6_inter = out_coeffs_inter[:, 9:]
+            q_inter = self.decoder(f4_inter, f6_inter)
         
         # Upsample boundary map for refinement
         f0_hr = torch.nn.functional.interpolate(f0_img, scale_factor=self.scale_factor, mode='bilinear')
@@ -441,6 +621,19 @@ class CrystalTransformerSR(nn.Module):
 
         # Ensure hidden channels still respect FCC kubic harmonics
         x = self._apply_hidden_mask(x)
+        
+        if return_all_intermediates:
+            x_temp = x.permute(0, 2, 3, 1)
+            coeffs_temp = self.proj(x_temp)
+            coeffs_temp = coeffs_temp.reshape(-1, 22)
+            coeffs_temp = coeffs_temp.clone()
+            dis_all = (~self.mask_all).to(coeffs_temp.device)
+            if dis_all.any():
+                coeffs_temp[:, dis_all] = 0.0
+            f4_temp = coeffs_temp[:, :9]
+            f6_temp = coeffs_temp[:, 9:]
+            q_temp = self.decoder(f4_temp, f6_temp)
+            intermediates.append(q_temp)
         
         # 5. Project to Coefficients
         # Permute for linear: (B, C, H, W) -> (B, H, W, C)
@@ -459,7 +652,16 @@ class CrystalTransformerSR(nn.Module):
         f4_pred = out_coeffs[:, :9]
         f6_pred = out_coeffs[:, 9:]
         
-        return f4_pred, f6_pred
+        if return_all_intermediates:
+            q_final = self.decoder(f4_pred, f6_pred)
+            intermediates.append(q_final)
+        
+        if return_all_intermediates:
+            return intermediates
+        elif return_intermediate:
+            return f4_pred, f6_pred, q_inter
+        else:
+            return f4_pred, f6_pred
 
     def predict_quaternions(self, f4, f6):
         return self.decoder(f4, f6)

@@ -15,6 +15,7 @@ try:
     from PIL import Image, ImageDraw, ImageFont
 except Exception:
     Image = None
+import matplotlib.pyplot as plt
 from tqdm import tqdm
 
 # Import model and encoder from local module
@@ -423,9 +424,9 @@ def train(args):
             try:
                 save_ipf_comparisons(dataset, encoder, model, epoch_dir, epoch, n_samples=5, scale=args.scale)
             except Exception as e:
-                print(f'Warning: failed to save IPF comparisons: {e}')
-                # import traceback
-                # traceback.print_exc()
+                import traceback
+                print('Warning: failed to save IPF comparisons; full traceback below:')
+                traceback.print_exc()
 
     print('Training complete')
 
@@ -522,11 +523,16 @@ def save_ipf_comparisons(dataset, encoder, model, out_dir, epoch, n_samples=5, s
         q_lr_flat = q_lr_flat.to(device)
 
         with torch.no_grad():
-            f0, f1, f4, f6 = encoder(q_lr_flat, img_shape=(q_lr_img.shape[0], q_lr_img.shape[1]))
-            f4_pred, f6_pred = model(f0, f1, f4, f6, (q_lr_img.shape[0], q_lr_img.shape[1]))
+            f0_lr, f1_lr, f4_lr, f6_lr = encoder(q_lr_flat, img_shape=(q_lr_img.shape[0], q_lr_img.shape[1]))
+            f4_pred, f6_pred, q_inter = model(f0_lr, f1_lr, f4_lr, f6_lr, (q_lr_img.shape[0], q_lr_img.shape[1]), return_intermediate=True)
+            q_stages = model(f0_lr, f1_lr, f4_lr, f6_lr, (q_lr_img.shape[0], q_lr_img.shape[1]), return_all_intermediates=True)
             q_sr_flat = model.predict_quaternions(f4_pred, f6_pred)
 
         q_sr = q_sr_flat.cpu().numpy()
+        
+        # Compute the upsampled LR boundary as used in the model forward
+        f0_lr_img_for_interp = f0_lr.view(1, q_lr_img.shape[0], q_lr_img.shape[1], 1).permute(0, 3, 1, 2)
+        f0_hr_interpolated = torch.nn.functional.interpolate(f0_lr_img_for_interp, scale_factor=scale, mode='bilinear')
         
         # reshape to HR image dimensions
         H_hr, W_hr = q_hr_img.shape[0], q_hr_img.shape[1]
@@ -539,6 +545,24 @@ def save_ipf_comparisons(dataset, encoder, model, out_dir, epoch, n_samples=5, s
             print(f"Skipping sample {i} vis: SR shape {q_sr.shape} != HR shape {H_hr}x{W_hr}")
             continue
 
+        # Compute boundary from q_inter (post-upsample)
+        q_inter_np = q_inter.cpu().numpy()
+        q_inter_img = q_inter_np.reshape(H_hr, W_hr, 4)
+        q_inter_flat = torch.tensor(q_inter_img.reshape(-1, 4), dtype=torch.float32).to(device)
+        with torch.no_grad():
+            f0_inter, _, _, _ = encoder(q_inter_flat, img_shape=(H_hr, W_hr))
+        f0_inter_img = f0_inter.view(1, H_hr, W_hr, 1).permute(0, 3, 1, 2)
+
+        # Compute boundaries for HR and SR
+        q_hr_flat = torch.tensor(q_hr_img.reshape(-1, 4), dtype=torch.float32).to(device)
+        q_sr_flat_tensor = torch.tensor(q_sr_img.reshape(-1, 4), dtype=torch.float32).to(device)
+        with torch.no_grad():
+            f0_hr, _, _, _ = encoder(q_hr_flat, img_shape=(H_hr, W_hr))
+            f0_sr, _, _, _ = encoder(q_sr_flat_tensor, img_shape=(H_hr, W_hr))
+
+        f0_hr_img = f0_hr.view(1, H_hr, W_hr, 1).permute(0, 3, 1, 2)  # (1,1,H,W)
+        f0_sr_img = f0_sr.view(1, H_hr, W_hr, 1).permute(0, 3, 1, 2)
+
         # Upsample LR to HR using nearest neighbor for comparison
         h_ratio = H_hr // q_lr_img.shape[0]
         w_ratio = W_hr // q_lr_img.shape[1]
@@ -549,6 +573,12 @@ def save_ipf_comparisons(dataset, encoder, model, out_dir, epoch, n_samples=5, s
             q_lr_up = q_lr_up[:H_hr, :W_hr, :]
         else:
             q_lr_up = q_lr_img # Fallback if sizes are weird
+
+        # Compute boundary for upsampled LR quaternions
+        q_lr_up_flat = torch.tensor(q_lr_up.reshape(-1, 4), dtype=torch.float32).to(device)
+        with torch.no_grad():
+            f0_lr_up, _, _, _ = encoder(q_lr_up_flat, img_shape=(H_hr, W_hr))
+        f0_lr_up_img = f0_lr_up.view(1, H_hr, W_hr, 1).permute(0, 3, 1, 2)
 
         # Render three IPF images (each will be 3 columns: IPF-X, IPF-Y, IPF-Z)
         hr_png = os.path.join(out_dir, f'epoch{epoch:04d}_sample{i}_hr.png')
@@ -592,27 +622,35 @@ def save_ipf_comparisons(dataset, encoder, model, out_dir, epoch, n_samples=5, s
         try:
             # Compute LR f0 using encoder (was already computed above but ensure shapes)
             # f0 is returned as (Npix,1)
-            f0_lr = f0
+            f0_lr = f0_lr
             H_lr, W_lr = q_lr_img.shape[0], q_lr_img.shape[1]
             f0_img = f0_lr.view(1, H_lr, W_lr, 1).permute(0, 3, 1, 2)  # (1,1,H,W)
             # Smooth LR boundary
             # Clean speckles (morphological) then smooth for visualization consistency
-            try:
-                f0_img_clean = clean_boundary_map(f0_img, thresh=0.087, open_kernel=3, close_kernel=3)
-            except Exception:
-                f0_img_clean = f0_img
+            # try:
+            #     f0_img_clean = clean_boundary_map(f0_img, thresh=0.087, open_kernel=3, close_kernel=3)
+            # except Exception:
+            #     f0_img_clean = f0_img
+            f0_img_clean = f0_img
             # NOTE: do not smooth the LR boundary map; use the cleaned LR map directly
             # f0_img_smooth = smooth_boundary_map(f0_img_clean, kernel_size=5, sigma=1.0)
-            # Upsample to SR grid (this is the SR boundary map derived from LR)
-            f0_sr = F.interpolate(f0_img_clean, scale_factor=scale, mode='bilinear', align_corners=False)
+            # For SR, use the computed f0_sr_img
+            f0_sr = f0_sr_img
             # keep SR smoothing if desired for visualization (leave enabled)
-            f0_sr = smooth_boundary_map(f0_sr, kernel_size=7, sigma=1.5)
+            # f0_sr = smooth_boundary_map(f0_sr, kernel_size=7, sigma=1.5)
+
+            # For HR, use f0_hr_img
+            # f0_hr_clean = clean_boundary_map(f0_hr_img, thresh=0.087, open_kernel=3, close_kernel=3)
+            f0_hr_clean = f0_hr_img
+            # f0_hr_vis = smooth_boundary_map(f0_hr_clean, kernel_size=7, sigma=1.5)
+            f0_hr_vis = f0_hr_clean
 
             # Also create an image for the LR boundary for comparison (unsmoothed)
             f0_lr_vis = f0_img_clean
 
             sr_bnd_png = os.path.join(out_dir, f'epoch{epoch:04d}_sample{i}_sr_boundary_smoothed.png')
             lr_bnd_png = os.path.join(out_dir, f'epoch{epoch:04d}_sample{i}_lr_boundary_smoothed.png')
+            hr_bnd_png = os.path.join(out_dir, f'epoch{epoch:04d}_sample{i}_hr_boundary_smoothed.png')
             # Create PIL images preserving actual SR boundary size and repeat across 3 columns
             try:
                 # Create boundary images sized to match the IPF output width so they span all 3 IPF columns
@@ -620,8 +658,8 @@ def save_ipf_comparisons(dataset, encoder, model, out_dir, epoch, n_samples=5, s
                 BOUNDARY_GUTTER = 8
                 try:
                     # Convert to degrees for visualization (radians -> degrees)
-                    f0_sr_vis = f0_sr * (180.0 / math.pi)
-                    tensor_to_rgb_png_match_ref(f0_sr_vis, hr_png, sr_bnd_png, cols=3)
+                    f0_up_lr_vis = f0_hr_interpolated * (180.0 / math.pi)
+                    tensor_to_rgb_png_match_ref(f0_up_lr_vis, hr_png, sr_bnd_png, cols=3)
                     # ensure gutter inside simple repeat fallback too
                     if os.path.exists(sr_bnd_png):
                         from PIL import Image as _Image
@@ -629,10 +667,10 @@ def save_ipf_comparisons(dataset, encoder, model, out_dir, epoch, n_samples=5, s
                         # if the saved boundary has no gutter (width divisible by 3), add padding
                         if (im.width % 3) == 0:
                             im.close()
-                            tensor_to_rgb_png(f0_sr, sr_bnd_png, repeat_cols=3, gutter_px=BOUNDARY_GUTTER)
+                            tensor_to_rgb_png(f0_hr_interpolated, sr_bnd_png, repeat_cols=3, gutter_px=BOUNDARY_GUTTER)
                 except Exception:
-                    f0_sr_vis = f0_sr * (180.0 / math.pi)
-                    tensor_to_rgb_png(f0_sr_vis, sr_bnd_png, repeat_cols=3, gutter_px=BOUNDARY_GUTTER)
+                    f0_up_lr_vis = f0_hr_interpolated * (180.0 / math.pi)
+                    tensor_to_rgb_png(f0_up_lr_vis, sr_bnd_png, repeat_cols=3, gutter_px=BOUNDARY_GUTTER)
                 try:
                     f0_lr_vis_deg = f0_lr_vis * (180.0 / math.pi)
                     tensor_to_rgb_png_match_ref(f0_lr_vis_deg, hr_png, lr_bnd_png, cols=3)
@@ -645,30 +683,75 @@ def save_ipf_comparisons(dataset, encoder, model, out_dir, epoch, n_samples=5, s
                 except Exception:
                     f0_lr_vis_deg = f0_lr_vis * (180.0 / math.pi)
                     tensor_to_rgb_png(f0_lr_vis_deg, lr_bnd_png, repeat_cols=3, gutter_px=BOUNDARY_GUTTER)
+                try:
+                    f0_hr_vis_deg = f0_hr_vis * (180.0 / math.pi)
+                    tensor_to_rgb_png_match_ref(f0_hr_vis_deg, hr_png, hr_bnd_png, cols=3)
+                    if os.path.exists(hr_bnd_png):
+                        from PIL import Image as _Image
+                        im = _Image.open(hr_bnd_png)
+                        if (im.width % 3) == 0:
+                            im.close()
+                            tensor_to_rgb_png(f0_hr_vis, hr_bnd_png, repeat_cols=3, gutter_px=BOUNDARY_GUTTER)
+                except Exception:
+                    f0_hr_vis_deg = f0_hr_vis * (180.0 / math.pi)
+                    tensor_to_rgb_png(f0_hr_vis_deg, hr_bnd_png, repeat_cols=3, gutter_px=BOUNDARY_GUTTER)
             except Exception as e:
                 print(f"Failed to create boundary PIL images: {e}")
                 sr_bnd_png = None
                 lr_bnd_png = None
-
-            # --- Build HR boundary map for comparison figure ---
-            try:
-                q_hr_flat = torch.tensor(q_hr_img.reshape(-1, 4), dtype=torch.float32).to(device)
-                with torch.no_grad():
-                    f0_hr, _, _, _ = encoder(q_hr_flat, img_shape=(H_hr, W_hr))
-                f0_hr_img = f0_hr.view(1, H_hr, W_hr, 1).permute(0, 3, 1, 2)
-                # Clean and smooth HR boundary for visualization
-                f0_hr_clean = clean_boundary_map(f0_hr_img, thresh=0.087, open_kernel=3, close_kernel=3)
-                f0_hr_smooth = smooth_boundary_map(f0_hr_clean, kernel_size=5, sigma=1.0)
-                hr_bnd_png = os.path.join(out_dir, f'epoch{epoch:04d}_sample{i}_hr_boundary_smoothed.png')
-                try:
-                    f0_hr_vis = f0_hr_smooth * (180.0 / math.pi)
-                    tensor_to_rgb_png_match_ref(f0_hr_vis, hr_png, hr_bnd_png, cols=3)
-                except Exception:
-                    f0_hr_vis = f0_hr_smooth * (180.0 / math.pi)
-                    tensor_to_rgb_png(f0_hr_vis, hr_bnd_png, repeat_cols=3)
-            except Exception as e:
-                print(f"Could not compute HR boundary image: {e}")
                 hr_bnd_png = None
+
+            # Create boundary comparison plot
+            try:
+                import matplotlib.pyplot as plt
+                # Do not upsample LR boundary; show at original resolution
+                # f0_lr_up = F.interpolate(f0_lr_vis, size=(H_hr, W_hr), mode='bilinear', align_corners=False)
+                
+                fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+                
+                # Row 0: LR, HR, SR
+                lr_deg = (f0_lr_vis.squeeze().cpu().numpy() * (180.0 / math.pi)).reshape(H_lr, W_lr)
+                im0 = axes[0,0].imshow(lr_deg, cmap='inferno', vmin=0, vmax=60)
+                axes[0,0].set_title("LR Boundary")
+                axes[0,0].axis('off')
+                
+                hr_deg = (f0_hr_vis.squeeze().cpu().numpy() * (180.0 / math.pi)).reshape(H_hr, W_hr)
+                im1 = axes[0,1].imshow(hr_deg, cmap='inferno', vmin=0, vmax=60)
+                axes[0,1].set_title("HR Boundary")
+                axes[0,1].axis('off')
+                
+                sr_deg = (f0_sr.squeeze().cpu().numpy() * (180.0 / math.pi)).reshape(H_hr, W_hr)
+                im2 = axes[0,2].imshow(sr_deg, cmap='inferno', vmin=0, vmax=60)
+                axes[0,2].set_title("SR Boundary")
+                axes[0,2].axis('off')
+                
+                # Row 1: LR Upsampled, Post-Upsample, f0_hr
+                lr_up_deg = (f0_lr_up.squeeze().cpu().numpy() * (180.0 / math.pi)).reshape(H_hr, W_hr)
+                im3 = axes[1,0].imshow(lr_up_deg, cmap='inferno', vmin=0, vmax=60)
+                axes[1,0].set_title("LR Upsampled Boundary")
+                axes[1,0].axis('off')
+                
+                inter_deg = (f0_inter.squeeze().cpu().numpy() * (180.0 / math.pi)).reshape(H_hr, W_hr)
+                im4 = axes[1,1].imshow(inter_deg, cmap='inferno', vmin=0, vmax=60)
+                axes[1,1].set_title("Post-Upsample Boundary")
+                axes[1,1].axis('off')
+                
+                f0_hr_deg = (f0_hr.squeeze().cpu().numpy() * (180.0 / math.pi)).reshape(H_hr, W_hr)
+                im5 = axes[1,2].imshow(f0_hr_deg, cmap='inferno', vmin=0, vmax=60)
+                axes[1,2].set_title("f0_hr (Upsampled LR Boundary)")
+                axes[1,2].axis('off')
+                
+                # Add colorbar
+                cbar = fig.colorbar(im0, ax=axes, fraction=0.046, pad=0.04)
+                cbar.set_label("Misorientation Angle (°)")
+                
+                plt.tight_layout()
+                comp_png = os.path.join(out_dir, f'epoch{epoch:04d}_sample{i}_boundary_comparison.png')
+                plt.savefig(comp_png, dpi=150)
+                plt.close()
+                print(f"Saved boundary comparison plot: {comp_png}")
+            except Exception as e:
+                print(f"Failed to create boundary comparison plot: {e}")
 
             # --- Create a separate boundary comparison figure (LR, SR, HR) ---
             try:
@@ -723,7 +806,7 @@ def save_ipf_comparisons(dataset, encoder, model, out_dir, epoch, n_samples=5, s
                 font = ImageFont.load_default()
             except Exception:
                 font = None
-            row_labels = ['HR', 'LR upsampled', 'SR boundary (smoothed)', 'SR (final)']
+            row_labels = ['HR', 'LR upsampled', 'Upsampled LR Boundary', 'SR (final)']
             for idx, im in enumerate(imgs):
                 x = (max_width - im.size[0]) // 2
                 # Place image with some padding for label above
@@ -769,11 +852,96 @@ def save_ipf_comparisons(dataset, encoder, model, out_dir, epoch, n_samples=5, s
             out_png = os.path.join(out_dir, f'epoch{epoch:04d}_sample{i}_HR_LR_SR.png')
             new_im.save(out_png)
 
+            # Create a 2x3 subplot for boundaries
+            import matplotlib.pyplot as plt
+            fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+
+            # Row 1: LR upsampled, HR, SR
+            axes[0,0].imshow(f0_lr_up_img[0,0].cpu().numpy(), cmap='hot', vmin=0, vmax=0.5)
+            axes[0,0].set_title('LR Boundary (upsampled)')
+
+            axes[0,1].imshow(f0_hr_img[0,0].cpu().numpy(), cmap='hot', vmin=0, vmax=0.5)
+            axes[0,1].set_title('HR Boundary')
+
+            axes[0,2].imshow(f0_sr_img[0,0].cpu().numpy(), cmap='hot', vmin=0, vmax=0.5)
+            axes[0,2].set_title('SR Boundary')
+
+            # Row 2: Post-upsample, Upsampled LR Boundary, SR
+            axes[1,0].imshow(f0_inter_img[0,0].cpu().numpy(), cmap='hot', vmin=0, vmax=0.5)
+            axes[1,0].set_title('Post-Upsample Boundary')
+
+            axes[1,1].imshow(f0_hr_interpolated[0,0].cpu().numpy(), cmap='hot', vmin=0, vmax=0.5)
+            axes[1,1].set_title('Upsampled LR Boundary')
+
+            axes[1,2].imshow(f0_sr_img[0,0].cpu().numpy(), cmap='hot', vmin=0, vmax=0.5)
+            axes[1,2].set_title('SR Boundary')
+
+            plt.tight_layout()
+            boundary_plot_png = os.path.join(out_dir, f'epoch{epoch:04d}_sample{i}_boundary_comparison.png')
+            plt.savefig(boundary_plot_png, dpi=150, bbox_inches='tight')
+            plt.close(fig)
+
+            # Create a plot for IPF stages with projections
+            fig, axes = plt.subplots(7, 3, figsize=(18, 42))
+            stage_pngs = []
+            H_lr = q_lr_img.shape[0]
+            W_lr = q_lr_img.shape[1]
+            hr_ipf_size = None
+            projections = ['X', 'Y', 'Z']
+            stage_names = ['Input (LR upsampled)', 'Stage 1 (after embed)', 'Stage 2 (after layers)', 'Stage 3 (after upsample)', 'Stage 4 (after refine)', 'Stage 5 (final)', 'Output (SR)']
+            stage_quats = [q_lr_up] + q_stages + [q_sr_img.reshape(-1, 4)]
+            for stage_idx, (q_stage, name) in enumerate(zip(stage_quats, stage_names)):
+                q_stage_np = q_stage.cpu().numpy() if hasattr(q_stage, 'cpu') else q_stage
+                if stage_idx == 0 or stage_idx == 6:
+                    H_s, W_s = H_hr, W_hr
+                elif stage_idx < 3:
+                    H_s, W_s = H_lr, W_lr
+                else:
+                    H_s, W_s = H_hr, W_hr
+                q_stage_img = q_stage_np.reshape(H_s, W_s, 4)
+                for proj_idx, proj in enumerate(projections):
+                    stage_png = os.path.join(out_dir, f'epoch{epoch:04d}_sample{i}_stage{stage_idx}_{proj}_ipf.png')
+                    render_ipf_image(
+                        q_stage_img,
+                        fcc_sym,
+                        out_png=stage_png,
+                        ref_dir=proj,
+                        include_key=False,
+                        overwrite=True,
+                        format_input=False,
+                        gutter_px=0,  # No gutter for single projection
+                    )
+                    stage_img = Image.open(stage_png)
+                    if stage_idx == 2:  # Use stage 3 (first HR) as reference
+                        hr_ipf_size = stage_img.size
+                    if (stage_idx == 0 or stage_idx == 6 or stage_idx >= 3) and hr_ipf_size is not None:
+                        pass  # Already HR
+                    elif hr_ipf_size is not None:
+                        stage_img = stage_img.resize(hr_ipf_size, Image.NEAREST)
+                    axes[stage_idx, proj_idx].imshow(np.array(stage_img))
+                    if proj_idx == 0:
+                        axes[stage_idx, proj_idx].set_ylabel(name, fontsize=12, rotation=0, labelpad=50, va='center')
+                    if stage_idx == 0:
+                        axes[stage_idx, proj_idx].set_title(f'{proj}')
+                    stage_pngs.append(stage_png)
+            plt.tight_layout()
+            ipf_stages_png = os.path.join(out_dir, f'epoch{epoch:04d}_sample{i}_ipf_stages_projections.png')
+            plt.savefig(ipf_stages_png, dpi=150, bbox_inches='tight')
+            plt.close(fig)
+
+            # Cleanup stage PNGs
+            for sp in stage_pngs:
+                try:
+                    if os.path.exists(sp):
+                        os.remove(sp)
+                except Exception:
+                    pass
+
             for im in imgs:
                 im.close()
 
             # cleanup intermediate files
-            for p in (hr_png, lr_png, sr_png, sr_bnd_png, compare_png):
+            for p in (hr_png, lr_png, sr_png, sr_bnd_png, lr_bnd_png, hr_bnd_png, compare_png):
                 try:
                     if p is not None and os.path.exists(p):
                         os.remove(p)
