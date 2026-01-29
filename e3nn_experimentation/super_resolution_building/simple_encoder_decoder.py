@@ -1,10 +1,12 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import math
 import numpy as np
 import os
 import time
 from e3nn import o3
+from e3nn.o3 import FullyConnectedTensorProduct, Irreps
 from orix.crystal_map import Phase
 
 # ==============================================================================
@@ -162,6 +164,114 @@ class SphericalSamplingDecoder(nn.Module):
         return torch.tensor(points, dtype=torch.float32, device=device)
 
 # ==============================================================================
+# 3.5 EQUIVARIANT SPATIAL CONVOLUTION LAYER (TRUE IRREPS)
+# ==============================================================================
+class EquivariantSpatialConv(nn.Module):
+    """
+    Equivariant spatial convolution layer that mixes features from nearby pixels
+    while preserving O(3) symmetry.
+    
+    PHYSICS OF TRUE IRREPS:
+    -----------------------
+    When treating f4 and f6 as TRUE l=4 and l=6 irreps (not scalars), the 
+    tensor product decomposition follows Clebsch-Gordan rules:
+    
+    4e ⊗ 4e = 0e + 2e + 4e + 6e + 8e
+    6e ⊗ 6e = 0e + 2e + 4e + 6e + 8e + 10e + 12e
+    4e ⊗ 6e = 2e + 4e + 6e + 8e + 10e
+    
+    To output only l=4 and l=6, we project onto these subspaces.
+    This is physically meaningful: it represents allowed angular momentum
+    coupling between orientation fields at neighboring pixels.
+    """
+    def __init__(self, kernel_size=3):
+        super().__init__()
+        self.kernel_size = kernel_size
+        self.padding = kernel_size // 2
+        
+        # Define irreps as TRUE l=4 and l=6 representations
+        # 1x4e = one copy of l=4 (9 components)
+        # 1x6e = one copy of l=6 (13 components)
+        self.irreps_in = Irreps("1x4e + 1x6e")  # TRUE irreps, not scalars!
+        self.irreps_out = Irreps("1x4e + 1x6e")  # Keep only l=4 and l=6 in output
+        
+        # FullyConnectedTensorProduct with TRUE irreps
+        # This will automatically handle Clebsch-Gordan decomposition
+        # and project output onto the allowed l=4 and l=6 subspaces
+        self.tp = FullyConnectedTensorProduct(
+            self.irreps_in,
+            self.irreps_in,  # Interaction with neighbors
+            self.irreps_out,
+            shared_weights=True
+        )
+        
+        # Print the tensor product structure for understanding
+        print("\n" + "="*70)
+        print("EQUIVARIANT CONVOLUTION LAYER - TRUE IRREPS PHYSICS")
+        print("="*70)
+        print(f"Input irreps:  {self.irreps_in}")
+        print(f"Output irreps: {self.irreps_out}")
+        print(f"\nTensor Product Paths (Clebsch-Gordan allowed couplings):")
+        for ins in self.tp.instructions:
+            l1 = self.irreps_in[ins.i_in1].ir.l
+            l2 = self.irreps_in[ins.i_in2].ir.l
+            lo = self.irreps_out[ins.i_out].ir.l
+            print(f"  {l1} ⊗ {l2} → {lo}  (weight shape: {ins.path_shape})")
+        print("="*70 + "\n")
+        
+        # Spatial convolution weights (learnable)
+        # 3x3 kernel for gathering neighbor information
+        self.spatial_weights = nn.Parameter(torch.ones(kernel_size, kernel_size) / (kernel_size * kernel_size))
+        
+    def forward(self, f4, f6, img_shape):
+        """
+        Args:
+            f4: (H*W, 9) L=4 features (true l=4 irrep)
+            f6: (H*W, 13) L=6 features (true l=6 irrep)
+            img_shape: (H, W) tuple
+            
+        Returns:
+            f4_out: (H*W, 9) Convolved L=4 features
+            f6_out: (H*W, 13) Convolved L=6 features
+        """
+        H, W = img_shape
+        device = f4.device
+        
+        # Concatenate features: (H*W, 22) - ordered as [l=4 (9), l=6 (13)]
+        features = torch.cat([f4, f6], dim=-1)
+        
+        # Reshape to image format: (1, 22, H, W)
+        features_img = features.view(H, W, -1).permute(2, 0, 1).unsqueeze(0)
+        
+        # Apply spatial convolution to gather neighbor information
+        C = features_img.shape[1]  # 22 channels
+        
+        # Pad the image
+        features_padded = F.pad(features_img, (self.padding, self.padding, self.padding, self.padding), mode='replicate')
+        
+        # Unfold to get patches: (1, C, H, W, k, k)
+        patches = features_padded.unfold(2, self.kernel_size, 1).unfold(3, self.kernel_size, 1)
+        
+        # Apply spatial weights and sum: (1, C, H, W)
+        weights = self.spatial_weights.view(1, 1, 1, 1, self.kernel_size, self.kernel_size)
+        neighbor_features = (patches * weights).sum(dim=(-1, -2))
+        
+        # Reshape back: (H*W, 22)
+        neighbor_features = neighbor_features.squeeze(0).permute(1, 2, 0).reshape(-1, C)
+        
+        # Apply tensor product for equivariant mixing
+        # This performs Clebsch-Gordan coupling between self and neighbor features
+        # and projects onto l=4 and l=6 output subspaces
+        out_features = self.tp(features, neighbor_features)
+        
+        # Split back to f4 and f6
+        f4_out = out_features[:, :9]   # l=4 components
+        f6_out = out_features[:, 9:]   # l=6 components
+        
+        return f4_out, f6_out
+
+
+# ==============================================================================
 # 4. UNIFIED SUPER-RESOLUTION MODULE
 # ==============================================================================
 class EBSDSuper(nn.Module):
@@ -194,18 +304,22 @@ class EBSDSuper(nn.Module):
         self.encoder = FCCEncoder(self.physics)
         self.decoder = SphericalSamplingDecoder(self.physics, grid_res=grid_samples)
         
+        # Add equivariant spatial convolution layer (new stage)
+        self.conv_layer = EquivariantSpatialConv(kernel_size=3)
+        
         # Move to device
         self.to(self.device)
-        
-    def forward(self, quaternions):
+
+    def forward(self, quaternions, img_shape=None):
         """
-        Forward pass: quaternions -> latent features -> reconstructed quaternions
+        Forward pass: quaternions -> latent features -> convolved features -> reconstructed quaternions
         
         Args:
             quaternions: Input quaternions of shape (N, 4) or (H, W, 4)
+            img_shape: Optional (H, W) tuple. Required for convolution stage.
             
         Returns:
-            Reconstructed quaternions of same shape as input
+            Dict with intermediate stages for visualization
         """
         # Store original shape
         original_shape = quaternions.shape
@@ -213,6 +327,8 @@ class EBSDSuper(nn.Module):
         
         # Flatten if image format
         if is_image:
+            if img_shape is None:
+                img_shape = original_shape[:2]
             quaternions = quaternions.reshape(-1, 4)
         
         # Ensure 2D (N, 4)
@@ -222,20 +338,26 @@ class EBSDSuper(nn.Module):
         # Normalize
         quaternions = quaternions / torch.norm(quaternions, dim=1, keepdim=True)
         
-        # Encode
+        # Stage 1: Encode
         f4, f6 = self.encoder(quaternions)
         
-        # Decode
-        q_reconstructed = self.decoder(f4, f6)
+        # Stage 2: Apply equivariant spatial convolution (if img_shape provided)
+        if img_shape is not None:
+            f4_conv, f6_conv = self.conv_layer(f4, f6, img_shape)
+        else:
+            # Skip convolution if no spatial info
+            f4_conv, f6_conv = f4, f6
         
-        # Match to closest symmetry variant
-        q_reconstructed = self._match_symmetry(quaternions, q_reconstructed)
+        # Stage 3: Decode
+        q_reconstructed = self.decoder(f4_conv, f6_conv)
         
-        # Restore original shape
-        if is_image:
-            q_reconstructed = q_reconstructed.reshape(original_shape)
-        
-        return q_reconstructed
+        # Return intermediate stages for visualization
+        return {
+            "input": quaternions,
+            "encoded": (f4, f6),
+            "convolved": (f4_conv, f6_conv),
+            "output": q_reconstructed
+        }
     
     def _match_symmetry(self, q_truth, q_reconstructed):
         """

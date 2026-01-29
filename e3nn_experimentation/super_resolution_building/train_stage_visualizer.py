@@ -109,33 +109,106 @@ class StageDecoder(nn.Module):
 # ==============================================================================
 # STAGE VISUALIZATION (FLEXIBLE)
 # ==============================================================================
-# Duplicating the boundary formation mechanism directly into this script
+# BOUNDARY MAP GENERATION (Exact mechanism from boundary_formation)
+# ==============================================================================
+def quat_multiply(q1, q2):
+    """Multiply two quaternions (Hamilton product)."""
+    w1, x1, y1, z1 = q1[..., 0], q1[..., 1], q1[..., 2], q1[..., 3]
+    w2, x2, y2, z2 = q2[..., 0], q2[..., 1], q2[..., 2], q2[..., 3]
+    
+    return np.stack([
+        w1*w2 - x1*x2 - y1*y2 - z1*z2,
+        w1*x2 + x1*w2 + y1*z2 - z1*y2,
+        w1*y2 - x1*z2 + y1*w2 + z1*x2,
+        w1*z2 + x1*y2 - y1*x2 + z1*w2
+    ], axis=-1)
+
+def quat_conjugate(q):
+    """Inverse rotation."""
+    return np.stack([q[..., 0], -q[..., 1], -q[..., 2], -q[..., 3]], axis=-1)
+
+def get_fcc_symmetries():
+    """Get FCC symmetry group quaternions."""
+    import math
+    inv_sqrt_2 = 1 / math.sqrt(2)
+    half = 0.5
+    return np.array([
+        [1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1],
+        [inv_sqrt_2, inv_sqrt_2, 0, 0], [inv_sqrt_2, 0, inv_sqrt_2, 0], [inv_sqrt_2, 0, 0, inv_sqrt_2],
+        [inv_sqrt_2, -inv_sqrt_2, 0, 0], [inv_sqrt_2, 0, -inv_sqrt_2, 0], [inv_sqrt_2, 0, 0, -inv_sqrt_2],
+        [0, inv_sqrt_2, inv_sqrt_2, 0], [0, inv_sqrt_2, 0, inv_sqrt_2], [0, 0, inv_sqrt_2, inv_sqrt_2],
+        [0, inv_sqrt_2, -inv_sqrt_2, 0], [0, 0, inv_sqrt_2, -inv_sqrt_2], [0, inv_sqrt_2, 0, -inv_sqrt_2],
+        [half, half, half, half], [half, -half, -half, half], [half, -half, half, -half], [half, half, -half, -half],
+        [half, half, half, -half], [half, half, -half, half], [half, -half, half, half], [half, -half, -half, -half],
+    ], dtype=np.float32)
+
+def get_misorientation_angle(q_center, q_neighbor, symmetries):
+    """
+    Calculate exact disorientation angle between two quaternions.
+    Returns angle in degrees.
+    """
+    # Calculate relative rotation: q_rel = q_neighbor * q_center_inverse
+    q_inv = quat_conjugate(q_center)
+    q_rel = quat_multiply(q_neighbor, q_inv)
+    
+    # Check all 24 symmetry variants and find minimum angle
+    # q_rel shape: (..., 4), syms shape: (24, 4)
+    q_rel_expanded = q_rel[..., np.newaxis, :]  # (..., 1, 4)
+    syms_expanded = symmetries  # (24, 4)
+    
+    # Multiply: (..., 24, 4)
+    q_syms = quat_multiply(syms_expanded, q_rel_expanded)
+    
+    # Find rotation with minimum angle (maximize |w|)
+    w_abs = np.abs(q_syms[..., 0])  # (..., 24)
+    best_w = np.max(w_abs, axis=-1)  # (...)
+    
+    # Clamp and compute angle
+    best_w = np.clip(best_w, -1.0, 1.0)
+    angle_rad = 2.0 * np.arccos(best_w)
+    angle_deg = np.degrees(angle_rad)
+    
+    return angle_deg
 
 def generate_boundary_map(quaternions):
     """
     Generate boundary map using the exact mechanism from boundary_formation.
+    Uses misorientation angles with FCC symmetry handling.
 
     Args:
         quaternions: Quaternion array (H, W, 4) as numpy array
 
     Returns:
-        boundary_map: Colored boundary map as a numpy array
+        boundary_map: Colored boundary map using inferno colormap (H, W, 3)
     """
-    # Example mechanism (replace with the exact logic from boundary_formation)
     H, W, _ = quaternions.shape
-    boundary_map = np.zeros((H, W, 3), dtype=np.uint8)
-
-    # Compute gradients (example logic, replace with actual boundary_formation logic)
-    for i in range(3):
-        grad_x = cv2.Sobel(quaternions[..., i], cv2.CV_64F, 1, 0, ksize=3)
-        grad_y = cv2.Sobel(quaternions[..., i], cv2.CV_64F, 0, 1, ksize=3)
-        # Apply heatmap-style colormap (e.g., viridis) instead of RGB mapping
-        grad_magnitude = np.sqrt(grad_x**2 + grad_y**2)
-        grad_magnitude = (grad_magnitude / grad_magnitude.max() * 255).astype(np.uint8)
-        boundary_map = plt.cm.viridis(grad_magnitude / 255.0)[:, :, :3]  # Normalize and apply colormap
-        boundary_map = (boundary_map * 255).astype(np.uint8)  # Convert to uint8
-
-    return boundary_map
+    symmetries = get_fcc_symmetries()
+    
+    # Forward differences (right and down neighbors)
+    q_right = np.roll(quaternions, shift=-1, axis=1)
+    q_down = np.roll(quaternions, shift=-1, axis=0)
+    
+    # Calculate misorientation angles
+    ang_x = get_misorientation_angle(quaternions, q_right, symmetries)
+    ang_y = get_misorientation_angle(quaternions, q_down, symmetries)
+    
+    # Zero out wrapped edges
+    ang_x[:, -1] = 0
+    ang_y[-1, :] = 0
+    
+    # Average misorientation (L=0 scalar feature)
+    misorientation = (ang_x + ang_y) / 2.0
+    
+    # Apply inferno colormap (same as boundary_formation)
+    # Normalize to [0, 1] with max at 60 degrees (FCC max disorientation)
+    norm_misorientation = np.clip(misorientation / 60.0, 0, 1)
+    
+    # Apply colormap
+    cmap = plt.cm.inferno
+    boundary_map = cmap(norm_misorientation)[:, :, :3]  # Remove alpha channel
+    boundary_map = (boundary_map * 255).astype(np.uint8)
+    
+    return boundary_map, misorientation
 
 # Modify render_stage_ipf_maps to save boundary maps separately
 def render_stage_ipf_maps(stages_config, img_shape, output_path, fcc_sym):
@@ -176,8 +249,8 @@ def render_stage_ipf_maps(stages_config, img_shape, output_path, fcc_sym):
         stage_images.append(q_img)
         stage_names.append(stage['name'])
 
-        # Generate boundary map using the duplicated mechanism
-        boundary_map = generate_boundary_map(q_img)
+        # Generate boundary map using the exact mechanism from boundary_formation
+        boundary_map, misorientation = generate_boundary_map(q_img)
         boundary_maps.append(boundary_map)
 
     # Render IPF maps (X, Y, Z directions) for all stages
@@ -347,28 +420,34 @@ def main():
     q_tensor = q_tensor / torch.norm(q_tensor, dim=1, keepdim=True)
     
     # ==============================================================================
-    # 3. ENCODE FEATURES
+    # 3. RUN FULL FORWARD PASS WITH ALL STAGES
     # ==============================================================================
     print("\n" + "="*70)
-    print("ENCODING QUATERNIONS TO FEATURES")
+    print("RUNNING FORWARD PASS WITH ALL STAGES")
     print("="*70)
     
-    print(f"Encoding {len(q_tensor)} quaternions...")
+    print(f"Processing {len(q_tensor)} quaternions...")
     model.eval()
-    with torch.no_grad():
-        f4, f6 = model.encoder(q_tensor)
     
-    print(f"✓ f4 features shape: {f4.shape} (L=4 spherical harmonics)")
-    print(f"✓ f6 features shape: {f6.shape} (L=6 spherical harmonics)")
+    with torch.no_grad():
+        # Run full forward pass which returns all intermediate stages
+        outputs = model.forward(q_tensor, img_shape=img_shape)
+    
+    print(f"✓ Input shape: {outputs['input'].shape}")
+    print(f"✓ Encoded f4 shape: {outputs['encoded'][0].shape}")
+    print(f"✓ Encoded f6 shape: {outputs['encoded'][1].shape}")
+    print(f"✓ Convolved f4 shape: {outputs['convolved'][0].shape}")
+    print(f"✓ Convolved f6 shape: {outputs['convolved'][1].shape}")
+    print(f"✓ Output shape: {outputs['output'].shape}")
     
     # ==============================================================================
-    # 4. VISUALIZE STAGES (FLEXIBLE - automatically adapts to number of stages)
+    # 4. DECODE INTERMEDIATE STAGES FOR VISUALIZATION
     # ==============================================================================
     print("\n" + "="*70)
-    print("GENERATING STAGE-BY-STAGE IPF VISUALIZATION")
+    print("DECODING INTERMEDIATE STAGES FOR VISUALIZATION")
     print("="*70)
     
-    # Create stage decoder
+    # Create stage decoder for decoding intermediate features
     decoder_stage = StageDecoder(model.physics, model.decoder)
     decoder_stage.to(device)
     decoder_stage.eval()
@@ -376,41 +455,46 @@ def main():
     # FCC symmetry
     fcc_sym = Phase(space_group=225).point_group
     
-    # Define stages to visualize (FLEXIBLE - add/remove stages here)
-    # Each stage decodes features and matches to closest symmetry variant
-    print("Decoding stages...")
-    
     with torch.no_grad():
-        # Stage 1: L=4 only
-        q_stage1 = decoder_stage.decode_f4_only(f4)
-        q_stage1 = match_symmetry_batch(q_tensor, q_stage1, model.physics)
+        # Decode encoded features (before convolution)
+        f4_encoded, f6_encoded = outputs['encoded']
+        q_encoded = decoder_stage.decode_final(f4_encoded, f6_encoded)
+        q_encoded = match_symmetry_batch(q_tensor, q_encoded, model.physics)
         
-        # Stage 2: Final model output (currently uses L=4, ignores L=6)
-        q_stage2 = decoder_stage.decode_final(f4, f6)
-        q_stage2 = match_symmetry_batch(q_tensor, q_stage2, model.physics)
+        # Decode convolved features (after convolution)
+        f4_conv, f6_conv = outputs['convolved']
+        q_convolved = decoder_stage.decode_final(f4_conv, f6_conv)
+        q_convolved = match_symmetry_batch(q_tensor, q_convolved, model.physics)
+        
+        # Match final output to symmetry
+        q_output = match_symmetry_batch(q_tensor, outputs['output'], model.physics)
     
-    # Build stage configuration list (FLEXIBLE - automatically adapts to number of stages)
+    # ==============================================================================
+    # 5. VISUALIZE STAGES
+    # ==============================================================================
+    print("\n" + "="*70)
+    print("GENERATING STAGE-BY-STAGE IPF VISUALIZATION")
+    print("="*70)
+    
+    # Build stage configuration list with all stages including convolution
     stages_config = [
         {
             "name": "Stage 0: Input", 
-            "quaternions": q_tensor
+            "quaternions": outputs['input']
         },
         {
-            "name": "Stage 1: L=4 Decoded", 
-            "quaternions": q_stage1
+            "name": "Stage 1: Encoded (L=4,L=6)", 
+            "quaternions": q_encoded
         },
         {
-            "name": "Stage 2: Model Output", 
-            "quaternions": q_stage2
+            "name": "Stage 2: Convolved", 
+            "quaternions": q_convolved
+        },
+        {
+            "name": "Stage 3: Output", 
+            "quaternions": q_output
         }
     ]
-    
-    # NOTE: To add more stages in the future, simply add more entries to stages_config
-    # Example:
-    # stages_config.append({
-    #     "name": "Stage 3: New Processing Step",
-    #     "quaternions": some_new_quaternion_tensor
-    # })
     
     output_path = os.path.join(output_dir, 'stage_ipf_maps.png')
     render_stage_ipf_maps(
