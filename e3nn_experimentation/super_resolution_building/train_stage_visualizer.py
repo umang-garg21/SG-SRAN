@@ -4,11 +4,12 @@ Training script with stage-by-stage IPF visualization.
 
 This script:
 1. Loads quaternion data from disk
-2. Trains the encoder-decoder model
+2. Trains the convolution layer using Irrep Representation Loss
 3. Generates IPF maps at each processing stage:
    - Stage 0: Input quaternions
-   - Stage 1: f4 features decoded to quaternions
-   - Stage 2: Full reconstruction (f4 + f6 decoded)
+   - Stage 1: Encoded features decoded to quaternions
+   - Stage 2: Convolved features decoded to quaternions
+   - Stage 3: Final output
 """
 
 import torch
@@ -37,6 +38,199 @@ from simple_encoder_decoder import (
     EBSDSuper,
     wigner_D_cuda
 )
+
+
+# ==============================================================================
+# IRREP REPRESENTATION LOSS (Loss 2)
+# ==============================================================================
+class IrrepLoss(nn.Module):
+    """
+    Loss function that compares l=4 and l=6 irrep representations.
+    
+    L = ||f4_conv - f4_target||² + ||f6_conv - f6_target||²
+    
+    This trains the convolution layer to preserve/reconstruct the irrep features.
+    """
+    def __init__(self, lambda_f4=1.0, lambda_f6=1.0):
+        super().__init__()
+        self.lambda_f4 = lambda_f4
+        self.lambda_f6 = lambda_f6
+        self.mse = nn.MSELoss()
+    
+    def forward(self, f4_pred, f6_pred, f4_target, f6_target):
+        """
+        Args:
+            f4_pred: Predicted l=4 features (N, 9)
+            f6_pred: Predicted l=6 features (N, 13)
+            f4_target: Target l=4 features (N, 9)
+            f6_target: Target l=6 features (N, 13)
+        
+        Returns:
+            loss: Combined MSE loss
+            loss_dict: Dictionary with individual losses for logging
+        """
+        loss_f4 = self.mse(f4_pred, f4_target)
+        loss_f6 = self.mse(f6_pred, f6_target)
+        
+        total_loss = self.lambda_f4 * loss_f4 + self.lambda_f6 * loss_f6
+        
+        loss_dict = {
+            'loss_f4': loss_f4.item(),
+            'loss_f6': loss_f6.item(),
+            'loss_total': total_loss.item()
+        }
+        
+        return total_loss, loss_dict
+
+
+# ==============================================================================
+# TRAINING LOOP
+# ==============================================================================
+def train_convolution_layer(model, q_tensor, img_shape, num_epochs=100, lr=1e-3, 
+                            log_interval=10, output_dir='./training_outputs'):
+    """
+    Train the convolution layer using Irrep Representation Loss.
+    
+    The target is reconstruction: conv output should match encoder output.
+    This teaches the conv layer to not destroy the signal initially.
+    
+    Args:
+        model: EBSDSuper model with conv_layer
+        q_tensor: Input quaternions (N, 4)
+        img_shape: (H, W) tuple
+        num_epochs: Number of training epochs
+        lr: Learning rate
+        log_interval: Print loss every N epochs
+        output_dir: Directory to save training outputs
+    """
+    print("\n" + "="*70)
+    print("TRAINING CONVOLUTION LAYER (Irrep Representation Loss)")
+    print("="*70)
+    
+    device = q_tensor.device
+    
+    # Get target features (encoder output - these are the "ground truth" irreps)
+    model.eval()
+    with torch.no_grad():
+        f4_target, f6_target = model.encoder(q_tensor)
+    
+    print(f"Target f4 shape: {f4_target.shape}")
+    print(f"Target f6 shape: {f6_target.shape}")
+    
+    # Setup optimizer (only optimize conv_layer parameters)
+    optimizer = optim.Adam(model.conv_layer.parameters(), lr=lr)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=20, verbose=True)
+    
+    # Loss function
+    criterion = IrrepLoss(lambda_f4=1.0, lambda_f6=1.0)
+    
+    # Count trainable parameters
+    num_params = sum(p.numel() for p in model.conv_layer.parameters() if p.requires_grad)
+    print(f"Trainable parameters in conv_layer: {num_params}")
+    print(f"Learning rate: {lr}")
+    print(f"Number of epochs: {num_epochs}")
+    print("-"*70)
+    
+    # Training history
+    history = {
+        'loss_total': [],
+        'loss_f4': [],
+        'loss_f6': [],
+        'lr': []
+    }
+    
+    # Training loop
+    model.conv_layer.train()
+    start_time = time.time()
+    
+    for epoch in range(num_epochs):
+        optimizer.zero_grad()
+        
+        # Forward pass through encoder (no grad needed, it's fixed)
+        with torch.no_grad():
+            f4_encoded, f6_encoded = model.encoder(q_tensor)
+        
+        # Forward pass through conv_layer (grad needed)
+        f4_conv, f6_conv = model.conv_layer(f4_encoded, f6_encoded, img_shape)
+        
+        # Compute loss (target = encoder output, i.e., reconstruction)
+        loss, loss_dict = criterion(f4_conv, f6_conv, f4_target, f6_target)
+        
+        # Backward pass
+        loss.backward()
+        
+        # Gradient clipping (prevent exploding gradients)
+        torch.nn.utils.clip_grad_norm_(model.conv_layer.parameters(), max_norm=1.0)
+        
+        # Update weights
+        optimizer.step()
+        
+        # Update scheduler
+        scheduler.step(loss)
+        
+        # Record history
+        history['loss_total'].append(loss_dict['loss_total'])
+        history['loss_f4'].append(loss_dict['loss_f4'])
+        history['loss_f6'].append(loss_dict['loss_f6'])
+        history['lr'].append(optimizer.param_groups[0]['lr'])
+        
+        # Log progress
+        if (epoch + 1) % log_interval == 0 or epoch == 0:
+            elapsed = time.time() - start_time
+            print(f"Epoch [{epoch+1:4d}/{num_epochs}] | "
+                  f"Loss: {loss_dict['loss_total']:.6f} | "
+                  f"L_f4: {loss_dict['loss_f4']:.6f} | "
+                  f"L_f6: {loss_dict['loss_f6']:.6f} | "
+                  f"LR: {optimizer.param_groups[0]['lr']:.2e} | "
+                  f"Time: {elapsed:.1f}s")
+    
+    total_time = time.time() - start_time
+    print("-"*70)
+    print(f"Training complete in {total_time:.1f}s")
+    print(f"Final loss: {history['loss_total'][-1]:.6f}")
+    
+    # Plot training curves
+    plot_training_curves(history, output_dir)
+    
+    return history
+
+
+def plot_training_curves(history, output_dir):
+    """Plot and save training loss curves."""
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+    
+    # Total loss
+    axes[0].plot(history['loss_total'], 'b-', linewidth=1)
+    axes[0].set_xlabel('Epoch')
+    axes[0].set_ylabel('Total Loss')
+    axes[0].set_title('Total Loss (L_f4 + L_f6)')
+    axes[0].set_yscale('log')
+    axes[0].grid(True, alpha=0.3)
+    
+    # Individual losses
+    axes[1].plot(history['loss_f4'], 'r-', label='L_f4 (l=4)', linewidth=1)
+    axes[1].plot(history['loss_f6'], 'g-', label='L_f6 (l=6)', linewidth=1)
+    axes[1].set_xlabel('Epoch')
+    axes[1].set_ylabel('Loss')
+    axes[1].set_title('Individual Irrep Losses')
+    axes[1].set_yscale('log')
+    axes[1].legend()
+    axes[1].grid(True, alpha=0.3)
+    
+    # Learning rate
+    axes[2].plot(history['lr'], 'k-', linewidth=1)
+    axes[2].set_xlabel('Epoch')
+    axes[2].set_ylabel('Learning Rate')
+    axes[2].set_title('Learning Rate Schedule')
+    axes[2].set_yscale('log')
+    axes[2].grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    
+    save_path = os.path.join(output_dir, 'training_curves.png')
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"✓ Saved training curves to: {save_path}")
 
 
 # ==============================================================================
@@ -199,7 +393,6 @@ def generate_boundary_map(quaternions):
     # Average misorientation (L=0 scalar feature)
     misorientation = (ang_x + ang_y) / 2.0
     
-    # Apply inferno colormap (same as boundary_formation)
     # Normalize to [0, 1] with max at 60 degrees (FCC max disorientation)
     norm_misorientation = np.clip(misorientation / 60.0, 0, 1)
     
@@ -360,36 +553,40 @@ def main():
     """Main training and visualization pipeline."""
     
     print("="*70)
-    print("QUATERNION ENCODER-DECODER STAGE VISUALIZATION")
+    print("QUATERNION ENCODER-DECODER WITH TRAINING")
     print("="*70)
     
     # Configuration
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     print(f"\nDevice: {device}")
     
+    # Training hyperparameters
+    NUM_EPOCHS = 500
+    LEARNING_RATE = 1e-3
+    LOG_INTERVAL = 50
+    
     data_dir = "/data/home/umang/Materials/Materials_data_mount/EBSD/IN718_FZ_2D_SR_x4/Open718_QSR_x4/Train/HR_Data"
     output_dir = "./training_outputs"
     os.makedirs(output_dir, exist_ok=True)
     
     # ==============================================================================
-    # 1. INITIALIZE MODEL (Physics-based, no training needed)
+    # 1. INITIALIZE MODEL
     # ==============================================================================
     print("\n" + "="*70)
     print("INITIALIZING MODEL")
     print("="*70)
     
     model = EBSDSuper(device=device, grid_samples=10000, batch_size=1000)
-    print(f"Physics-based model initialized on {device}")
-    print("Note: This model has no trainable parameters (purely physics-based)")
+    print(f"Model initialized on {device}")
     
     # ==============================================================================
-    # 2. LOAD SAMPLE FOR VISUALIZATION
+    # 2. LOAD SAMPLE DATA
     # ==============================================================================
     print("\n" + "="*70)
-    print("LOADING SAMPLE DATA FOR VISUALIZATION")
+    print("LOADING SAMPLE DATA")
     print("="*70)
     
-    # Load a sample image for visualization
+    # Load a sample image
     sample_file = Path(data_dir) / "Open718_QSR_x4_train_hr_x_block_0.npy"
     q_sample = np.load(sample_file)
     print(f"Loaded sample image: {sample_file.name}, shape: {q_sample.shape}")
@@ -397,14 +594,12 @@ def main():
     # Handle format
     if q_sample.shape[-1] == 4:
         img_shape = q_sample.shape[:2]
-        q_flat = q_sample.reshape(-1, 4)
     elif q_sample.shape[0] == 4:
         img_shape = q_sample.shape[1:]
-        q_flat = q_sample.reshape(4, -1).T
     else:
         raise ValueError(f"Cannot determine format from shape {q_sample.shape}")
     
-    # Take a smaller crop for visualization (256x256)
+    # Take a smaller crop for faster training (256x256)
     crop_size = min(256, img_shape[0], img_shape[1])
     q_crop = q_sample[:crop_size, :crop_size, :] if q_sample.shape[-1] == 4 else q_sample[:, :crop_size, :crop_size]
     
@@ -419,100 +614,103 @@ def main():
     q_tensor = torch.from_numpy(q_flat).float().to(device)
     q_tensor = q_tensor / torch.norm(q_tensor, dim=1, keepdim=True)
     
-    # ==============================================================================
-    # 3. RUN FULL FORWARD PASS WITH ALL STAGES
-    # ==============================================================================
-    print("\n" + "="*70)
-    print("RUNNING FORWARD PASS WITH ALL STAGES")
-    print("="*70)
-    
-    print(f"Processing {len(q_tensor)} quaternions...")
-    model.eval()
-    
-    with torch.no_grad():
-        # Run full forward pass which returns all intermediate stages
-        outputs = model.forward(q_tensor, img_shape=img_shape)
-    
-    print(f"✓ Input shape: {outputs['input'].shape}")
-    print(f"✓ Encoded f4 shape: {outputs['encoded'][0].shape}")
-    print(f"✓ Encoded f6 shape: {outputs['encoded'][1].shape}")
-    print(f"✓ Convolved f4 shape: {outputs['convolved'][0].shape}")
-    print(f"✓ Convolved f6 shape: {outputs['convolved'][1].shape}")
-    print(f"✓ Output shape: {outputs['output'].shape}")
+    print(f"Training data shape: {q_tensor.shape}")
+    print(f"Image shape: {img_shape}")
     
     # ==============================================================================
-    # 4. DECODE INTERMEDIATE STAGES FOR VISUALIZATION
+    # 3. VISUALIZE BEFORE TRAINING (untrained conv layer)
     # ==============================================================================
     print("\n" + "="*70)
-    print("DECODING INTERMEDIATE STAGES FOR VISUALIZATION")
+    print("VISUALIZATION BEFORE TRAINING")
     print("="*70)
     
-    # Create stage decoder for decoding intermediate features
+    fcc_sym = Phase(space_group=225).point_group
     decoder_stage = StageDecoder(model.physics, model.decoder)
     decoder_stage.to(device)
-    decoder_stage.eval()
     
-    # FCC symmetry
-    fcc_sym = Phase(space_group=225).point_group
-    
+    # Run forward pass before training
+    model.eval()
     with torch.no_grad():
-        # Decode encoded features (before convolution)
-        f4_encoded, f6_encoded = outputs['encoded']
-        q_encoded = decoder_stage.decode_final(f4_encoded, f6_encoded)
+        outputs_before = model.forward(q_tensor, img_shape=img_shape)
+        
+        # Decode stages
+        f4_enc, f6_enc = outputs_before['encoded']
+        q_encoded = decoder_stage.decode_final(f4_enc, f6_enc)
         q_encoded = match_symmetry_batch(q_tensor, q_encoded, model.physics)
         
-        # Decode convolved features (after convolution)
-        f4_conv, f6_conv = outputs['convolved']
-        q_convolved = decoder_stage.decode_final(f4_conv, f6_conv)
-        q_convolved = match_symmetry_batch(q_tensor, q_convolved, model.physics)
+        f4_conv, f6_conv = outputs_before['convolved']
+        q_convolved_before = decoder_stage.decode_final(f4_conv, f6_conv)
+        q_convolved_before = match_symmetry_batch(q_tensor, q_convolved_before, model.physics)
         
-        # Match final output to symmetry
-        q_output = match_symmetry_batch(q_tensor, outputs['output'], model.physics)
+        q_output_before = match_symmetry_batch(q_tensor, outputs_before['output'], model.physics)
     
-    # ==============================================================================
-    # 5. VISUALIZE STAGES
-    # ==============================================================================
-    print("\n" + "="*70)
-    print("GENERATING STAGE-BY-STAGE IPF VISUALIZATION")
-    print("="*70)
-    
-    # Build stage configuration list with all stages including convolution
-    stages_config = [
-        {
-            "name": "Stage 0: Input", 
-            "quaternions": outputs['input']
-        },
-        {
-            "name": "Stage 1: Encoded (L=4,L=6)", 
-            "quaternions": q_encoded
-        },
-        {
-            "name": "Stage 2: Convolved", 
-            "quaternions": q_convolved
-        },
-        {
-            "name": "Stage 3: Output", 
-            "quaternions": q_output
-        }
+    stages_before = [
+        {"name": "Stage 0: Input", "quaternions": outputs_before['input']},
+        {"name": "Stage 1: Encoded", "quaternions": q_encoded},
+        {"name": "Stage 2: Convolved (BEFORE)", "quaternions": q_convolved_before},
+        {"name": "Stage 3: Output (BEFORE)", "quaternions": q_output_before}
     ]
     
-    output_path = os.path.join(output_dir, 'stage_ipf_maps.png')
-    render_stage_ipf_maps(
-        stages_config, 
-        img_shape, 
-        output_path, 
-        fcc_sym
+    render_stage_ipf_maps(stages_before, img_shape, 
+                          os.path.join(output_dir, 'stage_ipf_maps_BEFORE_training.png'), fcc_sym)
+    
+    # ==============================================================================
+    # 4. TRAIN CONVOLUTION LAYER
+    # ==============================================================================
+    history = train_convolution_layer(
+        model=model,
+        q_tensor=q_tensor,
+        img_shape=img_shape,
+        num_epochs=NUM_EPOCHS,
+        lr=LEARNING_RATE,
+        log_interval=LOG_INTERVAL,
+        output_dir=output_dir
     )
     
+    # ==============================================================================
+    # 5. VISUALIZE AFTER TRAINING
+    # ==============================================================================
     print("\n" + "="*70)
-    print("VISUALIZATION COMPLETE!")
+    print("VISUALIZATION AFTER TRAINING")
     print("="*70)
-    print(f"Output saved to: {output_dir}/")
-    print(f"  - stage_ipf_maps.png: IPF maps at each processing stage")
-    print(f"  - stage_ipf_maps_boundary_maps.png: Boundary maps at each processing stage")
-    print(f"\nStages visualized: {len(stages_config)}")
-    for i, stage in enumerate(stages_config):
-        print(f"  {i}. {stage['name']}")
+    
+    # Run forward pass after training
+    model.eval()
+    with torch.no_grad():
+        outputs_after = model.forward(q_tensor, img_shape=img_shape)
+        
+        # Decode stages
+        f4_conv, f6_conv = outputs_after['convolved']
+        q_convolved_after = decoder_stage.decode_final(f4_conv, f6_conv)
+        q_convolved_after = match_symmetry_batch(q_tensor, q_convolved_after, model.physics)
+        
+        q_output_after = match_symmetry_batch(q_tensor, outputs_after['output'], model.physics)
+    
+    stages_after = [
+        {"name": "Stage 0: Input", "quaternions": outputs_after['input']},
+        {"name": "Stage 1: Encoded", "quaternions": q_encoded},
+        {"name": "Stage 2: Convolved (AFTER)", "quaternions": q_convolved_after},
+        {"name": "Stage 3: Output (AFTER)", "quaternions": q_output_after}
+    ]
+    
+    render_stage_ipf_maps(stages_after, img_shape,
+                          os.path.join(output_dir, 'stage_ipf_maps_AFTER_training.png'), fcc_sym)
+    
+    # ==============================================================================
+    # 6. SUMMARY
+    # ==============================================================================
+    print("\n" + "="*70)
+    print("TRAINING AND VISUALIZATION COMPLETE!")
+    print("="*70)
+    print(f"\nOutput saved to: {output_dir}/")
+    print(f"  - stage_ipf_maps_BEFORE_training.png: IPF maps before training")
+    print(f"  - stage_ipf_maps_AFTER_training.png: IPF maps after training")
+    print(f"  - training_curves.png: Loss curves during training")
+    print(f"\nTraining Summary:")
+    print(f"  - Epochs: {NUM_EPOCHS}")
+    print(f"  - Initial Loss: {history['loss_total'][0]:.6f}")
+    print(f"  - Final Loss: {history['loss_total'][-1]:.6f}")
+    print(f"  - Loss Reduction: {(1 - history['loss_total'][-1]/history['loss_total'][0])*100:.1f}%")
 
 
 if __name__ == "__main__":
