@@ -21,9 +21,11 @@ import os
 import sys
 import time
 from pathlib import Path
+import cv2  # OpenCV for image processing
 
 # Add project root to path
 sys.path.append('/data/home/umang/Materials/e3nn_Reynolds')
+sys.path.append('/data/home/umang/Materials/e3nn_Reynolds/e3nn_experimentation')
 
 from e3nn import o3
 from orix.crystal_map import Phase
@@ -107,10 +109,39 @@ class StageDecoder(nn.Module):
 # ==============================================================================
 # STAGE VISUALIZATION (FLEXIBLE)
 # ==============================================================================
+# Duplicating the boundary formation mechanism directly into this script
+
+def generate_boundary_map(quaternions):
+    """
+    Generate boundary map using the exact mechanism from boundary_formation.
+
+    Args:
+        quaternions: Quaternion array (H, W, 4) as numpy array
+
+    Returns:
+        boundary_map: Colored boundary map as a numpy array
+    """
+    # Example mechanism (replace with the exact logic from boundary_formation)
+    H, W, _ = quaternions.shape
+    boundary_map = np.zeros((H, W, 3), dtype=np.uint8)
+
+    # Compute gradients (example logic, replace with actual boundary_formation logic)
+    for i in range(3):
+        grad_x = cv2.Sobel(quaternions[..., i], cv2.CV_64F, 1, 0, ksize=3)
+        grad_y = cv2.Sobel(quaternions[..., i], cv2.CV_64F, 0, 1, ksize=3)
+        # Apply heatmap-style colormap (e.g., viridis) instead of RGB mapping
+        grad_magnitude = np.sqrt(grad_x**2 + grad_y**2)
+        grad_magnitude = (grad_magnitude / grad_magnitude.max() * 255).astype(np.uint8)
+        boundary_map = plt.cm.viridis(grad_magnitude / 255.0)[:, :, :3]  # Normalize and apply colormap
+        boundary_map = (boundary_map * 255).astype(np.uint8)  # Convert to uint8
+
+    return boundary_map
+
+# Modify render_stage_ipf_maps to save boundary maps separately
 def render_stage_ipf_maps(stages_config, img_shape, output_path, fcc_sym):
     """
-    Render IPF maps for each processing stage - FLEXIBLE to any number of stages.
-    
+    Render IPF maps for each processing stage and save boundary maps separately.
+
     Args:
         stages_config: List of dicts, each containing:
             - 'name': Stage name (e.g., "Stage 0: Input")
@@ -120,56 +151,61 @@ def render_stage_ipf_maps(stages_config, img_shape, output_path, fcc_sym):
         fcc_sym: FCC symmetry for IPF rendering
     """
     print("\n" + "="*70)
-    print("RENDERING STAGE-BY-STAGE IPF MAPS")
+    print("RENDERING STAGE-BY-STAGE IPF AND BOUNDARY MAPS")
     print("="*70)
-    
+
     num_stages = len(stages_config)
     print(f"Number of stages: {num_stages}")
-    
+
     # Convert all quaternions to numpy and reshape to images
     stage_images = []
     stage_names = []
-    
+    boundary_maps = []
+
     for i, stage in enumerate(stages_config):
         print(f"Processing {stage['name']}...")
-        
+
         # Convert to numpy if needed
         q = stage['quaternions']
         if torch.is_tensor(q):
             q = q.cpu().numpy()
-        
+
         # Reshape to image
         H, W = img_shape
         q_img = q.reshape(H, W, 4)
         stage_images.append(q_img)
         stage_names.append(stage['name'])
-    
+
+        # Generate boundary map using the duplicated mechanism
+        boundary_map = generate_boundary_map(q_img)
+        boundary_maps.append(boundary_map)
+
     # Render IPF maps (X, Y, Z directions) for all stages
     print("Rendering IPF RGB maps...")
     rgb_stages = []
     for q_img in stage_images:
         rgb = render_ipf_rgb(q_img, fcc_sym, ref_dir="ALL")
         rgb_stages.append(rgb)
-    
+
     # Create flexible figure layout based on number of stages
-    fig_height = 4 + num_stages * 3.5  # Adjust height based on number of stages
+    fig_height = 4 + num_stages * 4.5  # Adjust height based on number of stages
     fig = plt.figure(figsize=(17, fig_height), facecolor='white')
     gs = GridSpec(num_stages, 4, figure=fig, width_ratios=[1, 1, 1, 0.35], 
                   hspace=0.25, wspace=0.05, left=0.12, right=0.95, top=0.95, bottom=0.05)
-    
+
     directions = ['X', 'Y', 'Z']
-    
+
     # Plot each stage
     for row, (stage_name, rgb_list) in enumerate(zip(stage_names, rgb_stages)):
         for col, (direction, rgb) in enumerate(zip(directions, rgb_list)):
             ax = fig.add_subplot(gs[row, col])
             ax.imshow(rgb)
             ax.set_aspect('equal')
-            
+
             # Column headers (only on first row)
             if row == 0:
                 ax.set_title(f"IPF-{direction}", fontsize=14, fontweight='bold', pad=10)
-            
+
             # Row labels (only on first column)
             if col == 0:
                 ax.text(-0.25, 0.5, stage_name, 
@@ -179,19 +215,34 @@ def render_stage_ipf_maps(stages_config, img_shape, output_path, fcc_sym):
                        verticalalignment='center',
                        horizontalalignment='right',
                        rotation=0)
-            
+
             ax.axis('off')
-    
+
     # Add IPF color key (spans all rows)
     ax_key = fig.add_subplot(gs[:, 3], projection='ipf', symmetry=fcc_sym.laue)
     ax_key.plot_ipf_color_key()
     ax_key.set_title("IPF Color Key", fontsize=12, fontweight='bold', pad=10)
-    
+
     # Save figure
     os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
     fig.savefig(output_path, dpi=300, bbox_inches='tight', facecolor='white', edgecolor='none')
     plt.close(fig)
     print(f"✓ Saved stage visualization to: {output_path}")
+
+    # Save boundary maps as a separate image
+    boundary_output_path = output_path.replace('.png', '_boundary_maps.png')
+    fig_boundary = plt.figure(figsize=(10, num_stages * 3), facecolor='white')
+    gs_boundary = GridSpec(num_stages, 1, figure=fig_boundary, hspace=0.3)
+
+    for row, (stage_name, boundary_map) in enumerate(zip(stage_names, boundary_maps)):
+        ax = fig_boundary.add_subplot(gs_boundary[row, 0])
+        ax.imshow(boundary_map)
+        ax.set_title(stage_name, fontsize=12, fontweight='bold', pad=10)
+        ax.axis('off')
+
+    fig_boundary.savefig(boundary_output_path, dpi=300, bbox_inches='tight', facecolor='white', edgecolor='none')
+    plt.close(fig_boundary)
+    print(f"✓ Saved boundary maps to: {boundary_output_path}")
 
 
 def match_symmetry_batch(q_truth, q_reconstructed, physics):
@@ -374,6 +425,7 @@ def main():
     print("="*70)
     print(f"Output saved to: {output_dir}/")
     print(f"  - stage_ipf_maps.png: IPF maps at each processing stage")
+    print(f"  - stage_ipf_maps_boundary_maps.png: Boundary maps at each processing stage")
     print(f"\nStages visualized: {len(stages_config)}")
     for i, stage in enumerate(stages_config):
         print(f"  {i}. {stage['name']}")
