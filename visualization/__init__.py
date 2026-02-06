@@ -5,6 +5,7 @@ from visualization.unfolded_ipf import (
 )  # plot_fz_ipf, plot_sr_hr_fz_ipf
 from visualization.visualize_sr_results import (
     render_sr_hr_side_by_side,
+    render_input_output_side_by_side,
     render_sr_hr_lr_side_by_side,
 )
 
@@ -17,4 +18,5 @@ __all__ = [
     # "plot_sr_hr_fz_ipf",
     "render_sr_hr_side_by_side",
     "render_sr_hr_lr_side_by_side",
+    "render_input_output_side_by_side",
 ]

@@ -3,7 +3,6 @@ from .quat_ops import (
     assert_quaternion_shape,
     to_spatial_quat,
     to_quat_spatial,
-    is_scalar_first,
     to_scalar_first,
     to_scalar_last,
     # --- Math ---
@@ -56,7 +55,6 @@ __all__ = [
     "assert_quaternion_shape",
     "to_spatial_quat",
     "to_quat_spatial",
-    "is_scalar_first",
     "to_scalar_first",
     "to_scalar_last",
     # Math

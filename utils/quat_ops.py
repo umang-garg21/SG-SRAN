@@ -130,50 +130,46 @@ def to_quat_spatial(arr: np.ndarray) -> np.ndarray:
 # =====================================================
 
 
-def is_scalar_first(q: np.ndarray) -> bool:
-    """
-    Return True if the quaternion array is scalar-first ([s,x,y,z]),
-    and False if it is scalar-last ([x,y,z,s]).
+# def is_scalar_first(q: np.ndarray) -> bool:
+#     """
+#     Return True if the quaternion array is scalar-first ([s,x,y,z]),
+#     and False if it is scalar-last ([x,y,z,s]).
 
-    Works for both (4, H, W, ...) and (H, W, ..., 4) layouts.
+#     Works for both (4, H, W, ...) and (H, W, ..., 4) layouts.
 
-    Parameters
-    ----------
-    q : np.ndarray
-        Quaternion array.
+#     Parameters
+#     ----------
+#     q : np.ndarray
+#         Quaternion array.
 
-    Returns
-    -------
-    bool
-        True if scalar-first, False otherwise.
-    """
-    assert_quaternion_shape(q)
+#     Returns
+#     -------
+#     bool
+#         True if scalar-first, False otherwise.
+#     """
+#     assert_quaternion_shape(q)
 
-    if q.shape[0] == 4:  # quat-first
-        return np.mean(np.abs(q[0])) >= np.mean(np.abs(q[-1]))
-    else:  # spatial-last
-        return np.mean(np.abs(q[..., 0])) >= np.mean(np.abs(q[..., -1]))
+#     if q.shape[0] == 4:  # quat-first
+#         return np.mean(np.abs(q[0])) >= np.mean(np.abs(q[-1]))
+#     else:  # spatial-last
+#         return np.mean(np.abs(q[..., 0])) >= np.mean(np.abs(q[..., -1]))
 
 
 def to_scalar_first(q: np.ndarray) -> np.ndarray:
     """
     Convert quaternion array from [x,y,z,s] (scalar-last)
-    to [s,x,y,z] (scalar-first). If already scalar-first, returns input.
+    to [s,x,y,z] (scalar-first).
 
     Parameters
     ----------
     q : np.ndarray
-        Quaternion array of shape (4, ...) or (..., 4).
+        Quaternion array of shape (4, ...) or (..., 4): MUST BE SCALAR LAST.
 
     Returns
     -------
     np.ndarray
         Scalar-first quaternion array.
     """
-
-    scalar_first = is_scalar_first(q)
-    if scalar_first:
-        return q
 
     if q.shape[0] == 4:
         out = np.empty_like(q, dtype=np.float32)
@@ -194,21 +190,18 @@ def to_scalar_first(q: np.ndarray) -> np.ndarray:
 def to_scalar_last(q: np.ndarray) -> np.ndarray:
     """
     Convert quaternion array from [s,x,y,z] (scalar-first)
-    to [x,y,z,s] (scalar-last). If already scalar-last, returns input.
+    to [x,y,z,s] (scalar-last).
 
     Parameters
     ----------
     q : np.ndarray
-        Quaternion array of shape (4, ...) or (..., 4).
+        Quaternion array of shape (4, ...) or (..., 4). MUST BE SCALAR FIRST.
 
     Returns
     -------
     np.ndarray
         Scalar-last quaternion array.
     """
-    scalar_first = is_scalar_first(q)
-    if not scalar_first:
-        return q
 
     if q.shape[0] == 4:
         out = np.empty_like(q, dtype=np.float32)
@@ -277,21 +270,17 @@ def normalize_quaternions(
 
 def enforce_hemisphere(
     q: np.ndarray,
-    scalar_first: bool | None = None,
+    scalar_first: bool = True,
 ) -> np.ndarray:
     """
     Enforce scalar part >= 0 (canonical hemisphere) for quaternion arrays.
-
-    If `scalar_first` is provided, it is used directly. Otherwise,
-    the scalar component position is automatically detected.
 
     Parameters
     ----------
     q : np.ndarray
         Quaternion array of shape (4, *spatial) or (*spatial, 4).
-    scalar_first : bool, optional
+    scalar_first : bool, optional, default=True
         True if scalar is the first component, False if scalar is last.
-        If None, it is automatically detected.
 
     Returns
     -------
@@ -303,10 +292,6 @@ def enforce_hemisphere(
     # Make writeable if it's a memmap or read-only
     if not q.flags.writeable:
         q = q.copy()
-
-    # Auto-detect scalar position if not specified
-    if scalar_first is None:
-        scalar_first = is_scalar_first(q)
 
     idx = 0 if scalar_first else -1
 
@@ -320,7 +305,6 @@ def enforce_hemisphere(
         mask = q[..., idx] < 0
         if np.any(mask):
             q[mask] *= -1.0
-
     return q
 
 
@@ -367,6 +351,7 @@ def quat_left_multiply_numpy(
 
     # Convert to (*spatial, 4)
     q_spatial = to_spatial_quat(q_right)
+
     spatial_shape = q_spatial.shape[:-1]
     N = int(np.prod(spatial_shape))
     M = q_left.shape[0]
@@ -607,7 +592,6 @@ def format_quaternions(
     hemisphere: bool = True,
     reduce_fz: bool = False,
     sym=None,
-    scalar_first: bool = True,
     quat_first: bool = False,
     eps: float = 1e-12,
 ) -> np.ndarray:
@@ -619,7 +603,7 @@ def format_quaternions(
     Parameters
     ----------
     q : np.ndarray
-        Quaternion array of shape (...,4) or (4,...).
+        Quaternion array of shape (...,4) or (4,...): MUST BE SCALAR FIRST.
     normalize : bool, default=True
         Normalize each quaternion to unit norm.
     hemisphere : bool, default=True
@@ -628,8 +612,6 @@ def format_quaternions(
         If True, reduce quaternions to the fundamental zone.
     sym : str or orix.quaternion.symmetry.Symmetry or None
         Symmetry to use for FZ reduction if reduce_fz=True.
-    scalar_first : {True,False}, default=True
-        Desired position of scalar component in the output.
     quat_first : bool, default=False
         If True, return layout (4,*spatial); if False, return (*spatial,4).
     eps : float, default=1e-12
@@ -638,13 +620,12 @@ def format_quaternions(
     Returns
     -------
     q_out : np.ndarray
-        Canonicalized quaternion array with requested layout and scalar position.
+        Canonicalized quaternion array with requested layout.
     """
     assert_quaternion_shape(q)
 
     # 1. Force quaternion-first and scalar-first internally
     q_out = to_quat_spatial(q)
-    q_out = to_scalar_first(q_out)
 
     # 2. Normalization & hemisphere (skip if FZ reduction)
     if not reduce_fz:
@@ -668,10 +649,6 @@ def format_quaternions(
             return_op_map=False,
             eps=eps,
         )
-
-    # 4. Scalar position
-    if not scalar_first:
-        q_out = to_scalar_last(q_out)
 
     # 5. Final layout
     if quat_first:

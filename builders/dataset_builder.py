@@ -180,7 +180,6 @@ def build_quaternion_sr_dataset(
                 hemisphere=hemisphere,
                 reduce_fz=reduce_to_fz,
                 sym=sym_canon if reduce_to_fz else None,
-                scalar_first=True,
                 quat_first=True,
             )
 

@@ -2,7 +2,7 @@ import torch
 from pathlib import Path
 
 from visualization.visualize_sr_results import (
-    render_sr_hr_side_by_side,
+    render_input_output_side_by_side,
     render_sr_hr_lr_side_by_side,
 )
 from visualization.unfolded_ipf import fz_ipf_sr_hr_side_by_side  # plot_sr_hr_fz_ipf
@@ -16,7 +16,12 @@ from training.config_utils import (
 )
 
 
-def run_postprocess_from_config(exp_dir: str, max_samples: int | None = 8, ckpt_path: str | None = None, output_dir: str | None = None):
+def run_postprocess_from_config(
+    exp_dir: str,
+    max_samples: int | None = 8,
+    ckpt_path: str | None = None,
+    output_dir: str | None = None,
+):
     """
     Post-process trained model results using the resolved run_config.json in exp_dir.
 
@@ -100,7 +105,9 @@ def run_postprocess_from_config(exp_dir: str, max_samples: int | None = 8, ckpt_
                 new_key = k.replace("module.", "") if isinstance(k, str) else k
                 new_state[new_key] = v
             model.load_state_dict(new_state)
-            print("Loaded checkpoint after stripping 'module.' prefixes from state_dict keys")
+            print(
+                "Loaded checkpoint after stripping 'module.' prefixes from state_dict keys"
+            )
         except Exception:
             # Re-raise original with more context
             raise RuntimeError(f"Failed to load model state_dict from {ckpt_path}: {e}")
@@ -127,15 +134,17 @@ def run_postprocess_from_config(exp_dir: str, max_samples: int | None = 8, ckpt_
         # Robustly extract (lr, hr) from whatever the dataloader yields
         if isinstance(batch, dict):
             # common keys: 'lr'/'input' and 'hr'/'target'
-            lr = batch.get('lr') or batch.get('input') or batch.get('low_res') or None
-            hr = batch.get('hr') or batch.get('target') or batch.get('high_res') or None
+            lr = batch.get("lr") or batch.get("input") or batch.get("low_res") or None
+            hr = batch.get("hr") or batch.get("target") or batch.get("high_res") or None
             if lr is None or hr is None:
                 # fallback: take first two values
                 vals = list(batch.values())
                 if len(vals) >= 2:
                     lr, hr = vals[0], vals[1]
                 else:
-                    raise ValueError(f"Unexpected batch dict keys: {list(batch.keys())}")
+                    raise ValueError(
+                        f"Unexpected batch dict keys: {list(batch.keys())}"
+                    )
         else:
             try:
                 lr, hr = batch
@@ -144,7 +153,9 @@ def run_postprocess_from_config(exp_dir: str, max_samples: int | None = 8, ckpt_
                 if isinstance(batch, (list, tuple)) and len(batch) >= 2:
                     lr, hr = batch[0], batch[1]
                 else:
-                    raise ValueError(f"Unexpected batch format from dataloader: {type(batch)}")
+                    raise ValueError(
+                        f"Unexpected batch format from dataloader: {type(batch)}"
+                    )
 
         # If lr/hr are nested (e.g., (tensor, meta)), unwrap them
         if isinstance(lr, (list, tuple)):

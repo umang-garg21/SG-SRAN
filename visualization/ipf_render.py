@@ -87,7 +87,6 @@ def render_ipf_image(
     include_key: bool = True,
     overwrite: bool = False,
     format_input: bool = True,
-    gutter_px: int = 0,
 ):
     """
     Render quaternion orientation array to an IPF image with consistent formatting.
@@ -166,151 +165,12 @@ def render_ipf_image(
         os.makedirs(os.path.dirname(out_png) or ".", exist_ok=True)
         fig.savefig(out_png, bbox_inches="tight", dpi=300)
         plt.close(fig)
-        # If multiple ref directions (3 columns) and a gutter is requested,
-        # post-process the saved PNG to insert gutters between the three IPF columns
-        if show_all and gutter_px and gutter_px > 0:
-            try:
-                from PIL import Image as _Image
-
-                im = _Image.open(out_png).convert('RGB')
-                w, h = im.size
-                # Try to split into three equal tiles horizontally
-                tile_w = w // 3
-                tiles = [im.crop((i * tile_w, 0, (i + 1) * tile_w, h)) for i in range(3)]
-                new_w = tile_w * 3 + gutter_px * 2
-                new_im = _Image.new('RGB', (new_w, h), (255, 255, 255))
-                x = 0
-                for t in tiles:
-                    new_im.paste(t, (x, 0))
-                    x += tile_w + gutter_px
-                new_im.save(out_png)
-                im.close()
-            except Exception:
-                # If PIL not available or processing fails, leave original image
-                pass
-
         return out_png
     else:
         return None
 
 
-def render_input_output_comparison(
-    input_q_arr: np.ndarray,
-    output_q_arr: np.ndarray,
-    sym_class,
-    out_png: Optional[str] = None,
-    ref_dir: str = "ALL",
-    include_key: bool = True,
-    overwrite: bool = False,
-    format_input: bool = True,
-    dpi: int = 300,
-):
-    """
-    Render Input and Output quaternion orientation maps side-by-side
-    in a 2-row layout (Input on top, Output on bottom), optionally with IPF key.
-
-    Parameters
-    ----------
-    input_q_arr : ndarray
-        Input quaternion array of shape (H, W, 4).
-    output_q_arr : ndarray
-        Output quaternion array of shape (H, W, 4).
-    sym_class : orix symmetry
-        Symmetry object for IPF coloring.
-    out_png : str, optional
-        Output PNG file path. If None, figure is not saved.
-    ref_dir : {"X","Y","Z","ALL"}, default="ALL"
-        Reference direction(s) for coloring.
-    include_key : bool, default=True
-        Whether to include IPF color key panel.
-    overwrite : bool, default=False
-        If False, skip rendering if file exists.
-    format_input : bool, default=True
-        If True, canonicalize quaternions.
-    dpi : int, default=300
-        Figure DPI for saved PNG.
-    """
-    # Early exit if file already exists
-    if out_png and not overwrite and os.path.exists(out_png):
-        return out_png
-
-    # Format quaternions (reduce to FZ, normalize, hemisphere, etc.)
-    if format_input:
-        input_q_arr = format_quaternions(
-            input_q_arr,
-            normalize=True,
-            hemisphere=True,
-            reduce_fz=True,
-            sym=sym_class,
-            quat_first=False,
-        )
-        output_q_arr = format_quaternions(
-            output_q_arr,
-            normalize=True,
-            hemisphere=True,
-            reduce_fz=True,
-            sym=sym_class,
-            quat_first=False,
-        )
-
-    # Convert to IPF RGB maps
-    input_rgb = render_ipf_rgb(input_q_arr, sym_class, ref_dir=ref_dir)
-    output_rgb = render_ipf_rgb(output_q_arr, sym_class, ref_dir=ref_dir)
-
-    multi_ref = isinstance(input_rgb, list)
-    ncols = 3 if multi_ref else 1
-    key_cols = 1 if include_key else 0
-    total_cols = ncols + key_cols
-    total_rows = 2  # Input top, Output bottom
-
-    # Figure setup
-    base_w = 5.0
-    key_w = 2.6 if include_key else 0
-    fig_w = base_w * ncols + key_w
-    fig_h = 2 * 4.5
-    fig = plt.figure(figsize=(fig_w, fig_h))
-    gs = fig.add_gridspec(
-        total_rows,
-        total_cols,
-        width_ratios=[1] * ncols + ([0.9] if include_key else []),
-        height_ratios=[1, 1],
-        hspace=0.25,
-        wspace=0.25,
-    )
-
-    def _imshow(ax, img, title):
-        ax.imshow(img)
-        ax.set_aspect("equal", adjustable="box")
-        ax.set_title(title, fontsize=10)
-        ax.axis("off")
-
-    # Plot Input (top row) and Output (bottom row)
-    if multi_ref:
-        for j, (name, img) in enumerate(zip(("X", "Y", "Z"), input_rgb)):
-            _imshow(fig.add_subplot(gs[0, j]), img, f"Input IPF-{name}")
-        for j, (name, img) in enumerate(zip(("X", "Y", "Z"), output_rgb)):
-            _imshow(fig.add_subplot(gs[1, j]), img, f"Output IPF-{name}")
-    else:
-        _imshow(fig.add_subplot(gs[0, 0]), input_rgb, f"Input IPF-{ref_dir.upper()}")
-        _imshow(fig.add_subplot(gs[1, 0]), output_rgb, f"Output IPF-{ref_dir.upper()}")
-
-    # IPF color key
-    if include_key:
-        ax_key = fig.add_subplot(gs[:, -1], projection="ipf", symmetry=sym_class.laue)
-        ax_key.plot_ipf_color_key()
-        ax_key.set_title("")
-
-    # Save figure
-    if out_png:
-        os.makedirs(os.path.dirname(out_png) or ".", exist_ok=True)
-        fig.savefig(out_png, bbox_inches="tight", dpi=dpi)
-        plt.close(fig)
-        print(f"Saved Input-Output comparison to: {out_png}")
-        return out_png
-
-    plt.show()
-    return None
-
+# def render_sr_hr_side_by_side(
 #     sr_q_arr: np.ndarray,
 #     hr_q_arr: np.ndarray,
 #     sym_class,

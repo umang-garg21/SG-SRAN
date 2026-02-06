@@ -121,3 +121,7 @@ def generate_symmetry_files(group_name: str, save_dir: Path) -> tuple[Path, Path
     print(f"   {sym_inv_path}")
 
     return sym_path, sym_inv_path
+
+
+if __name__ == "__main__":
+    a = resolve_symmetry("cubic")
