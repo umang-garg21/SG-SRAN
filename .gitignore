@@ -235,3 +235,4 @@ checkpoint_*/*.npy
 
 # model artifacts
 *.npy
+*.npy
