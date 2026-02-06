@@ -11,6 +11,7 @@ experiments/**/checkpoints
 
 **/visualizations/
 
+*.npy
 # Distribution / packaging
 .Python
 build/
