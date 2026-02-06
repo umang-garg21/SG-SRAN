@@ -231,4 +231,4 @@ runs/
 **/runs/
 # TensorFlow checkpoints
 checkpoint
-checkpoint_*/
+checkpoint_*/*.npy
