@@ -232,3 +232,6 @@ runs/
 # TensorFlow checkpoints
 checkpoint
 checkpoint_*/*.npy
+
+# model artifacts
+*.npy
