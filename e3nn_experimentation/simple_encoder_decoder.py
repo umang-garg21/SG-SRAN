@@ -5,7 +5,15 @@ import numpy as np
 import os
 import time
 from e3nn import o3
-from orix.crystal_map import Phase
+import sys
+sys.path.append("/data/home/umang/Materials/Reynolds-QSR_clean_ipf")
+sys.path.append("/data/home/umang/Materials/Reynolds-QSR_clean_ipf/utils")
+# Dataset builder
+from training.data_loading import QuaternionDataset
+from visualization.visualize_sr_results import render_input_output_side_by_side
+from utils.quat_ops import to_spatial_quat
+import utils
+
 
 # ==============================================================================
 # CUDA-Compatible Wigner D Function (Patched)
@@ -61,6 +69,7 @@ class FCCEncoder(nn.Module):
 
     def forward(self, quats):
         # Convert Quat -> Rot Matrix -> Euler
+        print(f"Encoding batch of quaternions with shape: {quats.shape}")
         R = o3.quaternion_to_matrix(quats)
         alpha, beta, gamma = o3.matrix_to_angles(R)
         
@@ -79,7 +88,7 @@ class SphericalSamplingDecoder(nn.Module):
     def __init__(self, physics, grid_res=50):
         super().__init__()
         # Reduced to 10k for faster processing
-        self.n_fib_samples = 10000
+        self.n_fib_samples = 100000
         self.physics = physics
         
         # A. Precompute a Scanning Grid (Fibonacci Sphere)
@@ -187,29 +196,26 @@ def run_physics_decoder_test():
             w1*z2 + x1*y2 - y1*x2 + z1*w2
         ], dim=1)
     
-    # 1. Load ALL quaternions from file
-    file_path = "/data/home/umang/Materials/Materials_data_mount/fz_reduced/Open_718_Z_Upsampling/Train/HR_Images/preprocessed_imgs_1D/Open_718_Train_hr_x_normal_0.npy"
-    q_numpy = np.load(file_path)
-    print(f"Loaded quaternion data with shape: {q_numpy.shape}")
+        # # Example usage
+    dataset_out_root = "/data/home/umang/Materials/Materials_data_mount/EBSD//"
+    dataset_name = "IN718_FZ_2D_SR_x4/Open718_QSR_x4/"
+
+    dataset_dir = os.path.join(dataset_out_root, dataset_name)
+
+    train_ds = QuaternionDataset(
+        dataset_root=dataset_dir,
+        split="Train",
+        preload=True,
+        preload_torch=True,  # preload as CPU torch tensors
+    )
+    print("train_ds[0][1].shape", train_ds[0][1].shape)
     
-    # Save output image in current working directory
-    output_png = "input_output_comparison.png"
+    q_all= train_ds[0][1]  # Get the first sample (HR quaternions)
     
-    # Convert to torch tensor and normalize
-    q_all = torch.tensor(q_numpy, dtype=torch.float32, device=device)
-    # Handle different input shapes
-    is_image = False
-    img_shape = None
-    if q_all.dim() == 1:
-        q_all = q_all.unsqueeze(0)  # Single quaternion
-    elif q_all.dim() == 3:
-        # Flatten spatial dimensions if image format (H, W, 4)
-        is_image = True
-        img_shape = q_all.shape[:2]  # Save (H, W)
-        original_shape = q_all.shape
-        q_all = q_all.reshape(-1, 4)  # (H*W, 4)
-        print(f"Reshaped from {original_shape} to {q_all.shape}")
+    # Convert from (C, H, W) to (H, W, C)
+    q_all = q_all.permute(1, 2, 0)
     
+    q_all =q_all.reshape(-1, 4).to(device)  # Flatten to (N, 4)
     # Normalize all quaternions
     q_all = q_all / torch.norm(q_all, dim=1, keepdim=True)
     num_quats = q_all.shape[0]
@@ -292,26 +298,29 @@ def run_physics_decoder_test():
     print(f"\nTotal processing time: {total_time:.2f}s ({num_quats/total_time:.0f} quaternions/sec)")
     
     # 4. Render IPF comparison if we have image data
+    is_image= True
     if is_image:
         print("\n" + "="*70)
         print("RENDERING IPF COMPARISON")
         print("="*70)
         
         # Import the rendering function
-        import sys
-        sys.path.append('/data/home/umang/Materials/e3nn_Reynolds')
-        from visualization.ipf_render import render_input_output_comparison
-        
+        # import sys
+        # sys.path.append('/data/home/umang/Materials/Reynolds-QSR_clean_ipf')  # Ensure we can import from the main project
+
+        img_shape= train_ds[0][1].shape[1:3]  # Assuming (C, H, W) format for the quaternions
         # Reshape back to image format (H, W, 4) and move to CPU
+        print(f"Reshaping reconstructed quaternions to image format: {img_shape} with 4 channels")
+
         q_input_img = q_all.cpu().reshape(img_shape[0], img_shape[1], 4).numpy()
-        q_output_img = q_reconstructed_all.cpu().reshape(img_shape[0], img_shape[1], 4).numpy()
-        
-        # Define FCC symmetry (m-3m, space group 225)
-        fcc_sym = Phase(space_group=225).point_group
-        
+        q_output_img = q_reconstructed_all.cpu().reshape(img_shape[0], img_shape[1],4).numpy()
+    
+        fcc_sym = utils.symmetry_utils.resolve_symmetry(train_ds.symmetry) 
+
+        output_png = "ipf_comparison.png" 
         # Render comparison
         print(f"Rendering IPF comparison to: {output_png}")
-        render_input_output_comparison(
+        render_input_output_side_by_side(
             q_input_img,
             q_output_img,
             fcc_sym,

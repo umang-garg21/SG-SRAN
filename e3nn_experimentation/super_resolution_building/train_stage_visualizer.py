@@ -25,16 +25,20 @@ from pathlib import Path
 import cv2  # OpenCV for image processing
 
 # Add project root to path
-sys.path.append('/data/home/umang/Materials/e3nn_Reynolds')
-sys.path.append('/data/home/umang/Materials/e3nn_Reynolds/e3nn_experimentation')
+sys.path.append("/data/home/umang/Materials/Reynolds-QSR_clean_ipf")
+sys.path.append("/data/home/umang/Materials/Reynolds-QSR_clean_ipf/utils")
 
 from e3nn import o3
-from orix.crystal_map import Phase
+from training.data_loading import QuaternionDataset
 from visualization.ipf_render import render_ipf_rgb
-from simple_encoder_decoder import (
-    FCCPhysics, 
-    FCCEncoder, 
+from visualization.visualize_sr_results import render_input_output_side_by_side
+from utils.quat_ops import to_spatial_quat
+import utils
+from encoder_decoder import (
+    FCCPhysics,
+    FCCEncoder,
     SphericalSamplingDecoder,
+    EquivariantTransposeConv,
     EBSDSuper,
     wigner_D_cuda
 )
@@ -86,51 +90,56 @@ class IrrepLoss(nn.Module):
 # ==============================================================================
 # TRAINING LOOP
 # ==============================================================================
-def train_convolution_layer(model, q_tensor, img_shape, num_epochs=100, lr=1e-3, 
-                            log_interval=10, output_dir='./training_outputs'):
+def train_convolution_layer(model, train_ds, crop_size, num_epochs=100, lr=1e-3,
+                            log_interval=10, viz_interval=50, viz_context=None,
+                            output_dir='./training_outputs'):
     """
     Train the convolution layer using Irrep Representation Loss.
-    
+
     The target is reconstruction: conv output should match encoder output.
     This teaches the conv layer to not destroy the signal initially.
-    
+
     Args:
         model: EBSDSuper model with conv_layer
-        q_tensor: Input quaternions (N, 4)
-        img_shape: (H, W) tuple
+        train_ds: QuaternionDataset providing (LR, HR) pairs in (C, H, W) format
+        crop_size: Crop size for training patches
         num_epochs: Number of training epochs
         lr: Learning rate
         log_interval: Print loss every N epochs
+        viz_interval: Render stage IPF maps every N epochs (0 to disable)
+        viz_context: Dict with keys: q_tensor, q_hr_tensor, img_shape, hr_img_shape,
+                     fcc_sym, decoder_stage — needed for periodic visualization
         output_dir: Directory to save training outputs
     """
     print("\n" + "="*70)
     print("TRAINING CONVOLUTION LAYER (Irrep Representation Loss)")
     print("="*70)
-    
-    device = q_tensor.device
-    
-    # Get target features (encoder output - these are the "ground truth" irreps)
-    model.eval()
-    with torch.no_grad():
-        f4_target, f6_target = model.encoder(q_tensor)
-    
-    print(f"Target f4 shape: {f4_target.shape}")
-    print(f"Target f6 shape: {f6_target.shape}")
-    
-    # Setup optimizer (only optimize conv_layer parameters)
-    optimizer = optim.Adam(model.conv_layer.parameters(), lr=lr)
+
+    device = model.device
+    num_samples = min(10, len(train_ds))
+    print(f"Number of LR/HR pairs: {num_samples}")
+
+    # Setup optimizer (optimize conv_layer, upsample_layer, and hr_conv_layer parameters)
+    trainable_params = (
+        list(model.conv_layer.parameters())
+        + list(model.upsample_layer.parameters())
+        + list(model.hr_conv_layer.parameters())
+    )
+    optimizer = optim.Adam(trainable_params, lr=lr)
+    # # OLD: optimizer only had conv_layer + upsample_layer (no hr_conv_layer)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=20, verbose=True)
-    
-    # Loss function
+
+    # Loss function (Irrep loss between SR output irreps and HR irreps)
     criterion = IrrepLoss(lambda_f4=1.0, lambda_f6=1.0)
-    
+
     # Count trainable parameters
-    num_params = sum(p.numel() for p in model.conv_layer.parameters() if p.requires_grad)
-    print(f"Trainable parameters in conv_layer: {num_params}")
+    num_params = sum(p.numel() for p in trainable_params if p.requires_grad)
+    # # OLD: only counted conv_layer + upsample_layer
+    print(f"Trainable parameters in conv_layer + upsample_layer + hr_conv_layer: {num_params}")
     print(f"Learning rate: {lr}")
     print(f"Number of epochs: {num_epochs}")
     print("-"*70)
-    
+
     # Training history
     history = {
         'loss_total': [],
@@ -138,52 +147,132 @@ def train_convolution_layer(model, q_tensor, img_shape, num_epochs=100, lr=1e-3,
         'loss_f6': [],
         'lr': []
     }
-    
+
     # Training loop
     model.conv_layer.train()
+    model.upsample_layer.train()
+    model.hr_conv_layer.train()
     start_time = time.time()
-    
+
     for epoch in range(num_epochs):
         optimizer.zero_grad()
-        
-        # Forward pass through encoder (no grad needed, it's fixed)
-        with torch.no_grad():
-            f4_encoded, f6_encoded = model.encoder(q_tensor)
-        
-        # Forward pass through conv_layer (grad needed)
-        f4_conv, f6_conv = model.conv_layer(f4_encoded, f6_encoded, img_shape)
-        
-        # Compute loss (target = encoder output, i.e., reconstruction)
-        loss, loss_dict = criterion(f4_conv, f6_conv, f4_target, f6_target)
-        
-        # Backward pass
-        loss.backward()
+        total_loss = 0.0
+        total_f4 = 0.0
+        total_f6 = 0.0
+        epoch_start = time.time()
+
+        for idx in range(num_samples):
+            if idx % 50 == 0 or idx == num_samples - 1:
+                print(f"  Epoch {epoch+1}/{num_epochs} - Sample {idx+1}/{num_samples}", end='\r', flush=True)
+            q_lr_chw, q_hr_chw = train_ds[idx]
+
+            # Convert from (C, H, W) to (H, W, C)
+            q_lr_hwc = q_lr_chw.permute(1, 2, 0) if torch.is_tensor(q_lr_chw) else torch.from_numpy(q_lr_chw).permute(1, 2, 0)
+            q_hr_hwc = q_hr_chw.permute(1, 2, 0) if torch.is_tensor(q_hr_chw) else torch.from_numpy(q_hr_chw).permute(1, 2, 0)
+
+            # Determine LR shape
+            img_shape = q_lr_hwc.shape[:2]
+
+            # Crop LR/HR
+            crop = min(crop_size, img_shape[0], img_shape[1])
+            q_lr_crop = q_lr_hwc[:crop, :crop, :]
+            hr_crop = crop * model.upsample_factor
+            q_hr_crop = q_hr_hwc[:hr_crop, :hr_crop, :]
+
+            # Flatten
+            q_lr_flat = q_lr_crop.reshape(-1, 4)
+            q_hr_flat = q_hr_crop.reshape(-1, 4)
+
+            q_lr_tensor = q_lr_flat.float().to(device)
+            q_lr_tensor = q_lr_tensor / torch.norm(q_lr_tensor, dim=1, keepdim=True)
+
+            q_hr_tensor = q_hr_flat.float().to(device)
+            q_hr_tensor = q_hr_tensor / torch.norm(q_hr_tensor, dim=1, keepdim=True)
+
+            # Forward pass through full model (LR -> SR)
+            outputs = model.forward(q_lr_tensor, img_shape=(crop, crop))
+
+            # HR target irreps (no grad)
+            with torch.no_grad():
+                f4_hr, f6_hr = model.encoder(q_hr_tensor)
+
+            # SR output irreps (after HR conv refinement, grad flows to all trainable layers)
+            f4_sr, f6_sr = outputs['hr_convolved_irreps']
+            # # OLD: f4_sr, f6_sr = outputs['upsampled_irreps']
+
+            # Compute Irrep loss (SR irreps vs HR irreps)
+            loss, loss_dict = criterion(f4_sr, f6_sr, f4_hr, f6_hr)
+            loss.backward()
+
+            total_loss += loss_dict['loss_total']
+            total_f4 += loss_dict['loss_f4']
+            total_f6 += loss_dict['loss_f6']
         
         # Gradient clipping (prevent exploding gradients)
-        torch.nn.utils.clip_grad_norm_(model.conv_layer.parameters(), max_norm=1.0)
+        torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
+        # # OLD: only clipped conv_layer + upsample_layer
         
         # Update weights
         optimizer.step()
         
         # Update scheduler
-        scheduler.step(loss)
+        scheduler.step(total_loss / max(1, num_samples))
         
         # Record history
-        history['loss_total'].append(loss_dict['loss_total'])
-        history['loss_f4'].append(loss_dict['loss_f4'])
-        history['loss_f6'].append(loss_dict['loss_f6'])
+        avg_loss = total_loss / max(1, num_samples)
+        avg_f4 = total_f4 / max(1, num_samples)
+        avg_f6 = total_f6 / max(1, num_samples)
+
+        history['loss_total'].append(avg_loss)
+        history['loss_f4'].append(avg_f4)
+        history['loss_f6'].append(avg_f6)
         history['lr'].append(optimizer.param_groups[0]['lr'])
         
         # Log progress
         if (epoch + 1) % log_interval == 0 or epoch == 0:
             elapsed = time.time() - start_time
             print(f"Epoch [{epoch+1:4d}/{num_epochs}] | "
-                  f"Loss: {loss_dict['loss_total']:.6f} | "
-                  f"L_f4: {loss_dict['loss_f4']:.6f} | "
-                  f"L_f6: {loss_dict['loss_f6']:.6f} | "
-                  f"LR: {optimizer.param_groups[0]['lr']:.2e} | "
-                  f"Time: {elapsed:.1f}s")
-    
+                f"Loss: {avg_loss:.6f} | "
+                f"L_f4: {avg_f4:.6f} | "
+                f"L_f6: {avg_f6:.6f} | "
+                f"LR: {optimizer.param_groups[0]['lr']:.2e} | "
+                f"Time: {elapsed:.1f}s")
+
+        # Periodic stage visualization
+        if viz_interval > 0 and viz_context is not None and (epoch + 1) % viz_interval == 0:
+            print(f"\n  Rendering stage IPF maps at epoch {epoch+1}...")
+            _viz = viz_context
+            model.eval()
+            with torch.no_grad():
+                outputs_viz = model.forward(_viz['q_tensor'], img_shape=_viz['img_shape'])
+                f4_enc, f6_enc = outputs_viz['encoded']
+                f4_conv, f6_conv = outputs_viz['convolved']
+                f4_up, f6_up = outputs_viz['upsampled_irreps']
+                f4_hrc, f6_hrc = outputs_viz['hr_convolved_irreps']
+                viz_hr_shape = outputs_viz['hr_shape']
+                q_encoded = _viz['decoder_stage'].decode_final(f4_enc, f6_enc)
+                q_encoded = match_symmetry_batch(_viz['q_tensor'], q_encoded, model.physics)
+                q_convolved = _viz['decoder_stage'].decode_final(f4_conv, f6_conv)
+                q_convolved = match_symmetry_batch(_viz['q_tensor'], q_convolved, model.physics)
+                q_upsampled = _viz['decoder_stage'].decode_final(f4_up, f6_up)
+                q_upsampled = match_symmetry_batch(_viz['q_hr_tensor'], q_upsampled, model.physics)
+                q_hr_conv = _viz['decoder_stage'].decode_final(f4_hrc, f6_hrc)
+                q_hr_conv = match_symmetry_batch(_viz['q_hr_tensor'], q_hr_conv, model.physics)
+                q_out = match_symmetry_batch(_viz['q_hr_tensor'], outputs_viz['output'], model.physics)
+            stages_viz = [
+                {"name": "Stage 0: Input (LR)", "quaternions": outputs_viz['input'], "img_shape": _viz['img_shape']},
+                {"name": "Stage 1: Encoded (LR)", "quaternions": q_encoded, "img_shape": _viz['img_shape']},
+                {"name": f"Stage 2: Convolved (Epoch {epoch+1})", "quaternions": q_convolved, "img_shape": _viz['img_shape']},
+                {"name": f"Stage 3: TransposeConv Upsampled (Epoch {epoch+1})", "quaternions": q_upsampled, "img_shape": viz_hr_shape},
+                {"name": f"Stage 4: HR Conv (Epoch {epoch+1})", "quaternions": q_hr_conv, "img_shape": viz_hr_shape},
+                {"name": f"Stage 5: Output (Epoch {epoch+1})", "quaternions": q_out, "img_shape": viz_hr_shape}
+            ]
+            viz_path = os.path.join(output_dir, f'stage_ipf_maps_epoch_{epoch+1:04d}.png')
+            render_stage_ipf_maps(stages_viz, _viz['img_shape'], viz_path, _viz['fcc_sym'])
+            model.conv_layer.train()
+            model.upsample_layer.train()
+            model.hr_conv_layer.train()
+
     total_time = time.time() - start_time
     print("-"*70)
     print(f"Training complete in {total_time:.1f}s")
@@ -234,51 +323,6 @@ def plot_training_curves(history, output_dir):
 
 
 # ==============================================================================
-# DATASET LOADER
-# ==============================================================================
-class QuaternionDataset(torch.utils.data.Dataset):
-    """Simple dataset for loading quaternion patches from .npy files."""
-    
-    def __init__(self, data_dir, max_files=None):
-        """
-        Args:
-            data_dir: Directory containing .npy files with quaternion data
-            max_files: Maximum number of files to load (None = all)
-        """
-        self.data_dir = Path(data_dir)
-        self.files = sorted(list(self.data_dir.glob("*.npy")))
-        
-        if max_files:
-            self.files = self.files[:max_files]
-        
-        print(f"Found {len(self.files)} files in {data_dir}")
-        
-        # Load all data into memory for simplicity
-        self.data = []
-        for f in self.files:
-            q_data = np.load(f)
-            # Handle different formats: (H, W, 4) or (4, H, W)
-            if q_data.shape[-1] == 4:
-                q_data = q_data.reshape(-1, 4)
-            elif q_data.shape[0] == 4:
-                q_data = q_data.reshape(4, -1).T
-            
-            self.data.append(q_data)
-        
-        self.data = np.concatenate(self.data, axis=0).astype(np.float32)
-        print(f"Loaded {len(self.data)} quaternions total")
-    
-    def __len__(self):
-        return len(self.data)
-    
-    def __getitem__(self, idx):
-        q = self.data[idx]
-        # Normalize
-        q = q / np.linalg.norm(q)
-        return torch.from_numpy(q)
-
-
-# ==============================================================================
 # STAGE-BY-STAGE DECODER (for visualization)
 # ==============================================================================
 class StageDecoder(nn.Module):
@@ -297,6 +341,15 @@ class StageDecoder(nn.Module):
     
     def decode_final(self, f4, f6):
         """Decode using the model's final output (currently only uses f4)."""
+        # If f4/f6 contain multiple irrep copies (e.g., SR r^2 copies),
+        # pick a single copy for decoding (index 0).
+        if f4.shape[1] % 9 == 0 and f4.shape[1] != 9:
+            copies = f4.shape[1] // 9
+            f4 = f4.view(-1, copies, 9)[:, 0, :]
+        if f6.shape[1] % 13 == 0 and f6.shape[1] != 13:
+            copies = f6.shape[1] // 13
+            f6 = f6.view(-1, copies, 13)[:, 0, :]
+
         return self.decoder(f4, f6)
 
 
@@ -436,8 +489,9 @@ def render_stage_ipf_maps(stages_config, img_shape, output_path, fcc_sym):
         if torch.is_tensor(q):
             q = q.cpu().numpy()
 
-        # Reshape to image
-        H, W = img_shape
+        # Reshape to image (allow per-stage override)
+        stage_shape = stage.get('img_shape', img_shape)
+        H, W = stage_shape
         q_img = q.reshape(H, W, 4)
         stage_images.append(q_img)
         stage_names.append(stage['name'])
@@ -510,7 +564,6 @@ def render_stage_ipf_maps(stages_config, img_shape, output_path, fcc_sym):
     plt.close(fig_boundary)
     print(f"✓ Saved boundary maps to: {boundary_output_path}")
 
-
 def match_symmetry_batch(q_truth, q_reconstructed, physics):
     """Match reconstructed quaternions to closest symmetry variant."""
     batch_size = q_truth.shape[0]
@@ -559,63 +612,74 @@ def main():
     # Configuration
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     print(f"\nDevice: {device}")
-    
+
     # Training hyperparameters
-    NUM_EPOCHS = 500
+    NUM_EPOCHS = 100
     LEARNING_RATE = 1e-3
     LOG_INTERVAL = 50
-    
-    data_dir = "/data/home/umang/Materials/Materials_data_mount/EBSD/IN718_FZ_2D_SR_x4/Open718_QSR_x4/Train/HR_Data"
+
+    dataset_out_root = "/data/home/umang/Materials/Materials_data_mount/EBSD//"
+    dataset_name = "IN718_FZ_2D_SR_x4/Open718_QSR_x4/"
+    dataset_dir = os.path.join(dataset_out_root, dataset_name)
     output_dir = "./training_outputs"
     os.makedirs(output_dir, exist_ok=True)
-    
+
     # ==============================================================================
     # 1. INITIALIZE MODEL
     # ==============================================================================
     print("\n" + "="*70)
     print("INITIALIZING MODEL")
     print("="*70)
-    
+
     model = EBSDSuper(device=device, grid_samples=10000, batch_size=1000)
     print(f"Model initialized on {device}")
-    
+
     # ==============================================================================
     # 2. LOAD SAMPLE DATA
     # ==============================================================================
     print("\n" + "="*70)
     print("LOADING SAMPLE DATA")
     print("="*70)
-    
-    # Load a sample image
-    sample_file = Path(data_dir) / "Open718_QSR_x4_train_hr_x_block_0.npy"
-    q_sample = np.load(sample_file)
-    print(f"Loaded sample image: {sample_file.name}, shape: {q_sample.shape}")
-    
-    # Handle format
-    if q_sample.shape[-1] == 4:
-        img_shape = q_sample.shape[:2]
-    elif q_sample.shape[0] == 4:
-        img_shape = q_sample.shape[1:]
-    else:
-        raise ValueError(f"Cannot determine format from shape {q_sample.shape}")
-    
+
+    train_ds = QuaternionDataset(
+        dataset_root=dataset_dir,
+        split="Train",
+        preload=True,
+        preload_torch=True,  # preload as CPU torch tensors
+    )
+
+    # Get first sample: (LR, HR) pair in (C, H, W) format
+    q_lr_chw = train_ds[0][0]  # LR quaternions (C, H, W)
+    q_hr_chw = train_ds[0][1]  # HR quaternions (C, H, W)
+    print(f"LR sample shape (C,H,W): {q_lr_chw.shape}")
+    print(f"HR sample shape (C,H,W): {q_hr_chw.shape}")
+
+    # Convert from (C, H, W) to (H, W, C)
+    q_lr_hwc = q_lr_chw.permute(1, 2, 0)
+    q_hr_hwc = q_hr_chw.permute(1, 2, 0)
+
     # Take a smaller crop for faster training (256x256)
-    crop_size = min(256, img_shape[0], img_shape[1])
-    q_crop = q_sample[:crop_size, :crop_size, :] if q_sample.shape[-1] == 4 else q_sample[:, :crop_size, :crop_size]
-    
-    if q_crop.shape[-1] == 4:
-        img_shape = (crop_size, crop_size)
-        q_flat = q_crop.reshape(-1, 4)
-    else:
-        img_shape = (crop_size, crop_size)
-        q_flat = q_crop.reshape(4, -1).T
-    
-    # Convert to torch and normalize
-    q_tensor = torch.from_numpy(q_flat).float().to(device)
+    full_lr_shape = q_lr_hwc.shape[:2]
+    crop_size = min(256, full_lr_shape[0], full_lr_shape[1])
+    hr_crop_size = crop_size * model.upsample_factor
+
+    q_lr_crop = q_lr_hwc[:crop_size, :crop_size, :]
+    q_hr_crop = q_hr_hwc[:hr_crop_size, :hr_crop_size, :]
+
+    img_shape = (crop_size, crop_size)
+    hr_img_shape = (hr_crop_size, hr_crop_size)
+
+    # Flatten and move to device
+    q_tensor = q_lr_crop.reshape(-1, 4).to(device)
     q_tensor = q_tensor / torch.norm(q_tensor, dim=1, keepdim=True)
-    
-    print(f"Training data shape: {q_tensor.shape}")
-    print(f"Image shape: {img_shape}")
+
+    q_hr_tensor = q_hr_crop.reshape(-1, 4).to(device)
+    q_hr_tensor = q_hr_tensor / torch.norm(q_hr_tensor, dim=1, keepdim=True)
+
+    print(f"Training LR shape: {q_tensor.shape}")
+    print(f"Training HR shape: {q_hr_tensor.shape}")
+    print(f"LR image shape: {img_shape}")
+    print(f"HR image shape: {hr_img_shape}")
     
     # ==============================================================================
     # 3. VISUALIZE BEFORE TRAINING (untrained conv layer)
@@ -624,7 +688,7 @@ def main():
     print("VISUALIZATION BEFORE TRAINING")
     print("="*70)
     
-    fcc_sym = Phase(space_group=225).point_group
+    fcc_sym = utils.symmetry_utils.resolve_symmetry(train_ds.symmetry)
     decoder_stage = StageDecoder(model.physics, model.decoder)
     decoder_stage.to(device)
     
@@ -632,23 +696,34 @@ def main():
     model.eval()
     with torch.no_grad():
         outputs_before = model.forward(q_tensor, img_shape=img_shape)
-        
+
         # Decode stages
         f4_enc, f6_enc = outputs_before['encoded']
         q_encoded = decoder_stage.decode_final(f4_enc, f6_enc)
         q_encoded = match_symmetry_batch(q_tensor, q_encoded, model.physics)
-        
+
         f4_conv, f6_conv = outputs_before['convolved']
         q_convolved_before = decoder_stage.decode_final(f4_conv, f6_conv)
         q_convolved_before = match_symmetry_batch(q_tensor, q_convolved_before, model.physics)
-        
-        q_output_before = match_symmetry_batch(q_tensor, outputs_before['output'], model.physics)
-    
+
+        f4_up, f6_up = outputs_before['upsampled_irreps']
+        before_hr_shape = outputs_before['hr_shape']
+        q_upsampled_before = decoder_stage.decode_final(f4_up, f6_up)
+        q_upsampled_before = match_symmetry_batch(q_hr_tensor, q_upsampled_before, model.physics)
+
+        f4_hrc, f6_hrc = outputs_before['hr_convolved_irreps']
+        q_hr_conv_before = decoder_stage.decode_final(f4_hrc, f6_hrc)
+        q_hr_conv_before = match_symmetry_batch(q_hr_tensor, q_hr_conv_before, model.physics)
+
+        q_output_before = match_symmetry_batch(q_hr_tensor, outputs_before['output'], model.physics)
+
     stages_before = [
-        {"name": "Stage 0: Input", "quaternions": outputs_before['input']},
-        {"name": "Stage 1: Encoded", "quaternions": q_encoded},
-        {"name": "Stage 2: Convolved (BEFORE)", "quaternions": q_convolved_before},
-        {"name": "Stage 3: Output (BEFORE)", "quaternions": q_output_before}
+        {"name": "Stage 0: Input (LR)", "quaternions": outputs_before['input'], "img_shape": img_shape},
+        {"name": "Stage 1: Encoded (LR)", "quaternions": q_encoded, "img_shape": img_shape},
+        {"name": "Stage 2: Convolved (LR, BEFORE)", "quaternions": q_convolved_before, "img_shape": img_shape},
+        {"name": "Stage 3: TransposeConv Upsampled (HR, BEFORE)", "quaternions": q_upsampled_before, "img_shape": before_hr_shape},
+        {"name": "Stage 4: HR Conv (HR, BEFORE)", "quaternions": q_hr_conv_before, "img_shape": before_hr_shape},
+        {"name": "Stage 5: Output (HR, BEFORE)", "quaternions": q_output_before, "img_shape": before_hr_shape}
     ]
     
     render_stage_ipf_maps(stages_before, img_shape, 
@@ -657,13 +732,26 @@ def main():
     # ==============================================================================
     # 4. TRAIN CONVOLUTION LAYER
     # ==============================================================================
+    VIZ_INTERVAL = 50  # Render stage IPF maps every N epochs
+
+    viz_context = {
+        'q_tensor': q_tensor,
+        'q_hr_tensor': q_hr_tensor,
+        'img_shape': img_shape,
+        'hr_img_shape': hr_img_shape,
+        'fcc_sym': fcc_sym,
+        'decoder_stage': decoder_stage,
+    }
+
     history = train_convolution_layer(
         model=model,
-        q_tensor=q_tensor,
-        img_shape=img_shape,
+        train_ds=train_ds,
+        crop_size=crop_size,
         num_epochs=NUM_EPOCHS,
         lr=LEARNING_RATE,
         log_interval=LOG_INTERVAL,
+        viz_interval=VIZ_INTERVAL,
+        viz_context=viz_context,
         output_dir=output_dir
     )
     
@@ -678,19 +766,33 @@ def main():
     model.eval()
     with torch.no_grad():
         outputs_after = model.forward(q_tensor, img_shape=img_shape)
-        
+
         # Decode stages
+        f4_enc_after, f6_enc_after = outputs_after['encoded']
         f4_conv, f6_conv = outputs_after['convolved']
+        q_encoded_after = decoder_stage.decode_final(f4_enc_after, f6_enc_after)
+        q_encoded_after = match_symmetry_batch(q_tensor, q_encoded_after, model.physics)
         q_convolved_after = decoder_stage.decode_final(f4_conv, f6_conv)
         q_convolved_after = match_symmetry_batch(q_tensor, q_convolved_after, model.physics)
-        
-        q_output_after = match_symmetry_batch(q_tensor, outputs_after['output'], model.physics)
-    
+
+        f4_up_after, f6_up_after = outputs_after['upsampled_irreps']
+        after_hr_shape = outputs_after['hr_shape']
+        q_upsampled_after = decoder_stage.decode_final(f4_up_after, f6_up_after)
+        q_upsampled_after = match_symmetry_batch(q_hr_tensor, q_upsampled_after, model.physics)
+
+        f4_hrc_after, f6_hrc_after = outputs_after['hr_convolved_irreps']
+        q_hr_conv_after = decoder_stage.decode_final(f4_hrc_after, f6_hrc_after)
+        q_hr_conv_after = match_symmetry_batch(q_hr_tensor, q_hr_conv_after, model.physics)
+
+        q_output_after = match_symmetry_batch(q_hr_tensor, outputs_after['output'], model.physics)
+
     stages_after = [
-        {"name": "Stage 0: Input", "quaternions": outputs_after['input']},
-        {"name": "Stage 1: Encoded", "quaternions": q_encoded},
-        {"name": "Stage 2: Convolved (AFTER)", "quaternions": q_convolved_after},
-        {"name": "Stage 3: Output (AFTER)", "quaternions": q_output_after}
+        {"name": "Stage 0: Input (LR)", "quaternions": outputs_after['input'], "img_shape": img_shape},
+        {"name": "Stage 1: Encoded (LR)", "quaternions": q_encoded_after, "img_shape": img_shape},
+        {"name": "Stage 2: Convolved (LR, AFTER)", "quaternions": q_convolved_after, "img_shape": img_shape},
+        {"name": "Stage 3: TransposeConv Upsampled (HR, AFTER)", "quaternions": q_upsampled_after, "img_shape": after_hr_shape},
+        {"name": "Stage 4: HR Conv (HR, AFTER)", "quaternions": q_hr_conv_after, "img_shape": after_hr_shape},
+        {"name": "Stage 5: Output (HR, AFTER)", "quaternions": q_output_after, "img_shape": after_hr_shape}
     ]
     
     render_stage_ipf_maps(stages_after, img_shape,
