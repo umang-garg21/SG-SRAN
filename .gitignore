@@ -1,3 +1,9 @@
+mount_data.sh
+experiments/**/runs
+experiments/**/logs
+experiments/**/checkpoints
+**/visualizations/
+*.npy
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -5,13 +11,6 @@ __pycache__/
 .vscode/
 # C extensions
 *.so
-experiments/**/runs
-experiments/**/logs
-experiments/**/checkpoints
-
-**/visualizations/
-
-*.npy
 # Distribution / packaging
 .Python
 build/

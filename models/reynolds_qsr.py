@@ -385,7 +385,9 @@ class Reynolds_QSR(nn.Module):
         # Load global symmetry group tensors
         # ------------------------------------------------------------------
         gt_path = "/data/home/umang/Materials/Reynolds-QSR/symmetry_groups/O_group.npy"
-        gti_path = "/data/home/umang/Materials/Reynolds-QSR/symmetry_groups/O_group_inv.npy"
+        gti_path = (
+            "/data/home/umang/Materials/Reynolds-QSR/symmetry_groups/O_group_inv.npy"
+        )
         gt = torch.tensor(np.load(gt_path), dtype=torch.float32)
         gti = torch.tensor(np.load(gti_path), dtype=torch.float32)
         self.register_buffer("group_tensor", gt)
