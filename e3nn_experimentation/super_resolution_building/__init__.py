@@ -1,7 +1,7 @@
 import sys
 import os
 
-_project_root = "/data/home/umang/Materials/Reynolds-QSR_clean_ipf"
+_project_root = "/home/warren/projects/Reynolds-QSR/"
 _paths = [
     _project_root,
     os.path.join(_project_root, "utils"),

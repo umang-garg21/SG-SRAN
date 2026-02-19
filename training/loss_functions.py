@@ -530,6 +530,61 @@ class SymmetryAwareRotationalLoss(torch.nn.Module):
         loss_grad = F.l1_loss(grad_pred, grad_target)
 
         return loss_rot + self.weight_gradient * loss_grad
+
+
+class SimpleSymmetryRotationalLoss(torch.nn.Module):
+    """
+    Simple symmetry-aware rotational loss.
+
+    - No gradient kernels
+    - No edge weighting
+    - Just min-over-symmetry geodesic angle
+    """
+
+    def __init__(self, sym_group_path: str):
+        super().__init__()
+        syms = torch.tensor(np.load(sym_group_path), dtype=torch.float32)
+        self.register_buffer("syms", syms)
+
+    def forward(self, q_pred: torch.Tensor, q_target: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+        # Supports (N,4) and (B,4,H,W)
+        if q_pred.dim() > 2:
+            qp = q_pred.permute(0, 2, 3, 1).contiguous().view(-1, 4)
+            qt = q_target.permute(0, 2, 3, 1).contiguous().view(-1, 4)
+        else:
+            qp = q_pred.contiguous().view(-1, 4)
+            qt = q_target.contiguous().view(-1, 4)
+
+        qp = F.normalize(qp, dim=1, eps=eps)
+        qt = F.normalize(qt, dim=1, eps=eps)
+
+        # Relative quaternion q_rel = qt * conj(qp)
+        w1, x1, y1, z1 = qp[:, 0], qp[:, 1], qp[:, 2], qp[:, 3]
+        w2, x2, y2, z2 = qt[:, 0], qt[:, 1], qt[:, 2], qt[:, 3]
+
+        rw = w2 * w1 - x2 * (-x1) - y2 * (-y1) - z2 * (-z1)
+        rx = w2 * (-x1) + x2 * w1 + y2 * (-z1) - z2 * (-y1)
+        ry = w2 * (-y1) - x2 * (-z1) + y2 * w1 + z2 * (-x1)
+        rz = w2 * (-z1) + x2 * (-y1) - y2 * (-x1) + z2 * w1
+
+        s_w, s_x, s_y, s_z = self.syms[:, 0], self.syms[:, 1], self.syms[:, 2], self.syms[:, 3]
+
+        rw = rw.reshape(-1, 1)
+        rx = rx.reshape(-1, 1)
+        ry = ry.reshape(-1, 1)
+        rz = rz.reshape(-1, 1)
+
+        s_w = s_w.reshape(1, -1)
+        s_x = s_x.reshape(1, -1)
+        s_y = s_y.reshape(1, -1)
+        s_z = s_z.reshape(1, -1)
+
+        w_dist = (rw * s_w - rx * s_x - ry * s_y - rz * s_z)
+        max_w_val, _ = torch.max(torch.abs(w_dist), dim=1)
+        max_w_val = torch.clamp(max_w_val, min=-(1.0 - eps), max=(1.0 - eps))
+
+        angle = 2.0 * torch.acos(max_w_val)
+        return angle.mean()
     
 def rotational_distance_orientation_loss(
     q_pred: torch.Tensor, q_target: torch.Tensor
@@ -627,6 +682,10 @@ def build_loss(cfg):
         return SymmetryAwareRotationalLoss(
             sym_group_path=cfg.get("symmetry_group_path", "/data/home/umang/Materials/Reynolds-QSR/symmetry_groups/O_group.npy"),
             weight_gradient=cfg.get("weight_gradient", 0.05)
+        )
+    elif loss_type == "simple_symmetry_rotational":
+        return SimpleSymmetryRotationalLoss(
+            sym_group_path=cfg.get("symmetry_group_path", "symmetry_groups/O_group.npy")
         )
     elif loss_type == "l1":
         return torch.nn.L1Loss()

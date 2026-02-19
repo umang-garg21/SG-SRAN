@@ -6,8 +6,8 @@ import os
 import time
 from e3nn import o3
 import sys
-sys.path.append("/data/home/umang/Materials/Reynolds-QSR_clean_ipf")
-sys.path.append("/data/home/umang/Materials/Reynolds-QSR_clean_ipf/utils")
+sys.path.append("/home/warren/projects/Reynolds-QSR/")
+sys.path.append("/home/warren/projects/Reynolds-QSR/utils")
 # Dataset builder
 from training.data_loading import QuaternionDataset
 from visualization.visualize_sr_results import render_input_output_side_by_side
@@ -85,10 +85,10 @@ class FCCEncoder(nn.Module):
 # 3. DECODER (Spherical Peak Finding)
 # ==============================================================================
 class SphericalSamplingDecoder(nn.Module):
-    def __init__(self, physics, grid_res=50):
+    def __init__(self, physics, grid_res=100000):
         super().__init__()
         # Reduced to 10k for faster processing
-        self.n_fib_samples = 100000
+        self.n_fib_samples = grid_res
         self.physics = physics
         
         # A. Precompute a Scanning Grid (Fibonacci Sphere)
@@ -179,7 +179,7 @@ def run_physics_decoder_test():
     print("="*70)
     
     # Now we can use CUDA with our patched wigner_D!
-    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     physics = FCCPhysics(device)
     encoder = FCCEncoder(physics)
@@ -197,14 +197,14 @@ def run_physics_decoder_test():
         ], dim=1)
     
         # # Example usage
-    dataset_out_root = "/data/home/umang/Materials/Materials_data_mount/EBSD//"
-    dataset_name = "IN718_FZ_2D_SR_x4/Open718_QSR_x4/"
+    dataset_out_root = "/data/warren/materials/EBSD"
+    dataset_name = "IN718_FZ_2D_SR_x4/"
 
     dataset_dir = os.path.join(dataset_out_root, dataset_name)
 
     train_ds = QuaternionDataset(
         dataset_root=dataset_dir,
-        split="Train",
+        split="Test",
         preload=True,
         preload_torch=True,  # preload as CPU torch tensors
     )

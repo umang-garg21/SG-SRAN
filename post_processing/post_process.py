@@ -5,7 +5,6 @@ from visualization.visualize_sr_results import (
     render_input_output_side_by_side,
     render_sr_hr_lr_side_by_side,
 )
-from visualization.unfolded_ipf import fz_ipf_sr_hr_side_by_side  # plot_sr_hr_fz_ipf
 
 from utils.quat_ops import torch_to_numpy_quat, to_spatial_quat
 from training.data_loading import build_dataloader
@@ -124,6 +123,7 @@ def run_postprocess_from_config(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     sym_class = resolve_symmetry(getattr(cfg, "symmetry_group"))
+    render_fz_ipf = bool(getattr(cfg, "render_fz_ipf", False))
     print(f"Using symmetry group: {getattr(cfg, 'symmetry_group')}")
 
     # --------------------------
@@ -192,14 +192,17 @@ def run_postprocess_from_config(
                 overwrite=True,
             )
 
-            fz_ipf_sr_hr_side_by_side(
-                sr_np,
-                hr_np,
-                sym_class=getattr(cfg, "symmetry_group"),
-                ref_dir="Z",
-                max_points=5000,
-                out_png=str(out_dir / f"fz_ipf_sr_hr_{sample_counter:03d}.png"),
-            )
+            if render_fz_ipf:
+                from visualization.unfolded_ipf import fz_ipf_sr_hr_side_by_side
+
+                fz_ipf_sr_hr_side_by_side(
+                    sr_np,
+                    hr_np,
+                    sym_class=getattr(cfg, "symmetry_group"),
+                    ref_dir="Z",
+                    max_points=5000,
+                    out_png=str(out_dir / f"fz_ipf_sr_hr_{sample_counter:03d}.png"),
+                )
 
             print(f"Rendered sample {sample_counter+1} → {out_path}")
             sample_counter += 1

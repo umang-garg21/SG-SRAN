@@ -274,35 +274,52 @@ class EquivariantSpatialConv(nn.Module):
         # and projects onto l=4 and l=6 output subspaces
         out_per_copy = [tp(features, neighbor_features) for tp in self.tp_per_copy]
         out_features = torch.cat(out_per_copy, dim=-1)
-        
+
         # Split back to f4 and f6 (with r^2 copies)
         f4_size = 9 * self._upsample_copies
         f4_out = out_features[:, :f4_size]
         f6_out = out_features[:, f4_size:]
-        
+
+        # --- BEGIN CHANGE: residual connection (fix dying-TP / zero-gradient) ---
+        # Residual connection: ensures nonzero output and gradient flow even
+        # when TP weights initialise to a cancelling configuration (dying TP).
+        # For upsample_factor=1 the input and output shapes match directly.
+        # For upsample_factor>1 (r^2 copies), tile the input r^2 times to match.
+        if self._upsample_copies == 1:
+            f4_out = f4_out + f4
+            f6_out = f6_out + f6
+        else:
+            f4_out = f4_out + f4.repeat(1, self._upsample_copies)
+            f6_out = f6_out + f6.repeat(1, self._upsample_copies)
+        # --- END CHANGE ---
+
         return f4_out, f6_out
 
 # ==============================================================================
-# 3.6 EQUIVARIANT TRANSPOSE CONVOLUTION (LEARNED UPSAMPLING)
+# 3.6 EQUIVARIANT UPSAMPLE CONVOLUTION
 # ==============================================================================
-class EquivariantTransposeConv(nn.Module):
+class EquivariantUpsampleConv(nn.Module):
     """
-    Equivariant transpose convolution for learned spatial upsampling.
+    Equivariant spatial upsampling via nearest-neighbour interpolation +
+    learnable TP refinement.
 
-    Instead of PixelShuffle (conv → r² copies → rearrange), this directly
-    produces HR features by scattering each LR pixel into an r×r output patch
-    via stride-r transpose convolution, then refining with a tensor product.
+    Mirrors EquivariantSpatialConv exactly — one extra step at the top:
 
-    The spatial upsampling is done per-channel (groups=C) so each irrep
-    component is upsampled independently — this preserves equivariance since
-    the transpose conv applies the same scalar kernel to every component
-    within an irrep. The equivariant mixing then happens through the
-    FullyConnectedTensorProduct on the upsampled features.
+        1. F.interpolate(mode='nearest')   — equivariant, no parameters
+        2. Scalar spatial gather            — single (k×k) weight, broadcast
+                                             identically across all 22 irrep
+                                             components (same as EquivariantSpatialConv)
+        3. FCTP(self, neighbor) -> output  — CG-allowed mixing
+        4. Residual from step-1 output
 
-    Pipeline per forward call:
-        1. ConvTranspose2d (stride=r) upsamples (1, 22, H, W) → (1, 22, rH, rW)
-        2. Spatial neighbor gathering at HR resolution (3×3 learnable kernel)
-        3. FullyConnectedTensorProduct for equivariant feature mixing at HR
+    Physics guarantee: F.interpolate applies the same operation to every
+    channel, so all components of each irrep receive identical spatial
+    treatment — equivariance is structurally enforced, not hoped for.
+
+    Initialisation:
+        spatial_weights = delta (center=1, rest=0)  -> no blurring at init
+        tp.weight       = zeros                      -> TP output = 0 at init
+        => initial output = clean nearest-neighbour upsample (Stage 2 at r×)
     """
     def __init__(self, kernel_size=3, upsample_factor=4):
         super().__init__()
@@ -311,69 +328,22 @@ class EquivariantTransposeConv(nn.Module):
         self.padding = kernel_size // 2
 
         self.irreps_io = Irreps("1x4e + 1x6e")
-        C = 22  # 9 (l=4) + 13 (l=6)
 
-        # Transpose convolution for spatial upsampling (per-channel, scalar kernel)
-        # groups=C means each of the 22 channels gets its own scalar kernel
-        # so no cross-channel mixing happens here — equivariance is preserved
-        tp_kernel = upsample_factor + 2  # slightly larger than stride for overlap
-        tp_pad = (tp_kernel - upsample_factor) // 2
-        self.transpose_conv = nn.ConvTranspose2d(
-            in_channels=C,
-            out_channels=C,
-            kernel_size=tp_kernel,
-            stride=upsample_factor,
-            padding=tp_pad,
-            output_padding=0,
-            groups=C,  # depthwise — preserves equivariance
-            bias=False,
-        )
-        # Initialize close to bilinear interpolation
-        with torch.no_grad():
-            self._init_bilinear()
+        # Scalar spatial gather — identical pattern to EquivariantSpatialConv.
+        # Delta init: neighbor_flat == feat_flat at init (no blurring).
+        self.spatial_weights = nn.Parameter(torch.zeros(kernel_size, kernel_size))
+        self.spatial_weights.data[kernel_size // 2, kernel_size // 2] = 1.0
 
-        # Spatial neighbor weights at HR for gathering context
-        self.spatial_weights = nn.Parameter(
-            torch.ones(kernel_size, kernel_size) / (kernel_size * kernel_size)
-        )
-
-        # Equivariant tensor product for feature refinement at HR
+        # Equivariant TP for HR refinement.
+        # Zero init: TP output = 0 at init, so output = residual = clean NN.
         self.tp = FullyConnectedTensorProduct(
             self.irreps_io,
             self.irreps_io,
             self.irreps_io,
             shared_weights=True,
         )
-
-        # Print structure
-        print("\n" + "=" * 70)
-        print("EQUIVARIANT TRANSPOSE CONV — LEARNED UPSAMPLING")
-        print("=" * 70)
-        print(f"Upsample factor: {upsample_factor}")
-        print(f"Irreps:          {self.irreps_io}")
-        print(f"Transpose conv:  {C}ch, kernel={tp_kernel}, stride={upsample_factor}, groups={C}")
-        print(f"HR spatial kernel: {kernel_size}×{kernel_size}")
-        print(f"Tensor product paths (Clebsch-Gordan):")
-        for ins in self.tp.instructions:
-            l1 = self.irreps_io[ins.i_in1].ir.l
-            l2 = self.irreps_io[ins.i_in2].ir.l
-            lo = self.tp.irreps_out[ins.i_out].ir.l
-            print(f"  {l1} ⊗ {l2} → {lo}  (weight shape: {ins.path_shape})")
-        print("=" * 70 + "\n")
-
-    def _init_bilinear(self):
-        """Initialize transpose conv weights to approximate bilinear upsampling."""
-        r = self.upsample_factor
-        k = self.transpose_conv.kernel_size[0]
-        # Standard bilinear kernel
-        bilinear_1d = torch.zeros(k)
-        center = (k - 1) / 2.0
-        for i in range(k):
-            bilinear_1d[i] = max(0, 1 - abs(i - center) / r)
-        bilinear_2d = bilinear_1d.unsqueeze(1) * bilinear_1d.unsqueeze(0)
-        bilinear_2d = bilinear_2d / bilinear_2d.sum()  # normalize
-        # Shape: (C, 1, k, k) for groups=C
-        self.transpose_conv.weight.data[:] = bilinear_2d.unsqueeze(0).unsqueeze(0)
+        with torch.no_grad():
+            self.tp.weight.data.zero_()
 
     def forward(self, f4, f6, img_shape):
         """
@@ -383,44 +353,41 @@ class EquivariantTransposeConv(nn.Module):
             img_shape: (H, W) LR spatial dimensions
 
         Returns:
-            f4_out: (rH*rW, 9) l=4 irrep features at HR
-            f6_out: (rH*rW, 13) l=6 irrep features at HR
-            hr_shape: (rH, rW) output spatial dimensions
+            f4_out:   (rH*rW, 9)
+            f6_out:   (rH*rW, 13)
+            hr_shape: (rH, rW)
         """
         H, W = img_shape
         r = self.upsample_factor
+        C = 22
 
         # Pack to image: (1, 22, H, W)
         features = torch.cat([f4, f6], dim=-1)
-        feat_img = features.view(H, W, -1).permute(2, 0, 1).unsqueeze(0)
+        feat_img = features.view(H, W, C).permute(2, 0, 1).unsqueeze(0)
 
-        # 1. Transpose conv upsample → (1, 22, rH, rW)
-        feat_hr = self.transpose_conv(feat_img)
-        # Trim to exact target size (handles any padding asymmetry)
-        feat_hr = feat_hr[:, :, :H * r, :W * r]
+        # 1. Nearest-neighbour upsample — same op for all 22 channels -> equivariant
+        feat_hr = F.interpolate(feat_img, scale_factor=float(r), mode='nearest')  # (1, 22, rH, rW)
 
-        C = feat_hr.shape[1]
         Hr, Wr = H * r, W * r
 
-        # 2. Gather spatial neighbors at HR with learnable weights
+        # 2. Scalar spatial gather at HR (identical to EquivariantSpatialConv)
         feat_padded = F.pad(feat_hr, [self.padding] * 4, mode='replicate')
         patches = feat_padded.unfold(2, self.kernel_size, 1).unfold(3, self.kernel_size, 1)
         w = self.spatial_weights.view(1, 1, 1, 1, self.kernel_size, self.kernel_size)
-        neighbor_features = (patches * w).sum(dim=(-1, -2))
+        neighbor_features = (patches * w).sum(dim=(-1, -2))  # (1, 22, rH, rW)
 
-        # Flatten to (Hr*Wr, 22)
-        feat_flat = feat_hr.squeeze(0).permute(1, 2, 0).reshape(-1, C)
+        # Flatten to (rH*rW, 22)
+        feat_flat     = feat_hr.squeeze(0).permute(1, 2, 0).reshape(-1, C)
         neighbor_flat = neighbor_features.squeeze(0).permute(1, 2, 0).reshape(-1, C)
 
-        # 3. Equivariant tensor product mixing at HR
+        # 3. Equivariant TP mixing at HR
         out_features = self.tp(feat_flat, neighbor_flat)
 
-        f4_out = out_features[:, :9]
-        f6_out = out_features[:, 9:]
-        hr_shape = (Hr, Wr)
+        # 4. Residual from nearest-neighbour output
+        f4_out = out_features[:, :9] + feat_flat[:, :9]
+        f6_out = out_features[:, 9:] + feat_flat[:, 9:]
 
-        return f4_out, f6_out, hr_shape
-
+        return f4_out, f6_out, (Hr, Wr)
 
 # ==============================================================================
 # 4. UNIFIED SUPER-RESOLUTION MODULE
@@ -459,21 +426,25 @@ class EBSDSuper(nn.Module):
         # LR spatial convolution (no upsampling, just neighbor mixing)
         self.conv_layer = EquivariantSpatialConv(kernel_size=3, upsample_factor=1)
         # Equivariant transpose conv for learned upsampling (replaces pixelshuffle + hr_conv)
-        self.upsample_layer = EquivariantTransposeConv(kernel_size=3, upsample_factor=self.upsample_factor)
+        self.upsample_layer = EquivariantUpsampleConv(kernel_size=3, upsample_factor=self.upsample_factor)
         # HR spatial convolution (refinement at SR resolution after transpose conv)
         self.hr_conv_layer = EquivariantSpatialConv(kernel_size=3, upsample_factor=1)
 
         # Move to device
         self.to(self.device)
 
-    def forward(self, quaternions, img_shape=None):
+    def forward(self, quaternions, img_shape=None, decode=True):
         """
         Forward pass: quaternions -> latent features -> convolved features -> reconstructed quaternions
-        
+
         Args:
             quaternions: Input quaternions of shape (N, 4) or (H, W, 4)
             img_shape: Optional (H, W) tuple. Required for convolution stage.
-            
+            decode: If False, skip the SphericalSamplingDecoder and return None for
+                    'output'. Set to False during training to avoid the costly
+                    (N_hr_pixels × 10 000) intermediate tensor when the decoder
+                    output is not needed for the loss.
+
         Returns:
             Dict with intermediate stages for visualization
         """
@@ -497,24 +468,35 @@ class EBSDSuper(nn.Module):
         # Stage 1: Encode
         f4, f6 = self.encoder(quaternions)
         
+        #import pdb; pdb.set_trace()
         # Stage 2: LR spatial convolution (trainable, no upsampling)
         if img_shape is not None:
             f4_conv, f6_conv = self.conv_layer(f4, f6, img_shape)
         else:
             f4_conv, f6_conv = f4, f6
 
+        #import pdb; pdb.set_trace()
+
         # Stage 3: Equivariant transpose-conv upsample (trainable)
         f4_up, f6_up, hr_shape = f4_conv, f6_conv, img_shape
         if img_shape is not None and self.upsample_factor > 1:
             f4_up, f6_up, hr_shape = self.upsample_layer(f4_conv, f6_conv, img_shape)
+
+        #import pdb; pdb.set_trace()
 
         # Stage 4: HR spatial convolution — refinement at SR resolution (trainable)
         f4_hr, f6_hr = f4_up, f6_up
         if hr_shape is not None:
             f4_hr, f6_hr = self.hr_conv_layer(f4_up, f6_up, hr_shape)
 
-        # Stage 5: Decode (frozen)
-        q_reconstructed = self.decoder(f4_hr, f6_hr)
+        #import pdb; pdb.set_trace()
+
+        # Stage 5: Decode (frozen) — skipped when decode=False (e.g. during training)
+        # The decoder creates a (N_pixels × 10 000) intermediate tensor which is
+        # ~10 GB at HR resolution; skip it when only the irreps are needed.
+        q_reconstructed = self.decoder(f4_hr, f6_hr) if decode else None
+
+        #import pdb; pdb.set_trace()
 
         return {
             "input": quaternions,
@@ -829,7 +811,164 @@ class EBSDSuper(nn.Module):
             print(f"⚠ Could not render comparison: {e}")
 
 # ==============================================================================
-# 5. VERIFICATION
+# 5. BATCHED VARIANTS (process B images per forward call)
+# ==============================================================================
+
+class BatchedEquivariantSpatialConv(EquivariantSpatialConv):
+    """
+    Batched variant of EquivariantSpatialConv.
+
+    Overrides forward to accept an explicit batch_size so that B images
+    (each of shape H×W) are processed together as a single (B, C, H, W)
+    tensor through the spatial stage, then flattened to (B*H*W, C) for the
+    FullyConnectedTensorProduct.  All parameters and __init__ logic are
+    inherited unchanged from EquivariantSpatialConv.
+    """
+
+    def forward(self, f4, f6, img_shape, batch_size=1):
+        H, W = img_shape
+        B = batch_size
+
+        features = torch.cat([f4, f6], dim=-1)          # (B*H*W, 22)
+        C = features.shape[1]
+
+        # Reshape to (B, C, H, W) for batched spatial ops
+        features_img = features.view(B, H, W, C).permute(0, 3, 1, 2)
+
+        features_padded = F.pad(features_img, [self.padding] * 4, mode='replicate')
+        patches = features_padded.unfold(2, self.kernel_size, 1).unfold(3, self.kernel_size, 1)
+        weights = self.spatial_weights.view(1, 1, 1, 1, self.kernel_size, self.kernel_size)
+        neighbor_features = (patches * weights).sum(dim=(-1, -2))  # (B, C, H, W)
+
+        # Flatten to (B*H*W, C) for TP
+        feat_flat     = features_img.permute(0, 2, 3, 1).reshape(-1, C)
+        neighbor_flat = neighbor_features.permute(0, 2, 3, 1).reshape(-1, C)
+
+        out_per_copy = [tp(feat_flat, neighbor_flat) for tp in self.tp_per_copy]
+        out_features = torch.cat(out_per_copy, dim=-1)
+
+        f4_size = 9 * self._upsample_copies
+        f4_out = out_features[:, :f4_size]
+        f6_out = out_features[:, f4_size:]
+
+        # Residual (same logic as parent)
+        if self._upsample_copies == 1:
+            f4_out = f4_out + f4
+            f6_out = f6_out + f6
+        else:
+            f4_out = f4_out + f4.repeat(1, self._upsample_copies)
+            f6_out = f6_out + f6.repeat(1, self._upsample_copies)
+
+        return f4_out, f6_out
+
+
+class BatchedEquivariantUpsampleConv(EquivariantUpsampleConv):
+    """
+    Batched variant of EquivariantUpsampleConv.
+
+    F.interpolate handles a batch dimension natively; this override simply
+    reshapes the flat (B*H*W, C) input into (B, C, H, W) before interpolation
+    and (B*rH*rW, C) for the TP.
+    """
+
+    def forward(self, f4, f6, img_shape, batch_size=1):
+        H, W = img_shape
+        B = batch_size
+        r = self.upsample_factor
+        C = 22
+
+        features = torch.cat([f4, f6], dim=-1)                       # (B*H*W, 22)
+        feat_img = features.view(B, H, W, C).permute(0, 3, 1, 2)    # (B, C, H, W)
+
+        # F.interpolate handles batch natively
+        feat_hr = F.interpolate(feat_img, scale_factor=float(r), mode='nearest')  # (B, C, rH, rW)
+
+        Hr, Wr = H * r, W * r
+
+        feat_padded = F.pad(feat_hr, [self.padding] * 4, mode='replicate')
+        patches = feat_padded.unfold(2, self.kernel_size, 1).unfold(3, self.kernel_size, 1)
+        w = self.spatial_weights.view(1, 1, 1, 1, self.kernel_size, self.kernel_size)
+        neighbor_features = (patches * w).sum(dim=(-1, -2))          # (B, C, Hr, Wr)
+
+        # Flatten to (B*Hr*Wr, C) for TP
+        feat_flat     = feat_hr.permute(0, 2, 3, 1).reshape(-1, C)
+        neighbor_flat = neighbor_features.permute(0, 2, 3, 1).reshape(-1, C)
+
+        out_features = self.tp(feat_flat, neighbor_flat)
+        f4_out = out_features[:, :9] + feat_flat[:, :9]
+        f6_out = out_features[:, 9:] + feat_flat[:, 9:]
+
+        return f4_out, f6_out, (Hr, Wr)
+
+
+class BatchedEBSDSuper(nn.Module):
+    """
+    Batched variant of EBSDSuper.
+
+    Processes B LR images per forward call by stacking their flattened pixels
+    into a single (B*H*W, 4) tensor and routing them through
+    BatchedEquivariantSpatialConv / BatchedEquivariantUpsampleConv so that
+    all spatial ops run as a single (B, C, H, W) kernel instead of B separate
+    (1, C, H, W) calls.
+
+    The existing EBSDSuper class is completely unchanged.
+
+    Args:
+        device:          Device string ('cpu', 'cuda', 'cuda:0', …)
+        grid_samples:    Fibonacci sphere samples for the decoder (default 10000)
+        upsample_factor: Spatial upsampling ratio (default 4)
+    """
+
+    def __init__(self, device='cpu', grid_samples=10000, upsample_factor=4):
+        super().__init__()
+        self.device = torch.device(device)
+        self.upsample_factor = upsample_factor
+
+        self.physics      = FCCPhysics(self.device)
+        self.encoder      = FCCEncoder(self.physics)
+        self.decoder      = SphericalSamplingDecoder(self.physics, grid_res=grid_samples)
+        self.conv_layer   = BatchedEquivariantSpatialConv(kernel_size=3, upsample_factor=1)
+        self.upsample_layer = BatchedEquivariantUpsampleConv(kernel_size=3, upsample_factor=upsample_factor)
+        self.hr_conv_layer  = BatchedEquivariantSpatialConv(kernel_size=3, upsample_factor=1)
+
+        self.to(self.device)
+
+    def forward(self, quaternions, img_shape, batch_size=1, decode=False):
+        """
+        Args:
+            quaternions: (B*H*W, 4) — B LR images stacked pixel-wise
+            img_shape:   (H, W)     — LR spatial shape (identical for all B images)
+            batch_size:  B          — number of images stacked in quaternions
+            decode:      If False, skip SphericalSamplingDecoder (saves ~10 GB at HR)
+
+        Returns:
+            Same dict as EBSDSuper.forward; 'output' is None when decode=False.
+        """
+        quaternions = quaternions / torch.norm(quaternions, dim=1, keepdim=True)
+
+        f4, f6 = self.encoder(quaternions)
+
+        f4_conv, f6_conv = self.conv_layer(f4, f6, img_shape, batch_size=batch_size)
+
+        f4_up, f6_up, hr_shape = self.upsample_layer(f4_conv, f6_conv, img_shape, batch_size=batch_size)
+
+        f4_hr, f6_hr = self.hr_conv_layer(f4_up, f6_up, hr_shape, batch_size=batch_size)
+
+        q_reconstructed = self.decoder(f4_hr, f6_hr) if decode else None
+
+        return {
+            "input":              quaternions,
+            "encoded":            (f4, f6),
+            "convolved":          (f4_conv, f6_conv),
+            "upsampled_irreps":   (f4_up, f6_up),
+            "hr_convolved_irreps":(f4_hr, f6_hr),
+            "hr_shape":           hr_shape,
+            "output":             q_reconstructed,
+        }
+
+
+# ==============================================================================
+# 6. VERIFICATION
 # ==============================================================================
 def run_physics_decoder_test():
     print("="*70)

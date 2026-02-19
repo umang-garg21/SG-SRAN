@@ -23,6 +23,23 @@ import sys
 import time
 from pathlib import Path
 import cv2  # OpenCV for image processing
+import random
+
+# Reproducible runs: set global seeds
+SEED = 0
+os.environ['PYTHONHASHSEED'] = str(SEED)
+os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
+random.seed(SEED)
+np.random.seed(SEED)
+torch.manual_seed(SEED)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(SEED)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
+try:
+    torch.use_deterministic_algorithms(True)
+except Exception:
+    pass
 
 # Add project root to path
 sys.path.append("/data/home/umang/Materials/Reynolds-QSR_clean_ipf")
@@ -38,8 +55,9 @@ from encoder_decoder import (
     FCCPhysics,
     FCCEncoder,
     SphericalSamplingDecoder,
-    EquivariantTransposeConv,
+    EquivariantUpsampleConv,
     EBSDSuper,
+    BatchedEBSDSuper,
     wigner_D_cuda
 )
 
@@ -116,7 +134,7 @@ def train_convolution_layer(model, train_ds, crop_size, num_epochs=100, lr=1e-3,
     print("="*70)
 
     device = model.device
-    num_samples = min(10, len(train_ds))
+    num_samples = len(train_ds)
     print(f"Number of LR/HR pairs: {num_samples}")
 
     # Setup optimizer (optimize conv_layer, upsample_layer, and hr_conv_layer parameters)
@@ -190,7 +208,10 @@ def train_convolution_layer(model, train_ds, crop_size, num_epochs=100, lr=1e-3,
             q_hr_tensor = q_hr_tensor / torch.norm(q_hr_tensor, dim=1, keepdim=True)
 
             # Forward pass through full model (LR -> SR)
-            outputs = model.forward(q_lr_tensor, img_shape=(crop, crop))
+            # decode=False skips the SphericalSamplingDecoder: its output is not
+            # used in the loss and allocating the (N_hr_pixels × 10 000) tensor
+            # wastes ~10 GB of memory every step.
+            outputs = model.forward(q_lr_tensor, img_shape=(crop, crop), decode=False)
 
             # HR target irreps (no grad)
             with torch.no_grad():
@@ -238,6 +259,11 @@ def train_convolution_layer(model, train_ds, crop_size, num_epochs=100, lr=1e-3,
                 f"LR: {optimizer.param_groups[0]['lr']:.2e} | "
                 f"Time: {elapsed:.1f}s")
 
+        # Save training curves every 10 epochs, overwriting the same file
+        if (epoch + 1) % 10 == 0:
+            print()  # flush the \r sample-progress line before printing
+            plot_training_curves(history, output_dir)
+
         # Periodic stage visualization
         if viz_interval > 0 and viz_context is not None and (epoch + 1) % viz_interval == 0:
             print(f"\n  Rendering stage IPF maps at epoch {epoch+1}...")
@@ -281,6 +307,195 @@ def train_convolution_layer(model, train_ds, crop_size, num_epochs=100, lr=1e-3,
     # Plot training curves
     plot_training_curves(history, output_dir)
     
+    return history
+
+
+def train_batched_convolution_layer(model, train_ds, crop_size, batch_size=100,
+                                    min_batch_size=4, batch_size_halflife=50,
+                                    num_epochs=100, lr=1e-3,
+                                    log_interval=10, viz_interval=50,
+                                    viz_context=None,
+                                    output_dir='./training_outputs'):
+    """
+    Batched version of train_convolution_layer.
+
+    Stacks `batch_size` LR/HR samples per forward pass so all spatial ops
+    run as a single (B, C, H, W) kernel instead of B sequential (1, C, H, W)
+    calls.  The existing train_convolution_layer is completely unchanged.
+
+    Batch size is annealed: it starts at `batch_size`, halves every
+    `batch_size_halflife` epochs, and stabilises at `min_batch_size`.
+    The DataLoader is recreated whenever the batch size changes.
+
+    Requires model to be a BatchedEBSDSuper instance.
+
+    Args:
+        model:                BatchedEBSDSuper instance
+        train_ds:             QuaternionDataset (provides (4,H,W) tensors)
+        crop_size:            LR crop size applied to each sample
+        batch_size:           Initial number of samples stacked per forward pass
+        min_batch_size:       Floor for the batch size schedule
+        batch_size_halflife:  Epochs between each /2 reduction
+        num_epochs, lr, log_interval, viz_interval, viz_context, output_dir:
+            same semantics as train_convolution_layer
+    """
+    from torch.utils.data import DataLoader
+
+    print("\n" + "="*70)
+    print("BATCHED TRAINING (Irrep Representation Loss)")
+    print("="*70)
+
+    device = model.device
+    print(f"Initial batch size: {batch_size}  |  min: {min_batch_size}  |  halflife: {batch_size_halflife} epochs")
+
+    # DataLoader is created/recreated inside the epoch loop when the size changes
+    dl = None
+    prev_batch_size = None
+
+    trainable_params = (
+        list(model.conv_layer.parameters())
+        + list(model.upsample_layer.parameters())
+        + list(model.hr_conv_layer.parameters())
+    )
+    optimizer = optim.Adam(trainable_params, lr=lr)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=20, verbose=True)
+    criterion = IrrepLoss(lambda_f4=1.0, lambda_f6=1.0)
+
+    num_params = sum(p.numel() for p in trainable_params if p.requires_grad)
+    print(f"Trainable parameters: {num_params}")
+    print(f"Learning rate: {lr}")
+    print(f"Number of epochs: {num_epochs}")
+    print("-"*70)
+
+    history = {'loss_total': [], 'loss_f4': [], 'loss_f6': [], 'lr': []}
+
+    model.conv_layer.train()
+    model.upsample_layer.train()
+    model.hr_conv_layer.train()
+    start_time = time.time()
+
+    for epoch in range(num_epochs):
+        # Batch size schedule: halve every batch_size_halflife epochs, floor at min_batch_size
+        halvings = epoch // batch_size_halflife
+        cur_batch_size = max(min_batch_size, batch_size >> halvings)
+        if cur_batch_size != prev_batch_size:
+            dl = DataLoader(train_ds, batch_size=cur_batch_size, shuffle=True,
+                            num_workers=4, pin_memory=True, drop_last=False)
+            if prev_batch_size is not None:
+                print(f"\n  [Batch schedule] batch_size {prev_batch_size} → {cur_batch_size}")
+            prev_batch_size = cur_batch_size
+
+        optimizer.zero_grad()
+        total_loss = 0.0
+        total_f4   = 0.0
+        total_f6   = 0.0
+        num_batches = 0
+
+        for batch_idx, (q_lr_chw_b, q_hr_chw_b) in enumerate(dl):
+            # q_lr_chw_b: (B, 4, H, W),  q_hr_chw_b: (B, 4, H', W')
+            B = q_lr_chw_b.shape[0]
+
+            # (B, 4, H, W) → (B, H, W, 4)
+            q_lr_hwc = q_lr_chw_b.permute(0, 2, 3, 1)
+            q_hr_hwc = q_hr_chw_b.permute(0, 2, 3, 1)
+
+            H_lr  = q_lr_hwc.shape[1]
+            crop  = min(crop_size, H_lr)
+            hr_crop = crop * model.upsample_factor
+
+            # (B, crop, crop, 4) → (B*crop*crop, 4)
+            q_lr_flat = q_lr_hwc[:, :crop,    :crop,    :].reshape(-1, 4).float().to(device)
+            q_hr_flat = q_hr_hwc[:, :hr_crop, :hr_crop, :].reshape(-1, 4).float().to(device)
+
+            q_lr_flat = q_lr_flat / torch.norm(q_lr_flat, dim=1, keepdim=True)
+            q_hr_flat = q_hr_flat / torch.norm(q_hr_flat, dim=1, keepdim=True)
+
+            outputs = model.forward(q_lr_flat, img_shape=(crop, crop),
+                                    batch_size=B, decode=False)
+
+            with torch.no_grad():
+                f4_hr_tgt, f6_hr_tgt = model.encoder(q_hr_flat)
+
+            f4_sr, f6_sr = outputs['hr_convolved_irreps']
+            loss, loss_dict = criterion(f4_sr, f6_sr, f4_hr_tgt, f6_hr_tgt)
+            loss.backward()
+
+            total_loss += loss_dict['loss_total']
+            total_f4   += loss_dict['loss_f4']
+            total_f6   += loss_dict['loss_f6']
+            num_batches += 1
+
+            if batch_idx % 5 == 0:
+                print(f"  Epoch {epoch+1}/{num_epochs} - Batch {batch_idx+1}/{len(dl)}",
+                      end='\r', flush=True)
+
+        torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
+        optimizer.step()
+        scheduler.step(total_loss / max(1, num_batches))
+
+        avg_loss = total_loss / max(1, num_batches)
+        avg_f4   = total_f4   / max(1, num_batches)
+        avg_f6   = total_f6   / max(1, num_batches)
+
+        history['loss_total'].append(avg_loss)
+        history['loss_f4'].append(avg_f4)
+        history['loss_f6'].append(avg_f6)
+        history['lr'].append(optimizer.param_groups[0]['lr'])
+
+        if (epoch + 1) % log_interval == 0 or epoch == 0:
+            elapsed = time.time() - start_time
+            print(f"Epoch [{epoch+1:4d}/{num_epochs}] | "
+                  f"BS: {cur_batch_size:3d} | "
+                  f"Loss: {avg_loss:.6f} | "
+                  f"L_f4: {avg_f4:.6f} | "
+                  f"L_f6: {avg_f6:.6f} | "
+                  f"LR: {optimizer.param_groups[0]['lr']:.2e} | "
+                  f"Time: {elapsed:.1f}s")
+
+        if (epoch + 1) % 10 == 0:
+            print()
+            plot_training_curves(history, output_dir)
+
+        if viz_interval > 0 and viz_context is not None and (epoch + 1) % viz_interval == 0:
+            print(f"\n  Rendering stage IPF maps at epoch {epoch+1}...")
+            _viz = viz_context
+            model.eval()
+            with torch.no_grad():
+                outputs_viz = model.forward(_viz['q_tensor'], img_shape=_viz['img_shape'],
+                                            batch_size=1, decode=True)
+                f4_enc, f6_enc   = outputs_viz['encoded']
+                f4_conv, f6_conv = outputs_viz['convolved']
+                f4_up, f6_up     = outputs_viz['upsampled_irreps']
+                f4_hrc, f6_hrc   = outputs_viz['hr_convolved_irreps']
+                viz_hr_shape     = outputs_viz['hr_shape']
+                q_encoded   = _viz['decoder_stage'].decode_final(f4_enc, f6_enc)
+                q_encoded   = match_symmetry_batch(_viz['q_tensor'],    q_encoded,   model.physics)
+                q_convolved = _viz['decoder_stage'].decode_final(f4_conv, f6_conv)
+                q_convolved = match_symmetry_batch(_viz['q_tensor'],    q_convolved, model.physics)
+                q_upsampled = _viz['decoder_stage'].decode_final(f4_up, f6_up)
+                q_upsampled = match_symmetry_batch(_viz['q_hr_tensor'], q_upsampled, model.physics)
+                q_hr_conv   = _viz['decoder_stage'].decode_final(f4_hrc, f6_hrc)
+                q_hr_conv   = match_symmetry_batch(_viz['q_hr_tensor'], q_hr_conv,   model.physics)
+                q_out       = match_symmetry_batch(_viz['q_hr_tensor'], outputs_viz['output'], model.physics)
+            stages_viz = [
+                {"name": "Stage 0: Input (LR)",                                "quaternions": outputs_viz['input'], "img_shape": _viz['img_shape']},
+                {"name": "Stage 1: Encoded (LR)",                              "quaternions": q_encoded,           "img_shape": _viz['img_shape']},
+                {"name": f"Stage 2: Convolved (Epoch {epoch+1})",              "quaternions": q_convolved,         "img_shape": _viz['img_shape']},
+                {"name": f"Stage 3: TransposeConv Upsampled (Epoch {epoch+1})","quaternions": q_upsampled,         "img_shape": viz_hr_shape},
+                {"name": f"Stage 4: HR Conv (Epoch {epoch+1})",                "quaternions": q_hr_conv,           "img_shape": viz_hr_shape},
+                {"name": f"Stage 5: Output (Epoch {epoch+1})",                 "quaternions": q_out,               "img_shape": viz_hr_shape},
+            ]
+            viz_path = os.path.join(output_dir, f'stage_ipf_maps_epoch_{epoch+1:04d}.png')
+            render_stage_ipf_maps(stages_viz, _viz['img_shape'], viz_path, _viz['fcc_sym'])
+            model.conv_layer.train()
+            model.upsample_layer.train()
+            model.hr_conv_layer.train()
+
+    total_time = time.time() - start_time
+    print("-"*70)
+    print(f"Training complete in {total_time:.1f}s")
+    print(f"Final loss: {history['loss_total'][-1]:.6f}")
+    plot_training_curves(history, output_dir)
     return history
 
 
@@ -614,14 +829,14 @@ def main():
     print(f"\nDevice: {device}")
 
     # Training hyperparameters
-    NUM_EPOCHS = 100
+    NUM_EPOCHS = 500
     LEARNING_RATE = 1e-3
     LOG_INTERVAL = 50
 
     dataset_out_root = "/data/home/umang/Materials/Materials_data_mount/EBSD//"
     dataset_name = "IN718_FZ_2D_SR_x4/Open718_QSR_x4/"
     dataset_dir = os.path.join(dataset_out_root, dataset_name)
-    output_dir = "./training_outputs"
+    output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "training_outputs")
     os.makedirs(output_dir, exist_ok=True)
 
     # ==============================================================================
@@ -631,7 +846,7 @@ def main():
     print("INITIALIZING MODEL")
     print("="*70)
 
-    model = EBSDSuper(device=device, grid_samples=10000, batch_size=1000)
+    model = BatchedEBSDSuper(device=device, grid_samples=10000, upsample_factor=4)
     print(f"Model initialized on {device}")
 
     # ==============================================================================
@@ -648,11 +863,19 @@ def main():
         preload_torch=True,  # preload as CPU torch tensors
     )
 
-    # Get first sample: (LR, HR) pair in (C, H, W) format
-    q_lr_chw = train_ds[0][0]  # LR quaternions (C, H, W)
-    q_hr_chw = train_ds[0][1]  # HR quaternions (C, H, W)
-    print(f"LR sample shape (C,H,W): {q_lr_chw.shape}")
-    print(f"HR sample shape (C,H,W): {q_hr_chw.shape}")
+    test_ds = QuaternionDataset(
+        dataset_root=dataset_dir,
+        split="Test",
+        preload=True,
+        preload_torch=True,
+    )
+    print(f"Train samples: {len(train_ds)}  |  Test samples: {len(test_ds)}")
+
+    # Get first test sample for visualization: (LR, HR) pair in (C, H, W) format
+    q_lr_chw = test_ds[0][0]  # LR quaternions (C, H, W)
+    q_hr_chw = test_ds[0][1]  # HR quaternions (C, H, W)
+    print(f"Viz LR sample shape (C,H,W): {q_lr_chw.shape}")
+    print(f"Viz HR sample shape (C,H,W): {q_hr_chw.shape}")
 
     # Convert from (C, H, W) to (H, W, C)
     q_lr_hwc = q_lr_chw.permute(1, 2, 0)
@@ -676,8 +899,8 @@ def main():
     q_hr_tensor = q_hr_crop.reshape(-1, 4).to(device)
     q_hr_tensor = q_hr_tensor / torch.norm(q_hr_tensor, dim=1, keepdim=True)
 
-    print(f"Training LR shape: {q_tensor.shape}")
-    print(f"Training HR shape: {q_hr_tensor.shape}")
+    print(f"Viz LR tensor shape: {q_tensor.shape}")
+    print(f"Viz HR tensor shape: {q_hr_tensor.shape}")
     print(f"LR image shape: {img_shape}")
     print(f"HR image shape: {hr_img_shape}")
     
@@ -695,7 +918,7 @@ def main():
     # Run forward pass before training
     model.eval()
     with torch.no_grad():
-        outputs_before = model.forward(q_tensor, img_shape=img_shape)
+        outputs_before = model.forward(q_tensor, img_shape=img_shape, batch_size=1, decode=True)
 
         # Decode stages
         f4_enc, f6_enc = outputs_before['encoded']
@@ -743,10 +966,11 @@ def main():
         'decoder_stage': decoder_stage,
     }
 
-    history = train_convolution_layer(
+    history = train_batched_convolution_layer(
         model=model,
         train_ds=train_ds,
         crop_size=crop_size,
+        batch_size=100,
         num_epochs=NUM_EPOCHS,
         lr=LEARNING_RATE,
         log_interval=LOG_INTERVAL,
@@ -765,7 +989,7 @@ def main():
     # Run forward pass after training
     model.eval()
     with torch.no_grad():
-        outputs_after = model.forward(q_tensor, img_shape=img_shape)
+        outputs_after = model.forward(q_tensor, img_shape=img_shape, batch_size=1, decode=True)
 
         # Decode stages
         f4_enc_after, f6_enc_after = outputs_after['encoded']

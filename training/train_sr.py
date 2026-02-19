@@ -36,6 +36,12 @@ def parse_args():
         help="Path to experiment directory containing config.json",
     )
     parser.add_argument(
+        "--config",
+        type=str,
+        default="config.json",
+        help="Config filename inside exp_dir (default: config.json)",
+    )
+    parser.add_argument(
         "--gpu_ids",
         type=str,
         default=None,
@@ -58,7 +64,7 @@ def main():
     exp_dir = Path(args_cli.exp_dir)
 
     # --- Config ---
-    config_path = exp_dir / "config.json"
+    config_path = exp_dir / args_cli.config
     run_config_path = exp_dir / "logs" / "run_config.json"
     cfg = load_and_prepare_config(config_path, run_config_path)
 

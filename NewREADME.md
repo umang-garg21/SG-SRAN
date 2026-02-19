@@ -7,3 +7,9 @@
    2.  NOTE: it will overwrite the exepirment if it already exists
 3.  This runs python tests 
    1.  ./scripts/run_tests.sh
+4.  
+scripts/train.sh /home/warren/projects/Reynolds-QSR/experiments/IN718/debug_x4 --config config_smoke.json
+
+scripts/train_autoencoder.sh /home/warren/projects/Reynolds-QSR/experiments/IN718/debug_x4 --config config_smoke.json
+
+

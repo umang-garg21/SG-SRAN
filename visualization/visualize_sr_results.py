@@ -192,7 +192,6 @@ def render_sr_hr_lr_side_by_side(
                 hemisphere=True,
                 reduce_fz=True,
                 sym=sym_class,
-                scalar_first=True,
                 quat_first=False,
             )
 
