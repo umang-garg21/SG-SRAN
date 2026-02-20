@@ -4,9 +4,11 @@
     "batch_size": 8,
     "lr": 0.001,
     "scale": 4,
-    "grid_res": 1000,
+    "n_feats": 32,
+    "kernel_size": 3,
     "symmetry_group": "O",
-    "loss": "rotational_distance",
+    "loss": "simple_symmetry_rotational",
+    "symmetry_group_path": "symmetry_groups/O_group.npy",
     "amp": false,
     "clip": 1.0,
     "vis_every": 2,
@@ -24,16 +26,9 @@
         "weight_decay": 0.0001
     },
     "model": {
-        "type": "fcc_autoencoder",
+        "type": "fcc_autoencoder_learnable_decoder",
         "dropout": 0.0
     },
-    "decoder_backend": "lookup",
-    "decoder_lookup_resolution": 1,
-    "decoder_lookup_npy_path": "symmetry_groups/fast_lookup_res1.npy",
-    "decoder_lookup_rebuild": false,
-    "decoder_lookup_refine_steps": 32,
-    "decoder_lookup_refine_lr": 0.001,
-    "decoder_w6": 0.5,
     "logging": {
         "tensorboard": true,
         "save_best_only": true,

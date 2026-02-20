@@ -1,3 +1,5 @@
+from typing import Any
+
 import torch
 import torch.nn as nn
 
@@ -36,6 +38,17 @@ class LearnableFCCDecoder(nn.Module):
         norm = torch.norm(q, dim=-1, keepdim=True).clamp_min(1e-12)
         return q / norm
 
+    def forward_with_debug(self, f4: torch.Tensor, f6: torch.Tensor) -> dict[str, torch.Tensor]:
+        x = torch.cat([f4, f6], dim=-1)
+        q_raw = self.net(x)
+        q_norm = torch.norm(q_raw, dim=-1, keepdim=True).clamp_min(1e-12)
+        q_normalized = q_raw / q_norm
+        return {
+            "q_raw": q_raw,
+            "q_norm": q_norm,
+            "q_normalized": q_normalized,
+        }
+
 
 class FCCLearnableDecoderAutoEncoder(nn.Module):
     """
@@ -71,14 +84,32 @@ class FCCLearnableDecoderAutoEncoder(nn.Module):
         return quats / norm
 
     @staticmethod
+    def _quat_conjugate(quats: torch.Tensor) -> torch.Tensor:
+        return torch.cat([quats[..., :1], -quats[..., 1:]], dim=-1)
+
+    def _to_active_convention(self, quats: torch.Tensor) -> torch.Tensor:
+        return self._quat_conjugate(quats)
+
+    def _from_active_convention(self, quats: torch.Tensor) -> torch.Tensor:
+        return self._quat_conjugate(quats)
+
+    @staticmethod
     def quat_mul(q1: torch.Tensor, q2: torch.Tensor) -> torch.Tensor:
         return FCCAutoEncoder.quat_mul(q1, q2)
 
     def encode(self, quats: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        return self.encoder(quats)
+        quats_active = self._to_active_convention(quats)
+        return self.encoder(quats_active)
 
     def decode(self, f4: torch.Tensor, f6: torch.Tensor) -> torch.Tensor:
-        return self.decoder(f4, f6)
+        q_active = self.decoder(f4, f6)
+        return self._from_active_convention(q_active)
+
+    def decode_with_debug(self, f4: torch.Tensor, f6: torch.Tensor) -> dict[str, torch.Tensor]:
+        dec = self.decoder.forward_with_debug(f4, f6)
+        q_active = dec["q_normalized"]
+        dec["q_output"] = self._from_active_convention(q_active)
+        return dec
 
     def forward(self, quats: torch.Tensor, normalize_input: bool = True) -> torch.Tensor:
         quats = quats.to(self.device)
@@ -98,44 +129,79 @@ class FCCLearnableDecoderAutoEncoder(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         q_decoded = q_decoded.to(self.device)
         q_truth = q_truth.to(self.device)
+        q_decoded = self._normalize_quaternions(q_decoded)
+        q_truth = self._normalize_quaternions(q_truth)
 
-        q_rec_expanded = q_decoded.unsqueeze(1).expand(-1, 24, -1)
-        fcc_syms_expanded = self.physics.fcc_syms.unsqueeze(0).expand(q_truth.shape[0], -1, -1)
+        q_decoded_active = self._to_active_convention(q_decoded)
+        q_truth_active = self._to_active_convention(q_truth)
 
-        w1, x1, y1, z1 = (
-            q_rec_expanded[..., 0],
-            q_rec_expanded[..., 1],
-            q_rec_expanded[..., 2],
-            q_rec_expanded[..., 3],
-        )
-        w2, x2, y2, z2 = (
-            fcc_syms_expanded[..., 0],
-            fcc_syms_expanded[..., 1],
-            fcc_syms_expanded[..., 2],
-            fcc_syms_expanded[..., 3],
-        )
+        batch_size = q_truth_active.shape[0]
+        q_rec_expanded = q_decoded_active.unsqueeze(1).expand(-1, 24, -1)
+        fcc_syms_expanded = self.physics.fcc_syms.unsqueeze(0).expand(batch_size, -1, -1)
 
-        family = torch.stack(
-            [
-                w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
-                w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
-                w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
-                w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
-            ],
-            dim=-1,
-        )
+        q_flat = q_rec_expanded.reshape(-1, 4)
+        g_flat = fcc_syms_expanded.reshape(-1, 4)
 
-        q_truth_expanded = q_truth.unsqueeze(1)
-        dist_pos = torch.norm(family - q_truth_expanded, dim=-1)
-        dist_neg = torch.norm(family + q_truth_expanded, dim=-1)
-        min_dist = torch.minimum(dist_pos, dist_neg)
+        actions: list[tuple[str, torch.Tensor]] = [
+            ("right", self.quat_mul(q_flat, g_flat).view(batch_size, 24, 4)),
+            ("left", self.quat_mul(g_flat, q_flat).view(batch_size, 24, 4)),
+        ]
 
-        errors = torch.min(min_dist, dim=1)[0]
-        best_indices = torch.argmin(min_dist, dim=1)
+        families = torch.cat([fam for _, fam in actions], dim=1)
+        families = self._normalize_quaternions(families)
+        q_truth_expanded = q_truth_active.unsqueeze(1).expand(-1, families.shape[1], -1)
+        delta = self.quat_mul(
+            families.reshape(-1, 4),
+            self._quat_conjugate(q_truth_expanded.reshape(-1, 4)),
+        ).view(batch_size, families.shape[1], 4)
+        delta = self._normalize_quaternions(delta)
 
-        batch_indices = torch.arange(q_truth.shape[0], device=self.device)
-        closest_quats = family[batch_indices, best_indices]
-        use_neg = dist_neg[batch_indices, best_indices] < dist_pos[batch_indices, best_indices]
-        closest_quats[use_neg] = -closest_quats[use_neg]
+        w_abs = delta[..., 0].abs().clamp(max=1.0)
+        misorientation = 2.0 * torch.acos(w_abs)
+        best_flat_idx = torch.argmin(misorientation, dim=1)
+        errors = torch.gather(misorientation, 1, best_flat_idx.unsqueeze(1)).squeeze(1)
+
+        batch_indices = torch.arange(batch_size, device=self.device)
+        closest_active = families[batch_indices, best_flat_idx]
+        closest_quats = self._from_active_convention(closest_active)
+        best_indices = best_flat_idx % 24
 
         return closest_quats, errors, best_indices
+
+    def reconstruct_batch_debug(
+        self,
+        q_batch: torch.Tensor,
+        normalize_input: bool = True,
+        return_metrics: bool = True,
+    ) -> dict[str, Any]:
+        q_batch = q_batch.to(self.device)
+        if normalize_input:
+            q_batch = self._normalize_quaternions(q_batch)
+
+        f4, f6 = self.encode(q_batch)
+        dec = self.decode_with_debug(f4, f6)
+        q_decoded = dec["q_output"]
+        q_reconstructed, errors, best_indices = self.match_closest_symmetry(q_decoded, q_batch)
+
+        out: dict[str, Any] = {
+            "q_input": q_batch,
+            "f4": f4,
+            "f6": f6,
+            "q_raw": dec["q_raw"],
+            "q_norm": dec["q_norm"],
+            "q_decoded": q_decoded,
+            "q_reconstructed": q_reconstructed,
+            "symmetry_index": best_indices,
+        }
+
+        if return_metrics:
+            qA = self._to_active_convention(q_reconstructed)
+            qB = self._to_active_convention(q_batch)
+            delta = self.quat_mul(qA, self._quat_conjugate(qB))
+            delta = self._normalize_quaternions(delta)
+            w_abs = delta[:, 0].abs().clamp(max=1.0)
+            misorientation_deg = 2.0 * torch.acos(w_abs) * 180.0 / torch.pi
+            out["errors"] = errors
+            out["misorientation_deg"] = misorientation_deg
+
+        return out

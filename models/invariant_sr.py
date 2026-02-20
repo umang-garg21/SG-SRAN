@@ -98,15 +98,19 @@ class SphericalSamplingDecoder(nn.Module):
         super().__init__()
         self.n_fib_samples = grid_res
         self.physics = physics
+        self.weight_l4 = 1.0
+        self.weight_l6 = 1.0
 
         self.grid_vecs = self._fibonacci_sphere(samples=self.n_fib_samples, device=physics.device)
         self.Y4_grid = o3.spherical_harmonics(4, self.grid_vecs, normalize=True)
+        self.Y6_grid = o3.spherical_harmonics(6, self.grid_vecs, normalize=True)
 
     def forward(self, f4: torch.Tensor, f6: torch.Tensor) -> torch.Tensor:
-        del f6
         batch_size = f4.shape[0]
 
-        signal = torch.einsum("bi,gi->bg", f4, self.Y4_grid)
+        signal4 = torch.einsum("bi,gi->bg", f4, self.Y4_grid)
+        signal6 = torch.einsum("bi,gi->bg", f6, self.Y6_grid)
+        signal = self.weight_l4 * signal4 + self.weight_l6 * signal6
         _, z_indices = torch.max(signal, dim=1)
         z_axis = self.grid_vecs[z_indices]
 
@@ -144,6 +148,190 @@ class SphericalSamplingDecoder(nn.Module):
             points.append([x, y, z])
 
         return torch.tensor(points, dtype=torch.float32, device=device)
+
+
+class OptimizingFCCDecoder(nn.Module):
+    """
+    Decode (f4, f6) -> quaternion by directly minimizing:
+      ||D4(q)s4 - f4||^2 + w6 * ||D6(q)s6 - f6||^2
+    """
+
+    def __init__(
+        self,
+        physics: FCCPhysics,
+        num_starts: int = 6,
+        steps: int = 25,
+        lr: float = 0.08,
+        w6: float = 0.5,
+        eps: float = 1e-12,
+    ):
+        super().__init__()
+        self.physics = physics
+        self.num_starts = int(num_starts)
+        self.steps = int(steps)
+        self.lr = float(lr)
+        self.w6 = float(w6)
+        self.eps = float(eps)
+
+        self.register_buffer("s4", physics.s4.clone())
+        self.register_buffer("s6", physics.s6.clone())
+
+    @staticmethod
+    def _normalize_quat(q: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
+        q = torch.where(torch.isfinite(q), q, torch.zeros_like(q))
+        norm = q.norm(dim=-1, keepdim=True)
+        qn = q / norm.clamp_min(eps)
+
+        bad = norm.squeeze(-1) < eps
+        if bad.any():
+            qn = qn.clone()
+            qn[bad] = qn.new_tensor([1.0, 0.0, 0.0, 0.0])
+        return qn
+
+    @staticmethod
+    def _fix_sign(q: torch.Tensor) -> torch.Tensor:
+        return torch.where(q[..., :1] < 0, -q, q)
+
+    def _loss(self, q: torch.Tensor, f4_tgt: torch.Tensor, f6_tgt: torch.Tensor) -> torch.Tensor:
+        R = o3.quaternion_to_matrix(q)
+        alpha, beta, gamma = o3.matrix_to_angles(R)
+
+        D4 = wigner_D_cuda(4, alpha, beta, gamma)
+        D6 = wigner_D_cuda(6, alpha, beta, gamma)
+
+        f4_pred = torch.einsum("bij,j->bi", D4, self.s4)
+        f6_pred = torch.einsum("bij,j->bi", D6, self.s6)
+
+        l4 = (f4_pred - f4_tgt).pow(2).mean(dim=-1)
+        l6 = (f6_pred - f6_tgt).pow(2).mean(dim=-1)
+        return l4 + self.w6 * l6
+
+    @torch.no_grad()
+    def _init_quats(self, bsz: int, device: torch.device) -> torch.Tensor:
+        k = self.num_starts
+        q0 = torch.zeros((bsz, k, 4), device=device, dtype=torch.float32)
+        q0[..., 0] = 1.0
+        if k > 1:
+            q_rand = torch.randn((bsz, k - 1, 4), device=device, dtype=torch.float32)
+            q_rand = self._normalize_quat(q_rand, self.eps)
+            q0[:, 1:, :] = q_rand
+        q0 = self._normalize_quat(q0, self.eps)
+        q0 = self._fix_sign(q0)
+        return q0
+
+    def forward(self, f4: torch.Tensor, f6: torch.Tensor) -> torch.Tensor:
+        device = f4.device
+        bsz = f4.shape[0]
+        k = self.num_starts
+
+        f4_tgt = f4.detach().to(torch.float32)
+        f6_tgt = f6.detach().to(torch.float32)
+
+        with torch.no_grad():
+            q_init = self._init_quats(bsz, device)
+
+        u = nn.Parameter(q_init.clone())
+        opt = torch.optim.Adam([u], lr=self.lr)
+
+        f4_rep = f4_tgt[:, None, :].expand(bsz, k, -1).reshape(bsz * k, -1)
+        f6_rep = f6_tgt[:, None, :].expand(bsz, k, -1).reshape(bsz * k, -1)
+
+        for _ in range(self.steps):
+            opt.zero_grad(set_to_none=True)
+            q = self._normalize_quat(u, self.eps)
+            q = self._fix_sign(q)
+            q_flat = q.reshape(bsz * k, 4)
+            loss = self._loss(q_flat, f4_rep, f6_rep).mean()
+            loss.backward()
+            opt.step()
+
+        with torch.no_grad():
+            q = self._normalize_quat(u, self.eps)
+            q = self._fix_sign(q)
+            q_flat = q.reshape(bsz * k, 4)
+            loss_vec = self._loss(q_flat, f4_rep, f6_rep).view(bsz, k)
+
+            best_k = torch.argmin(loss_vec, dim=1)
+            batch_idx = torch.arange(bsz, device=device)
+            q_best = q[batch_idx, best_k, :]
+            q_best = self._normalize_quat(q_best, self.eps)
+            q_best = self._fix_sign(q_best)
+            return q_best
+
+
+class CubochoricOptimizingFCCDecoder(OptimizingFCCDecoder):
+    """
+    Optimizing decoder initialized from cubochoric samples in the FCC FZ.
+    """
+
+    def __init__(
+        self,
+        physics: FCCPhysics,
+        cubochoric_resolution: int = 3,
+        **kwargs: Any,
+    ):
+        super().__init__(physics, **kwargs)
+        self.cubochoric_resolution = int(cubochoric_resolution)
+        if self.cubochoric_resolution < 1:
+            raise ValueError(
+                f"cubochoric_resolution must be >= 1, got {cubochoric_resolution}"
+            )
+        cubochoric_quats = self._build_cubochoric_quat_table(
+            resolution=self.cubochoric_resolution,
+            device=torch.device(physics.device),
+        )
+        self.register_buffer("cubochoric_quats", cubochoric_quats)
+
+    @staticmethod
+    def _build_cubochoric_quat_table(
+        resolution: int,
+        device: torch.device,
+    ) -> torch.Tensor:
+        try:
+            import numpy as np
+            from orix.quaternion import symmetry
+            from orix.sampling import get_sample_fundamental
+        except Exception as exc:
+            raise ImportError(
+                "Cubochoric decoder requires `orix` and `numpy` to be available."
+            ) from exc
+
+        rot = get_sample_fundamental(
+            int(resolution),
+            point_group=symmetry.Oh,
+            method="cubochoric",
+        )
+
+        raw = np.asarray(getattr(rot, "data", rot), dtype=np.float32)
+        if raw.ndim != 2:
+            raw = raw.reshape(-1, 4)
+        if raw.shape[-1] != 4 and raw.shape[0] == 4:
+            raw = raw.T
+        if raw.shape[-1] != 4:
+            raise ValueError(f"Unexpected cubochoric quaternion shape: {tuple(raw.shape)}")
+
+        q = torch.as_tensor(raw, dtype=torch.float32, device=device)
+        q = q / q.norm(dim=-1, keepdim=True).clamp_min(1e-12)
+        q = torch.where(q[..., :1] < 0, -q, q)
+        return q
+
+    @torch.no_grad()
+    def _init_quats(self, bsz: int, device: torch.device) -> torch.Tensor:
+        k = self.num_starts
+        q0 = torch.zeros((bsz, k, 4), device=device, dtype=torch.float32)
+        q0[..., 0] = 1.0
+        if k > 1:
+            table = self.cubochoric_quats.to(device=device, dtype=torch.float32)
+            table_n = table.shape[0]
+            if table_n > 0:
+                idx = torch.randint(0, table_n, (bsz, k - 1), device=device)
+                q0[:, 1:, :] = table[idx]
+            else:
+                q_rand = torch.randn((bsz, k - 1, 4), device=device, dtype=torch.float32)
+                q0[:, 1:, :] = self._normalize_quat(q_rand, self.eps)
+        q0 = self._normalize_quat(q0, self.eps)
+        q0 = self._fix_sign(q0)
+        return q0
 
 
 class EquivariantSpatialConv(nn.Module):
@@ -246,7 +434,16 @@ class InvariantSRModel(nn.Module):
         device: str | torch.device | None = None,
         upsample_factor: int = 4,
         decoder_grid_res: int = 10_000,
+        decoder_backend: str = "optimizing",
+        decoder_cubochoric_resolution: int = 3,
+        decoder_num_starts: int = 6,
+        decoder_steps: int = 25,
+        decoder_lr: float = 0.08,
+        decoder_w6: float = 0.5,
         kernel_size: int = 3,
+        learned_decoder_hidden_dim: int = 64,
+        train_decode_mode: str = "learnable",
+        eval_decode_mode: str = "spherical",
     ):
         super().__init__()
         if device is None:
@@ -262,7 +459,40 @@ class InvariantSRModel(nn.Module):
             kernel_size=kernel_size,
         )
         self.hr_conv_layer = EquivariantSpatialConv(kernel_size=kernel_size)
-        self.decoder = SphericalSamplingDecoder(self.physics, grid_res=decoder_grid_res)
+
+        backend = str(decoder_backend).lower()
+        if backend == "spherical":
+            self.decoder = SphericalSamplingDecoder(self.physics, grid_res=decoder_grid_res)
+        elif backend == "optimizing":
+            self.decoder = OptimizingFCCDecoder(
+                self.physics,
+                num_starts=decoder_num_starts,
+                steps=decoder_steps,
+                lr=decoder_lr,
+                w6=decoder_w6,
+            )
+        elif backend in {"cubochoric", "optimizing_cubochoric"}:
+            self.decoder = CubochoricOptimizingFCCDecoder(
+                self.physics,
+                cubochoric_resolution=decoder_cubochoric_resolution,
+                num_starts=decoder_num_starts,
+                steps=decoder_steps,
+                lr=decoder_lr,
+                w6=decoder_w6,
+            )
+        else:
+            raise ValueError(f"Unknown decoder_backend: {decoder_backend}")
+        self.learned_decoder = nn.Sequential(
+            nn.Linear(22, int(learned_decoder_hidden_dim)),
+            nn.GELU(),
+            nn.Linear(int(learned_decoder_hidden_dim), 4),
+        )
+        self.train_decode_mode = str(train_decode_mode).lower()
+        self.eval_decode_mode = str(eval_decode_mode).lower()
+
+        if self.train_decode_mode == "spherical" and self.eval_decode_mode == "spherical":
+            for param in self.learned_decoder.parameters():
+                param.requires_grad = False
 
     @staticmethod
     def normalize_quaternions(quats: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
@@ -331,12 +561,13 @@ class InvariantSRModel(nn.Module):
 
         return closest_quats, errors, best_indices
 
-    def forward(
+    def _forward_flat(
         self,
         quats: torch.Tensor,
         img_shape: tuple[int, int],
         decode: bool = True,
         match_symmetry_to: torch.Tensor | None = None,
+        decode_mode: str | None = None,
     ) -> dict[str, Any]:
         quats = quats.to(self.device)
         if quats.dim() != 2 or quats.shape[-1] != 4:
@@ -363,7 +594,14 @@ class InvariantSRModel(nn.Module):
         }
 
         if decode:
-            q_out = self.decoder(f4_hr, f6_hr)
+            mode = (decode_mode or (self.train_decode_mode if self.training else self.eval_decode_mode)).lower()
+            if mode == "learnable":
+                q_logits = self.learned_decoder(torch.cat([f4_hr, f6_hr], dim=-1))
+                q_out = self.normalize_quaternions(q_logits)
+            elif mode == "spherical":
+                q_out = self.decoder(f4_hr, f6_hr)
+            else:
+                raise ValueError(f"Unknown decode mode: {mode}")
             out["output"] = q_out
 
             if match_symmetry_to is not None:
@@ -374,4 +612,48 @@ class InvariantSRModel(nn.Module):
                 out["match_symmetry_index"] = sym_idx
 
         return out
+
+    def forward(
+        self,
+        quats: torch.Tensor,
+        img_shape: tuple[int, int] | None = None,
+        decode: bool = True,
+        match_symmetry_to: torch.Tensor | None = None,
+        decode_mode: str | None = None,
+    ) -> torch.Tensor | dict[str, Any]:
+        if quats.dim() == 4:
+            if quats.shape[1] != 4:
+                raise ValueError(f"Expected BCHW quaternion input with 4 channels, got {tuple(quats.shape)}")
+
+            B, _, H, W = quats.shape
+            out_quats = []
+            for b in range(B):
+                q_flat = quats[b].permute(1, 2, 0).reshape(-1, 4)
+                out_b = self._forward_flat(
+                    q_flat,
+                    img_shape=(H, W),
+                    decode=decode,
+                    match_symmetry_to=None,
+                    decode_mode=decode_mode,
+                )
+                if not decode:
+                    raise ValueError("Batched forward requires decode=True")
+
+                q_out_flat = out_b["output"]
+                hr_h, hr_w = out_b["hr_shape"]
+                q_out_chw = q_out_flat.reshape(hr_h, hr_w, 4).permute(2, 0, 1)
+                out_quats.append(q_out_chw)
+
+            return torch.stack(out_quats, dim=0)
+
+        if img_shape is None:
+            raise ValueError("img_shape is required for flattened quaternion input")
+
+        return self._forward_flat(
+            quats,
+            img_shape=img_shape,
+            decode=decode,
+            match_symmetry_to=match_symmetry_to,
+            decode_mode=decode_mode,
+        )
 

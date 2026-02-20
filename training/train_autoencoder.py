@@ -39,9 +39,6 @@ class TrainableFCCAutoEncoder(nn.Module):
         norm = torch.norm(q_decoded, dim=-1, keepdim=True).clamp_min(1e-12)
         return q_decoded / norm
 
-    def match_closest_symmetry(self, q_decoded: torch.Tensor, q_truth: torch.Tensor):
-        return self.core.match_closest_symmetry(q_decoded, q_truth)
-
     def quat_mul(self, q1: torch.Tensor, q2: torch.Tensor):
         return self.core.quat_mul(q1, q2)
 
@@ -124,16 +121,14 @@ def render_autoencoder_input_output(
     # Match simple_encoder_decoder behavior: normalize inputs before encode/decode
     q_flat = q_flat / torch.norm(q_flat, dim=1, keepdim=True).clamp_min(1e-12)
 
-    # Decode in batches, then map to closest symmetry-equivalent variant of input.
-    # This is critical for IPF color consistency between input/output.
+    # Decode in batches (direct output; no symmetry matching in trainer path).
     step = 1000 if device.type == "cuda" else 500
     q_reconstructed_all = []
     for start in range(0, q_flat.shape[0], step):
         end = min(start + step, q_flat.shape[0])
         q_batch = q_flat[start:end]
         q_dec = model(q_batch, normalize_input=True)
-        q_closest, _, _ = model.match_closest_symmetry(q_dec, q_batch)
-        q_reconstructed_all.append(q_closest)
+        q_reconstructed_all.append(q_dec)
 
     q_reconstructed_all = torch.cat(q_reconstructed_all, dim=0)
     q_in = q_flat.reshape(h, w, 4).detach().cpu().numpy()
@@ -196,16 +191,20 @@ def print_simple_encoder_decoder_stats(model, data_loader, split_name: str = "te
         q_batch = q_all[batch_start:batch_end]
 
         q_dec = model(q_batch, normalize_input=True)
-        q_closest, errors, _ = model.match_closest_symmetry(q_dec, q_batch)
+        if hasattr(model, "_to_active_convention") and hasattr(model, "_quat_conjugate"):
+            qA = model._to_active_convention(q_dec)
+            qB = model._to_active_convention(q_batch)
+            delta = model.quat_mul(qA, model._quat_conjugate(qB))
+        else:
+            q_conj = torch.stack(
+                [q_batch[:, 0], -q_batch[:, 1], -q_batch[:, 2], -q_batch[:, 3]],
+                dim=1,
+            )
+            delta = model.quat_mul(q_dec, q_conj)
 
-        # Keep sign convention aligned with simple_encoder_decoder.py
-        q_conj = torch.stack(
-            [-q_batch[:, 0], q_batch[:, 1], q_batch[:, 2], q_batch[:, 3]],
-            dim=1,
-        )
-        error_quats = model.quat_mul(q_closest, q_conj)
-        w_errors = error_quats[:, 0]
+        w_errors = delta[:, 0]
         w_errors_clamped = torch.clamp(torch.abs(w_errors), max=1.0)
+        errors = 2.0 * torch.acos(w_errors_clamped)
         misorientation_angles = 2.0 * torch.acos(w_errors_clamped) * 180.0 / torch.pi
 
         all_errors.extend(errors.detach().cpu().tolist())
@@ -292,11 +291,43 @@ def main():
             num_layers=int(getattr(cfg, "decoder_num_layers", 3)),
             dropout=float(getattr(cfg, "decoder_dropout", 0.0)),
         ).to(device)
-    else:
+    elif requested_model_type == "fcc_autoencoder":
+        decoder_config = {
+            "decoder_cubochoric_resolution": int(getattr(cfg, "decoder_cubochoric_resolution", 3)),
+            "decoder_lookup_resolution": int(getattr(cfg, "decoder_lookup_resolution", 3)),
+            "decoder_lookup_chunk_size": int(getattr(cfg, "decoder_lookup_chunk_size", 8192)),
+            "decoder_lookup_npy_path": getattr(cfg, "decoder_lookup_npy_path", None),
+            "decoder_lookup_rebuild": bool(getattr(cfg, "decoder_lookup_rebuild", False)),
+            "decoder_lookup_refine_steps": int(getattr(cfg, "decoder_lookup_refine_steps", 0)),
+            "decoder_lookup_refine_lr": float(getattr(cfg, "decoder_lookup_refine_lr", 0.05)),
+            "decoder_learnable_hidden_dim": int(getattr(cfg, "decoder_learnable_hidden_dim", 256)),
+            "decoder_learnable_num_layers": int(getattr(cfg, "decoder_learnable_num_layers", 3)),
+            "decoder_learnable_dropout": float(getattr(cfg, "decoder_learnable_dropout", 0.0)),
+            "decoder_learnable_ckpt_path": getattr(cfg, "decoder_learnable_ckpt_path", None),
+            "decoder_learnable_ckpt_strict": bool(getattr(cfg, "decoder_learnable_ckpt_strict", True)),
+            "decoder_num_starts": int(getattr(cfg, "decoder_num_starts", 6)),
+            "decoder_steps": int(getattr(cfg, "decoder_steps", 25)),
+            "decoder_lr": float(getattr(cfg, "decoder_lr", 0.08)),
+            "decoder_w6": float(getattr(cfg, "decoder_w6", 0.5)),
+            "decoder_early_stop_tol": float(getattr(cfg, "decoder_early_stop_tol", 1e-6)),
+            "decoder_early_stop_patience": int(getattr(cfg, "decoder_early_stop_patience", 3)),
+            "decoder_min_steps": int(getattr(cfg, "decoder_min_steps", 6)),
+            "decoder_log_optimization": bool(getattr(cfg, "decoder_log_optimization", False)),
+            "decoder_log_every": int(getattr(cfg, "decoder_log_every", 1)),
+        }
+
         core_model = FCCAutoEncoder(
             device=device,
             grid_res=grid_res,
+            decoder_backend=str(getattr(cfg, "decoder_backend", "optimizing")),
+            decoder_config=decoder_config,
         ).to(device)
+    else:
+        raise ValueError(
+            f"Unsupported model.type='{requested_model_type}' for train_autoencoder.py. "
+            "Supported: fcc_autoencoder, fcc_autoencoder_learnable_decoder. "
+            "Use scripts/train.sh for other models like invariant_sr."
+        )
 
     model = TrainableFCCAutoEncoder(core_model, decode_chunk_size=decode_chunk_size).to(device)
 
@@ -393,11 +424,18 @@ def main():
                     print(f"⚠️ Failed to render input/output IPF at epoch {epoch + 1}: {repr(e)}")
     else:
         trainer.epoch = start_epoch
-        val_loss = trainer.validate()
-        val_losses.append(val_loss)
-        trainer.maybe_save_best(val_loss)
-        trainer.save_last_checkpoint()
-        print(f"Evaluation-only validation loss: {val_loss:.6f}")
+        run_eval_only_validate = bool(getattr(cfg, "eval_only_validate", False))
+        if run_eval_only_validate:
+            val_loss = trainer.validate()
+            val_losses.append(val_loss)
+            trainer.maybe_save_best(val_loss)
+            trainer.save_last_checkpoint()
+            print(f"Evaluation-only validation loss: {val_loss:.6f}")
+        else:
+            print(
+                "Skipping full validation in evaluation-only mode "
+                "(set eval_only_validate=true in config to enable)."
+            )
 
     print(f"✅ Autoencoder training complete. Outputs saved in: {exp_dir}")
 
@@ -409,26 +447,33 @@ def main():
             start_epoch=start_epoch,
         )
 
-    try:
-        stats_loader = loaders["test"] if "test" in loaders else loaders["val"]
-        stats_split = "test" if "test" in loaders else "val"
-        print_simple_encoder_decoder_stats(model=model, data_loader=stats_loader, split_name=stats_split)
-    except Exception as e:
-        print(f"⚠️ Failed to compute reconstruction stats: {repr(e)}")
+    run_postprocess = bool(getattr(cfg, "eval_only_postprocess", False)) if not has_trainable_params else True
+    if run_postprocess:
+        try:
+            stats_loader = loaders["test"] if "test" in loaders else loaders["val"]
+            stats_split = "test" if "test" in loaders else "val"
+            print_simple_encoder_decoder_stats(model=model, data_loader=stats_loader, split_name=stats_split)
+        except Exception as e:
+            print(f"⚠️ Failed to compute reconstruction stats: {repr(e)}")
 
-    final_viz_dir = exp_dir / "visualizations" / "final"
-    final_viz_dir.mkdir(parents=True, exist_ok=True)
-    final_png = str(final_viz_dir / "input_output_ipf.png")
-    try:
-        render_autoencoder_input_output(
-            model=model,
-            val_loader=loaders["test"],
-            sym_class=sym_class,
-            out_png=final_png,
+        final_viz_dir = exp_dir / "visualizations" / "final"
+        final_viz_dir.mkdir(parents=True, exist_ok=True)
+        final_png = str(final_viz_dir / "input_output_ipf.png")
+        try:
+            render_autoencoder_input_output(
+                model=model,
+                val_loader=loaders["test"],
+                sym_class=sym_class,
+                out_png=final_png,
+            )
+            print(f"🖼️ Saved final input/output IPF render: {final_png}")
+        except Exception as e:
+            print(f"⚠️ Failed to render final input/output IPF: {repr(e)}")
+    else:
+        print(
+            "Skipping eval-only stats and final visualization "
+            "(set eval_only_postprocess=true in config to enable)."
         )
-        print(f"🖼️ Saved final input/output IPF render: {final_png}")
-    except Exception as e:
-        print(f"⚠️ Failed to render final input/output IPF: {repr(e)}")
 
 
 if __name__ == "__main__":

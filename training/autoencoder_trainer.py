@@ -10,6 +10,8 @@ from torch.amp import GradScaler, autocast
 
 
 class AutoencoderTrainer:
+    METRIC_KEYS = ("error_mean", "error_max", "mis_deg_mean", "mis_deg_max")
+
     def __init__(self, cfg, model, optimizer, scheduler, loaders, loss_fn, writer):
         self.cfg = cfg
         self.model = model
@@ -31,25 +33,72 @@ class AutoencoderTrainer:
     def _compute_loss(self, pred_flat, target_flat):
         return self.loss_fn(pred_flat, target_flat)
 
+    @staticmethod
+    def _normalize_quaternions(quats: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
+        return quats / torch.norm(quats, dim=1, keepdim=True).clamp_min(eps)
+
+    @staticmethod
+    def _quat_conjugate(quats: torch.Tensor) -> torch.Tensor:
+        return torch.stack(
+            [
+                quats[:, 0],
+                -quats[:, 1],
+                -quats[:, 2],
+                -quats[:, 3],
+            ],
+            dim=1,
+        )
+
+    @classmethod
+    def _empty_metric_accum(cls) -> dict[str, float]:
+        return {k: 0.0 for k in cls.METRIC_KEYS}
+
+    @classmethod
+    def _accumulate_metrics(cls, accum: dict[str, float], metrics: dict[str, float]) -> None:
+        for key in cls.METRIC_KEYS:
+            accum[key] += metrics[key]
+
+    def _finalize_and_log_metrics(
+        self,
+        metric_accum: dict[str, float],
+        metric_steps: int,
+        split_name: str,
+    ) -> dict[str, float]:
+        if not self.log_recon_metrics or metric_steps == 0:
+            return {}
+
+        out = {k: metric_accum[k] / metric_steps for k in self.METRIC_KEYS}
+        if self.writer is not None:
+            cap = split_name.capitalize()
+            self.writer.add_scalar(f"Recon/{cap}ErrorMean", out["error_mean"], self.epoch)
+            self.writer.add_scalar(f"Recon/{cap}MisDegMean", out["mis_deg_mean"], self.epoch)
+        return out
+
     def _compute_recon_metrics(self, pred_flat, target_flat):
-        # Mirror simple_encoder_decoder-style metrics using FCC symmetry matching
-        if not hasattr(self.model, "match_closest_symmetry") or not hasattr(self.model, "quat_mul"):
+        # Direct reconstruction metrics (no symmetry matching in trainer path).
+        if not hasattr(self.model, "quat_mul"):
             return {}
 
         with torch.no_grad():
-            closest, errors, _ = self.model.match_closest_symmetry(pred_flat, target_flat)
-            q_conj = torch.stack(
-                [
-                    target_flat[:, 0],
-                    -target_flat[:, 1],
-                    -target_flat[:, 2],
-                    -target_flat[:, 3],
-                ],
-                dim=1,
-            )
-            error_quats = self.model.quat_mul(closest, q_conj)
-            w_errors = error_quats[:, 0].abs().clamp(max=1.0)
-            mis_deg = 2.0 * torch.acos(w_errors) * 180.0 / torch.pi
+            if hasattr(self.model, "_normalize_quaternions"):
+                pred_norm = self.model._normalize_quaternions(pred_flat)
+                target_norm = self.model._normalize_quaternions(target_flat)
+            else:
+                pred_norm = self._normalize_quaternions(pred_flat)
+                target_norm = self._normalize_quaternions(target_flat)
+
+            if hasattr(self.model, "_to_active_convention") and hasattr(self.model, "_quat_conjugate"):
+                qA = self.model._to_active_convention(pred_norm)
+                qB = self.model._to_active_convention(target_norm)
+                delta = self.model.quat_mul(qA, self.model._quat_conjugate(qB))
+            elif hasattr(self.model, "_quat_conjugate"):
+                delta = self.model.quat_mul(pred_norm, self.model._quat_conjugate(target_norm))
+            else:
+                delta = self.model.quat_mul(pred_norm, self._quat_conjugate(target_norm))
+
+            w_errors = delta[:, 0].abs().clamp(max=1.0)
+            errors = 2.0 * torch.acos(w_errors)
+            mis_deg = errors * 180.0 / torch.pi
 
             return {
                 "error_mean": float(errors.mean().item()),
@@ -70,12 +119,7 @@ class AutoencoderTrainer:
     def train(self):
         self.model.train()
         total_loss = 0.0
-        metric_accum = {
-            "error_mean": 0.0,
-            "error_max": 0.0,
-            "mis_deg_mean": 0.0,
-            "mis_deg_max": 0.0,
-        }
+        metric_accum = self._empty_metric_accum()
         metric_steps = 0
 
         for _, hr in self.loaders["train"]:
@@ -107,8 +151,7 @@ class AutoencoderTrainer:
             if self.log_recon_metrics:
                 m = self._compute_recon_metrics(q_pred.detach(), q_target.detach())
                 if m:
-                    for k in metric_accum:
-                        metric_accum[k] += m[k]
+                    self._accumulate_metrics(metric_accum, m)
                     metric_steps += 1
 
         avg_loss = total_loss / max(1, len(self.loaders["train"]))
@@ -117,12 +160,7 @@ class AutoencoderTrainer:
         if self.writer is not None:
             self.writer.add_scalar("Loss/Train", avg_loss, self.epoch)
 
-        self.last_train_metrics = {}
-        if self.log_recon_metrics and metric_steps > 0:
-            self.last_train_metrics = {k: metric_accum[k] / metric_steps for k in metric_accum}
-            if self.writer is not None:
-                self.writer.add_scalar("Recon/TrainErrorMean", self.last_train_metrics["error_mean"], self.epoch)
-                self.writer.add_scalar("Recon/TrainMisDegMean", self.last_train_metrics["mis_deg_mean"], self.epoch)
+        self.last_train_metrics = self._finalize_and_log_metrics(metric_accum, metric_steps, "train")
 
         return avg_loss
 
@@ -130,12 +168,7 @@ class AutoencoderTrainer:
     def validate(self):
         self.model.eval()
         total_loss = 0.0
-        metric_accum = {
-            "error_mean": 0.0,
-            "error_max": 0.0,
-            "mis_deg_mean": 0.0,
-            "mis_deg_max": 0.0,
-        }
+        metric_accum = self._empty_metric_accum()
         metric_steps = 0
 
         for _, hr in self.loaders["val"]:
@@ -155,20 +188,14 @@ class AutoencoderTrainer:
             if self.log_recon_metrics:
                 m = self._compute_recon_metrics(q_pred.detach(), q_target.detach())
                 if m:
-                    for k in metric_accum:
-                        metric_accum[k] += m[k]
+                    self._accumulate_metrics(metric_accum, m)
                     metric_steps += 1
 
         avg_val = total_loss / max(1, len(self.loaders["val"]))
         if self.writer is not None:
             self.writer.add_scalar("Loss/Val", avg_val, self.epoch)
 
-        self.last_val_metrics = {}
-        if self.log_recon_metrics and metric_steps > 0:
-            self.last_val_metrics = {k: metric_accum[k] / metric_steps for k in metric_accum}
-            if self.writer is not None:
-                self.writer.add_scalar("Recon/ValErrorMean", self.last_val_metrics["error_mean"], self.epoch)
-                self.writer.add_scalar("Recon/ValMisDegMean", self.last_val_metrics["mis_deg_mean"], self.epoch)
+        self.last_val_metrics = self._finalize_and_log_metrics(metric_accum, metric_steps, "val")
 
         return avg_val
 
