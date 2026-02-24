@@ -15,6 +15,7 @@ from models import build_model
 from models.autoencoder import FCCAutoEncoder
 from training.config_utils import load_and_prepare_config
 from training.data_loading import build_dataloader
+from utils.quat_ops import enforce_hemisphere, reduce_to_fz_min_angle
 from utils.symmetry_utils import resolve_symmetry
 from visualization.visualize_sr_results import render_input_output_side_by_side
 
@@ -82,6 +83,19 @@ def _load_model_state(model: torch.nn.Module, ckpt_path: Path, device: torch.dev
         blob = torch.load(str(ckpt_path), map_location=device)
     if isinstance(blob, dict) and "model_state_dict" in blob:
         state_dict = blob["model_state_dict"]
+    elif isinstance(blob, dict) and "decoder_state_dict" in blob:
+        if not hasattr(model, "decoder"):
+            raise ValueError("Checkpoint contains decoder_state_dict but model has no decoder module")
+
+        dec_load = model.decoder.load_state_dict(blob["decoder_state_dict"], strict=False)
+        dec_missing = list(getattr(dec_load, "missing_keys", []))
+        dec_unexpected = list(getattr(dec_load, "unexpected_keys", []))
+
+        if len(dec_unexpected) > 0:
+            print(f"[debug] Unexpected decoder keys (showing up to 10): {dec_unexpected[:10]}")
+        if len(dec_missing) > 0:
+            print(f"[debug] Missing decoder keys (showing up to 10): {dec_missing[:10]}")
+        return
     elif isinstance(blob, dict):
         state_dict = blob
     else:
@@ -126,12 +140,9 @@ def _misorientation_deg(
     q_reconstructed: torch.Tensor,
     q_truth: torch.Tensor,
 ) -> torch.Tensor:
-    if hasattr(model, "_to_active_convention"):
-        qA = model._to_active_convention(q_reconstructed)
-        qB = model._to_active_convention(q_truth)
-    else:
-        qA = q_reconstructed
-        qB = q_truth
+
+    qA = q_reconstructed
+    qB = q_truth
 
     delta = model.quat_mul(qA, FCCAutoEncoder._quat_conjugate(qB))
     delta = delta / torch.norm(delta, dim=-1, keepdim=True).clamp_min(1e-12)
@@ -250,72 +261,138 @@ def main() -> None:
 
     hr_sample = _grab_sample_hr(loader, args.sample_idx)
     h, w = int(hr_sample.shape[1]), int(hr_sample.shape[2])
-    q_flat = hr_sample.permute(1, 2, 0).reshape(-1, 4).to(device)
-    q_flat = q_flat / torch.norm(q_flat, dim=1, keepdim=True).clamp_min(1e-12)
+    q_flat_raw = hr_sample.permute(1, 2, 0).reshape(-1, 4).to(device)
+
+    sym_class = resolve_symmetry(getattr(cfg, "symmetry_group", "O"))
+
+    def _reduce_torch_to_fz(quats: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        q_np = quats.detach().cpu().numpy()
+        q_fz_np, op_idx_np = reduce_to_fz_min_angle(
+            q_np,
+            sym=sym_class,
+            normalize=True,
+            hemisphere=True,
+            return_op_map=True,
+        )
+        q_fz_np = enforce_hemisphere(q_fz_np, scalar_first=True)
+        q_fz = torch.from_numpy(q_fz_np).to(device=device, dtype=torch.float32)
+        op_idx = torch.from_numpy(op_idx_np.reshape(-1)).to(device=device, dtype=torch.int64)
+        return q_fz, op_idx
+
+    q_flat_raw = q_flat_raw / torch.norm(q_flat_raw, dim=1, keepdim=True).clamp_min(1e-12)
+    q_flat_fz, input_sym_idx_fz = _reduce_torch_to_fz(q_flat_raw)
+    q_flat_fz = q_flat_fz / torch.norm(q_flat_fz, dim=1, keepdim=True).clamp_min(1e-12)
+
+    q_decoded_from_raw = model(q_flat_raw, normalize_input=True)
+    q_decoded_from_fz = model(q_flat_fz, normalize_input=True)
+
+    q_out_raw_raw = q_decoded_from_raw / torch.norm(
+        q_decoded_from_raw,
+        dim=1,
+        keepdim=True,
+    ).clamp_min(1e-12)
+    q_out_raw_fz, sym_idx_raw_fz = _reduce_torch_to_fz(q_decoded_from_raw)
+
+    q_out_fz_raw = q_decoded_from_fz / torch.norm(
+        q_decoded_from_fz,
+        dim=1,
+        keepdim=True,
+    ).clamp_min(1e-12)
+    q_out_fz_fz, sym_idx_fz_fz = _reduce_torch_to_fz(q_decoded_from_fz)
 
     out_dir = Path(args.out_dir) if args.out_dir else exp_dir / "visualizations" / "debug"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    sym_class = resolve_symmetry(getattr(cfg, "symmetry_group", "O"))
-
-    q_decoded_default = model(q_flat, normalize_input=True)
-    q_reconstructed_default, errors_default, symmetry_idx_default = model.match_closest_symmetry(
-        q_decoded_default,
-        q_flat,
-    )
-    mis_deg_default = _misorientation_deg(model, q_reconstructed_default, q_flat)
-
-    q_in = q_flat.reshape(h, w, 4).detach().cpu().numpy()
-    q_out_default = q_reconstructed_default.reshape(h, w, 4).detach().cpu().numpy()
-
-    default_png = out_dir / "input_output_default.png"
-    render_input_output_side_by_side(
-        input_q_arr=q_in,
-        output_q_arr=q_out_default,
-        sym_class=sym_class,
-        out_png=str(default_png),
-        ref_dir="ALL",
-        include_key=True,
-        overwrite=True,
-        format_input=False,
-        dpi=300,
-    )
-
-    default_quat_plots = _save_quaternion_visualizations(
-        q_input_flat=q_flat,
-        q_output_flat=q_reconstructed_default,
-        h=h,
-        w=w,
-        out_dir=out_dir,
-        prefix="default",
-    )
+    cases = {
+        "input_raw_output_raw": {
+            "q_in": q_flat_raw,
+            "q_out": q_out_raw_raw,
+            "sym_idx": None,
+        },
+        "input_raw_output_fz": {
+            "q_in": q_flat_raw,
+            "q_out": q_out_raw_fz,
+            "sym_idx": sym_idx_raw_fz,
+        },
+        "input_fz_output_raw": {
+            "q_in": q_flat_fz,
+            "q_out": q_out_fz_raw,
+            "sym_idx": input_sym_idx_fz,
+        },
+        "input_fz_output_fz": {
+            "q_in": q_flat_fz,
+            "q_out": q_out_fz_fz,
+            "sym_idx": sym_idx_fz_fz,
+        },
+    }
 
     report: dict[str, Any] = {
         "checkpoint": str(ckpt_path),
         "split": args.split,
         "sample_idx": int(args.sample_idx),
         "model_type": model_type,
-        "default": {
-            "errors_rad": _summary_stats(errors_default),
-            "misorientation_deg": _summary_stats(mis_deg_default),
-            "output_png": str(default_png),
-            "quat_plots": default_quat_plots,
-            "symmetry_index_hist": torch.bincount(symmetry_idx_default.cpu(), minlength=24).tolist(),
-        },
+        "cases": {},
     }
+
+    for case_name, case in cases.items():
+        q_in_case = case["q_in"]
+        q_out_case = case["q_out"]
+        sym_idx_case = case["sym_idx"]
+
+        q_in_np = q_in_case.reshape(h, w, 4).detach().cpu().numpy()
+        q_out_np = q_out_case.reshape(h, w, 4).detach().cpu().numpy()
+
+        input_output_png = out_dir / f"{case_name}_input_output.png"
+        render_input_output_side_by_side(
+            input_q_arr=q_in_np,
+            output_q_arr=q_out_np,
+            sym_class=sym_class,
+            out_png=str(input_output_png),
+            ref_dir="ALL",
+            include_key=True,
+            overwrite=True,
+            format_input=False,
+            dpi=300,
+        )
+
+        quat_plots = _save_quaternion_visualizations(
+            q_input_flat=q_in_case,
+            q_output_flat=q_out_case,
+            h=h,
+            w=w,
+            out_dir=out_dir,
+            prefix=case_name,
+        )
+
+        mis_deg = _misorientation_deg(model, q_out_case, q_in_case)
+        errors_rad = mis_deg * torch.pi / 180.0
+
+        case_report: dict[str, Any] = {
+            "errors_rad": _summary_stats(errors_rad),
+            "misorientation_deg": _summary_stats(mis_deg),
+            "output_png": str(input_output_png),
+            "quat_plots": quat_plots,
+        }
+        if sym_idx_case is not None:
+            case_report["symmetry_index_hist"] = torch.bincount(
+                sym_idx_case.cpu(),
+                minlength=24,
+            ).tolist()
+
+        report["cases"][case_name] = case_report
 
     report_path = out_dir / "debug_report.json"
     with open(report_path, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2)
 
     print("\n[debug_autoencoder_viz] Saved outputs:")
-    print(f"  - {default_png}")
-    if "default" in report and report["default"].get("quat_plots"):
-        dp = report["default"]["quat_plots"]
-        if "components_png" in dp:
-            print(f"  - {dp['components_png']}")
-        if "scatter_png" in dp:
-            print(f"  - {dp['scatter_png']}")
+    for case_name, case_report in report["cases"].items():
+        print(f"  - {case_report['output_png']}")
+        qp = case_report.get("quat_plots", {})
+        if "components_png" in qp:
+            print(f"  - {qp['components_png']}")
+        if "scatter_png" in qp:
+            print(f"  - {qp['scatter_png']}")
     print(f"  - {report_path}")
 
 

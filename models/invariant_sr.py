@@ -512,54 +512,33 @@ class InvariantSRModel(nn.Module):
             dim=1,
         )
 
-    def match_closest_symmetry(
+    def reduce_to_fz(
         self,
-        q_decoded: torch.Tensor,
-        q_truth: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        q_decoded = q_decoded.to(self.device)
-        q_truth = q_truth.to(self.device)
+        quats: torch.Tensor,
+        return_op_map: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor] | torch.Tensor:
+        quats = self.normalize_quaternions(quats.to(self.device))
+        batch_size = quats.shape[0]
 
-        q_rec_expanded = q_decoded.unsqueeze(1).expand(-1, 24, -1)
-        fcc_syms_expanded = self.physics.fcc_syms.unsqueeze(0).expand(q_truth.shape[0], -1, -1)
+        q_expanded = quats.unsqueeze(1).expand(-1, 24, -1)
+        syms = self.physics.fcc_syms.unsqueeze(0).expand(batch_size, -1, -1)
 
-        w1, x1, y1, z1 = (
-            q_rec_expanded[..., 0],
-            q_rec_expanded[..., 1],
-            q_rec_expanded[..., 2],
-            q_rec_expanded[..., 3],
-        )
-        w2, x2, y2, z2 = (
-            fcc_syms_expanded[..., 0],
-            fcc_syms_expanded[..., 1],
-            fcc_syms_expanded[..., 2],
-            fcc_syms_expanded[..., 3],
-        )
+        fam = self.quat_mul(
+            q_expanded.reshape(-1, 4),
+            syms.reshape(-1, 4),
+        ).view(batch_size, 24, 4)
+        fam = self.normalize_quaternions(fam.reshape(-1, 4)).view(batch_size, 24, 4)
 
-        family = torch.stack(
-            [
-                w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
-                w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
-                w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
-                w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
-            ],
-            dim=-1,
-        )
+        w_abs = fam[..., 0].abs()
+        best_idx = torch.argmax(w_abs, dim=1)
+        batch_idx = torch.arange(batch_size, device=quats.device)
+        q_fz = fam[batch_idx, best_idx]
+        q_fz = torch.where(q_fz[:, :1] < 0, -q_fz, q_fz)
+        q_fz = self.normalize_quaternions(q_fz)
 
-        q_truth_expanded = q_truth.unsqueeze(1)
-        dist_pos = torch.norm(family - q_truth_expanded, dim=-1)
-        dist_neg = torch.norm(family + q_truth_expanded, dim=-1)
-        min_dist = torch.minimum(dist_pos, dist_neg)
-
-        errors = torch.min(min_dist, dim=1)[0]
-        best_indices = torch.argmin(min_dist, dim=1)
-
-        batch_indices = torch.arange(q_truth.shape[0], device=self.device)
-        closest_quats = family[batch_indices, best_indices]
-        use_neg = dist_neg[batch_indices, best_indices] < dist_pos[batch_indices, best_indices]
-        closest_quats[use_neg] = -closest_quats[use_neg]
-
-        return closest_quats, errors, best_indices
+        if return_op_map:
+            return q_fz, best_idx
+        return q_fz
 
     def _forward_flat(
         self,
@@ -605,10 +584,8 @@ class InvariantSRModel(nn.Module):
             out["output"] = q_out
 
             if match_symmetry_to is not None:
-                q_ref = self.normalize_quaternions(match_symmetry_to.to(self.device))
-                q_match, q_err, sym_idx = self.match_closest_symmetry(q_out, q_ref)
+                q_match, sym_idx = self.reduce_to_fz(q_out, return_op_map=True)
                 out["output_matched"] = q_match
-                out["match_error"] = q_err
                 out["match_symmetry_index"] = sym_idx
 
         return out

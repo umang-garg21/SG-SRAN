@@ -41,6 +41,8 @@ print(ori_euler.size)
 rot_quat = get_sample_fundamental(
     resolution2, point_group=pg432, method="quaternion"
 )
+
+
 ori_quat = Orientation(rot_quat, symmetry=pg432)
 print(ori_quat.size)
 

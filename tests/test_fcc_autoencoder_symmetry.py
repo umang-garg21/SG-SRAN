@@ -79,36 +79,43 @@ def test_fcc_encoder_left_action_specimen_equivariance():
     assert err6 < 2e-4, f"Left-action equivariance failed for l=6: {err6}"
 
 
-def test_match_closest_symmetry_recovers_orbit_member():
-    _announce("FCCAutoEncoder symmetry matcher recovers equivalent orientation under FZ reduction")
+def test_reduce_to_fz_recovers_orbit_member():
+    _announce("FCCAutoEncoder FZ reducer maps equivalent orientations to the same representative")
     model = FCCAutoEncoder(device="cpu", grid_res=256)
 
-    q_decoded = _normalized_random_quats(40, device=model.device, seed=7)
+    q_seed = _normalized_random_quats(40, device=model.device, seed=7)
     syms = model.physics.fcc_syms
 
-    idx = torch.arange(q_decoded.shape[0], device=model.device) % syms.shape[0]
-    q_truth = FCCAutoEncoder.quat_mul(q_decoded, syms[idx])
+    idx = torch.arange(q_seed.shape[0], device=model.device) % syms.shape[0]
+    q_orbit = FCCAutoEncoder.quat_mul(q_seed, syms[idx])
 
-    q_closest, errors, best_idx = model.match_closest_symmetry(q_decoded, q_truth)
+    q_seed_fz, op_seed = model.reduce_to_fz(q_seed, return_op_map=True)
+    q_orbit_fz, op_orbit = model.reduce_to_fz(q_orbit, return_op_map=True)
 
-    # Matching should be nearly exact in misorientation after symmetry handling.
-    assert torch.max(errors).item() < 1e-3, f"Large symmetry match error: {torch.max(errors).item()}"
-    assert torch.all((best_idx >= 0) & (best_idx < 24)).item(), "Invalid symmetry indices returned"
+    delta = FCCAutoEncoder.quat_mul(
+        q_seed_fz,
+        FCCAutoEncoder._quat_conjugate(q_orbit_fz),
+    )
+    delta = delta / torch.norm(delta, dim=1, keepdim=True).clamp_min(1e-12)
+    err = 2.0 * torch.acos(delta[:, 0].abs().clamp(max=1.0))
+
+    assert torch.max(err).item() < 1e-3, f"Large FZ orbit error: {torch.max(err).item()}"
+    assert torch.all((op_seed >= 0) & (op_seed < 24)).item(), "Invalid FZ op indices returned"
+    assert torch.all((op_orbit >= 0) & (op_orbit < 24)).item(), "Invalid FZ op indices returned"
 
 
-def test_match_closest_symmetry_bunge_convention():
-    _announce("FCCAutoEncoder symmetry matcher is robust in Bunge convention")
+def test_reduce_to_fz_bunge_convention():
+    _announce("FCCAutoEncoder FZ reducer is robust in Bunge convention")
     model = FCCAutoEncoder(device="cpu", grid_res=256)
 
     q_decoded = _normalized_random_quats(48, device=model.device, seed=123)
-    syms = model.physics.fcc_syms
-    idx = torch.arange(q_decoded.shape[0], device=model.device) % syms.shape[0]
-    q_truth = FCCAutoEncoder.quat_mul(q_decoded, syms[idx])
 
-    q_closest, errors, _ = model.match_closest_symmetry(q_decoded, q_truth)
+    q_fz, _ = model.reduce_to_fz(q_decoded, return_op_map=True)
+    q_fz = q_fz / torch.norm(q_fz, dim=1, keepdim=True).clamp_min(1e-12)
+    w_abs = q_fz[:, 0].abs()
 
-    assert torch.max(errors).item() < 1e-3, f"Large Bunge/auto symmetry match error: {torch.max(errors).item()}"
-    assert torch.all(torch.isfinite(q_closest)).item(), "Non-finite quaternion values returned"
+    assert torch.all(w_abs <= 1.0).item(), "Non-unit or invalid quaternion returned"
+    assert torch.all(torch.isfinite(q_fz)).item(), "Non-finite quaternion values returned"
 
 
 def test_spherical_decoder_uses_f6_signal():

@@ -38,6 +38,11 @@ def parse_args() -> argparse.Namespace:
         help="Also append cubochoric FZ samples from ORIX get_sample_fundamental().",
     )
     parser.add_argument(
+        "--cubochoric_only",
+        action="store_true",
+        help="Export only cubochoric FZ samples (skip dataset rows).",
+    )
+    parser.add_argument(
         "--cubochoric_resolution",
         type=int,
         default=1,
@@ -78,18 +83,21 @@ def main() -> None:
     cfg = load_and_prepare_config(exp_dir / args.config, exp_dir / "logs" / "run_config_export_teacher.json")
 
     batch_size = int(args.batch_size) if args.batch_size is not None else int(getattr(cfg, "batch_size", 8))
+    use_cubochoric = bool(args.include_cubochoric_fz or args.cubochoric_only)
 
-    loader = build_dataloader(
-        dataset_root=getattr(cfg, "dataset_root"),
-        split=args.split,
-        batch_size=batch_size,
-        num_workers=int(getattr(cfg, "num_workers", 0)),
-        preload=bool(getattr(cfg, "preload", True)),
-        preload_torch=bool(getattr(cfg, "preload_torch", True)),
-        pin_memory=bool(getattr(cfg, "pin_memory", True)),
-        take_first=args.max_samples,
-        seed=int(getattr(cfg, "seed", 42)),
-    )
+    loader = None
+    if not args.cubochoric_only:
+        loader = build_dataloader(
+            dataset_root=getattr(cfg, "dataset_root"),
+            split=args.split,
+            batch_size=batch_size,
+            num_workers=int(getattr(cfg, "num_workers", 0)),
+            preload=bool(getattr(cfg, "preload", True)),
+            preload_torch=bool(getattr(cfg, "preload_torch", True)),
+            pin_memory=bool(getattr(cfg, "pin_memory", True)),
+            take_first=args.max_samples,
+            seed=int(getattr(cfg, "seed", 42)),
+        )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     teacher = FCCAutoEncoder(
@@ -110,34 +118,37 @@ def main() -> None:
     q_input_list: list[torch.Tensor] = []
     rows_exported = 0
 
-    progress = tqdm(loader, desc="Exporting teacher table", unit="batch")
-    for _, hr in progress:
-        for b in range(int(hr.shape[0])):
-            q = hr[b].permute(1, 2, 0).reshape(-1, 4).to(device)
-            q = q / q.norm(dim=1, keepdim=True).clamp_min(1e-12)
+    if loader is not None:
+        progress = tqdm(loader, desc="Exporting teacher table", unit="batch")
+        for _, hr in progress:
+            for b in range(int(hr.shape[0])):
+                q = hr[b].permute(1, 2, 0).reshape(-1, 4).to(device)
+                q = q / q.norm(dim=1, keepdim=True).clamp_min(1e-12)
+                q, _ = teacher._reduce_to_fz(q)
 
-            f4, f6 = teacher.encode(q)
-            q_dec = teacher.decode(f4, f6)
-            q_match, _, _ = teacher.match_closest_symmetry(q_dec, q)
+                f4, f6 = teacher.encode(q)
+                q_dec = teacher.decode(f4, f6)
+                q_match = teacher.reduce_to_fz(q_dec)
 
-            f4_list.append(f4.detach().cpu())
-            f6_list.append(f6.detach().cpu())
-            q_teacher_list.append(q_match.detach().cpu())
-            q_input_list.append(q.detach().cpu())
-            rows_exported += int(q.shape[0])
+                f4_list.append(f4.detach().cpu())
+                f6_list.append(f6.detach().cpu())
+                q_teacher_list.append(q_match.detach().cpu())
+                q_input_list.append(q.detach().cpu())
+                rows_exported += int(q.shape[0])
 
-        progress.set_postfix(rows=rows_exported)
+            progress.set_postfix(rows=rows_exported)
 
     rows_from_dataset = rows_exported
     rows_from_cubochoric = 0
 
-    if args.include_cubochoric_fz:
+    if use_cubochoric:
         q_cub = teacher._sample_fz_quaternions(
             resolution=int(args.cubochoric_resolution),
             method=str(args.cubochoric_method),
             device=device,
         )
         q_cub = q_cub / q_cub.norm(dim=1, keepdim=True).clamp_min(1e-12)
+        q_cub, _ = teacher._reduce_to_fz(q_cub)
 
         if args.cubochoric_max_samples is not None:
             keep = int(args.cubochoric_max_samples)
@@ -156,7 +167,7 @@ def main() -> None:
 
             f4, f6 = teacher.encode(q_chunk)
             q_dec = teacher.decode(f4, f6)
-            q_match, _, _ = teacher.match_closest_symmetry(q_dec, q_chunk)
+            q_match = teacher.reduce_to_fz(q_dec)
 
             f4_list.append(f4.detach().cpu())
             f6_list.append(f6.detach().cpu())
@@ -166,6 +177,12 @@ def main() -> None:
             rows_exported += int(q_chunk.shape[0])
             rows_from_cubochoric += int(q_chunk.shape[0])
             cub_progress.set_postfix(rows=rows_exported)
+
+    if len(f4_list) == 0:
+        raise ValueError(
+            "No rows were exported. Use dataset rows or enable cubochoric rows via "
+            "--include_cubochoric_fz / --cubochoric_only."
+        )
 
     f4_all = torch.cat(f4_list, dim=0)
     f6_all = torch.cat(f6_list, dim=0)
@@ -192,7 +209,8 @@ def main() -> None:
             "decoder_lookup_refine_steps": int(args.decoder_lookup_refine_steps),
             "decoder_lookup_refine_lr": float(args.decoder_lookup_refine_lr),
             "decoder_w6": float(args.decoder_w6),
-            "include_cubochoric_fz": bool(args.include_cubochoric_fz),
+            "include_cubochoric_fz": bool(use_cubochoric),
+            "cubochoric_only": bool(args.cubochoric_only),
             "cubochoric_resolution": int(args.cubochoric_resolution),
             "cubochoric_method": str(args.cubochoric_method),
             "save_dtype": str(args.save_dtype).lower(),

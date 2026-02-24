@@ -587,10 +587,6 @@ class FCCAutoEncoder(nn.Module):
 	"""
 	Physics-based FCC autoencoder wrapper.
 
-	Note: this model is Bunge-convention only. Input/output quaternions are
-	assumed to be passive (Bunge), while internal encode/decode operations run in
-	active convention via quaternion conjugation.
-
 	This class reproduces the core behavior from the
 	`run_physics_decoder_test` pipeline in simple_encoder_decoder:
 	  1) encode quaternion -> (f4, f6)
@@ -621,6 +617,7 @@ class FCCAutoEncoder(nn.Module):
 			return dcfg.get(key, default)
 
 		backend = str(decoder_backend).lower()
+		self.decoder_backend = backend
 		if backend == "spherical":
 			self.decoder = SphericalSamplingDecoder(self.physics, grid_res=grid_res)
 		elif backend == "optimizing":
@@ -678,9 +675,6 @@ class FCCAutoEncoder(nn.Module):
 		else:
 			raise ValueError(f"Unknown decoder_backend: {decoder_backend}")
 
-		# Bunge-only convention: external API takes/returns passive (Bunge)
-		# quaternions, internal operations use active via conjugation.
-
 	@staticmethod
 	def _normalize_quaternions(quats: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
 		norm = torch.norm(quats, dim=-1, keepdim=True).clamp_min(eps)
@@ -713,9 +707,6 @@ class FCCAutoEncoder(nn.Module):
 		if hasattr(load_result, "unexpected_keys") and len(load_result.unexpected_keys) > 0:
 			print(f"[FCCAutoEncoder] learnable decoder unexpected keys: {load_result.unexpected_keys[:8]}")
 
-	def _from_active_convention(self, quats: torch.Tensor) -> torch.Tensor:
-		return self._quat_conjugate(quats)
-
 	@staticmethod
 	def quat_mul(q1: torch.Tensor, q2: torch.Tensor) -> torch.Tensor:
 		w1, x1, y1, z1 = q1[:, 0], q1[:, 1], q1[:, 2], q1[:, 3]
@@ -731,12 +722,10 @@ class FCCAutoEncoder(nn.Module):
 		)
 
 	def encode(self, quats: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-		quats_active = self._quat_conjugate(quats)
-		return self.encoder(quats_active)
+		return self.encoder(quats)
 
 	def decode(self, f4: torch.Tensor, f6: torch.Tensor) -> torch.Tensor:
-		q_active = self.decoder(f4, f6)
-		return self._from_active_convention(q_active)
+		return self.decoder(f4, f6)
 
 	def forward(self, quats: torch.Tensor, normalize_input: bool = True) -> torch.Tensor:
 		quats = quats.to(self.device)
@@ -749,75 +738,15 @@ class FCCAutoEncoder(nn.Module):
 		f4, f6 = self.encode(quats)
 		return self.decode(f4, f6)
 
-	def match_closest_symmetry(
+	def reduce_to_fz(
 		self,
-		q_decoded: torch.Tensor,
-		q_truth: torch.Tensor,
-	) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-		"""
-		Match decoded quaternion to truth over FCC symmetry families and return
-		a canonical FZ representative with positive scalar hemisphere.
+		quats: torch.Tensor,
+		return_op_map: bool = False,
+	) -> tuple[torch.Tensor, torch.Tensor] | torch.Tensor:
+		quats = self._normalize_quaternions(quats)
+		batch_size = quats.shape[0]
 
-		Returns
-		-------
-		closest_quats : (B, 4)
-		errors : (B,)
-		best_indices : (B,) symmetry index (mod 24) of selected family member
-		"""
-		q_decoded = q_decoded.to(self.device)
-		q_truth = q_truth.to(self.device)
-		q_decoded = self._normalize_quaternions(q_decoded)
-		q_truth = self._normalize_quaternions(q_truth)
-
-		q_decoded_active = self._quat_conjugate(q_decoded)
-		q_truth_active = self._quat_conjugate(q_truth)
-		batch_size = q_truth_active.shape[0]
-		q_rec_expanded = q_decoded_active.unsqueeze(1).expand(-1, 24, -1)
-		fcc_syms_expanded = self.physics.fcc_syms.unsqueeze(0).expand(batch_size, -1, -1)
-		fcc_syms_inv = self._quat_conjugate(fcc_syms_expanded)
-
-		q_flat = q_rec_expanded.reshape(-1, 4)
-		g_flat = fcc_syms_expanded.reshape(-1, 4)
-		g_inv_flat = fcc_syms_inv.reshape(-1, 4)
-
-		fam_right = self.quat_mul(q_flat, g_flat).view(batch_size, 24, 4)
-		fam_left = self.quat_mul(g_flat, q_flat).view(batch_size, 24, 4)
-		fam_right_inv = self.quat_mul(q_flat, g_inv_flat).view(batch_size, 24, 4)
-		fam_left_inv = self.quat_mul(g_inv_flat, q_flat).view(batch_size, 24, 4)
-
-		families = torch.cat([fam_right, fam_left, fam_right_inv, fam_left_inv], dim=1)
-		families = self._normalize_quaternions(families.reshape(-1, 4)).view(batch_size, -1, 4)
-		families = torch.where(families[..., :1] < 0, -families, families)
-
-		q_truth_active = torch.where(q_truth_active[:, :1] < 0, -q_truth_active, q_truth_active)
-		q_truth_expanded = q_truth_active.unsqueeze(1).expand(-1, families.shape[1], -1)
-		delta = self.quat_mul(
-			families.reshape(-1, 4),
-			self._quat_conjugate(q_truth_expanded.reshape(-1, 4)),
-		).view(batch_size, families.shape[1], 4)
-		delta = self._normalize_quaternions(delta)
-
-		w_abs = delta[..., 0].abs().clamp(max=1.0)
-		misorientation = 2.0 * torch.acos(w_abs)
-		best_indices = torch.argmin(misorientation, dim=1)
-		errors = torch.gather(misorientation, 1, best_indices.unsqueeze(1)).squeeze(1)
-
-		batch_indices = torch.arange(batch_size, device=self.device)
-		closest_active_raw = families[batch_indices, best_indices]
-		closest_active, _ = self._reduce_to_fz_active(closest_active_raw)
-		closest_quats = self._from_active_convention(closest_active)
-		best_indices = best_indices % 24
-
-		return closest_quats, errors, best_indices
-
-	def _reduce_to_fz_active(
-		self,
-		quats_active: torch.Tensor,
-	) -> tuple[torch.Tensor, torch.Tensor]:
-		quats_active = self._normalize_quaternions(quats_active)
-		batch_size = quats_active.shape[0]
-
-		q_expanded = quats_active.unsqueeze(1).expand(-1, 24, -1)
+		q_expanded = quats.unsqueeze(1).expand(-1, 24, -1)
 		syms = self.physics.fcc_syms.unsqueeze(0).expand(batch_size, -1, -1)
 
 		q_flat = q_expanded.reshape(-1, 4)
@@ -827,11 +756,20 @@ class FCCAutoEncoder(nn.Module):
 
 		w_abs = fam[..., 0].abs()
 		best_idx = torch.argmax(w_abs, dim=1)
-		batch_idx = torch.arange(batch_size, device=quats_active.device)
+		batch_idx = torch.arange(batch_size, device=quats.device)
 		q_fz = fam[batch_idx, best_idx]
 		q_fz = torch.where(q_fz[:, :1] < 0, -q_fz, q_fz)
 		q_fz = self._normalize_quaternions(q_fz)
-		return q_fz, best_idx
+		if return_op_map:
+			return q_fz, best_idx
+		return q_fz
+
+	def _reduce_to_fz(
+		self,
+		quats: torch.Tensor,
+	) -> tuple[torch.Tensor, torch.Tensor]:
+		q_fz, op_idx = self.reduce_to_fz(quats, return_op_map=True)
+		return q_fz, op_idx
 
 	@staticmethod
 	def _sample_fz_quaternions(
@@ -920,7 +858,7 @@ class FCCAutoEncoder(nn.Module):
 				end = min(start + step, quats.shape[0])
 				decoded_chunks.append(self.decode(f4[start:end], f6[start:end]))
 			q_decoded = torch.cat(decoded_chunks, dim=0)
-			q_matched, errors, best_idx = self.match_closest_symmetry(q_decoded, quats)
+			q_matched, best_idx = self.reduce_to_fz(q_decoded, return_op_map=True)
 
 			delta = self.quat_mul(
 				q_matched,
@@ -928,6 +866,7 @@ class FCCAutoEncoder(nn.Module):
 			)
 			delta = self._normalize_quaternions(delta)
 			w_abs = delta[:, 0].abs().clamp(max=1.0)
+			errors = 2.0 * torch.acos(w_abs)
 			mis_deg = 2.0 * torch.acos(w_abs) * 180.0 / math.pi
 
 			q_decoded_cpu = q_decoded.detach().cpu()

@@ -87,8 +87,8 @@ class Trainer:
                 q_tgt = core.normalize_quaternions(hr_flat)
 
                 match_symmetry = bool(getattr(self.cfg, "invariant_decode_match_symmetry", True))
-                if match_symmetry and hasattr(core, "match_closest_symmetry"):
-                    q_pred, _, _ = core.match_closest_symmetry(q_pred, q_tgt)
+                if match_symmetry and hasattr(core, "reduce_to_fz"):
+                    q_pred = core.reduce_to_fz(q_pred)
 
                 decode_loss = self.loss_fn(q_pred, q_tgt)
                 total_loss = total_loss + decode_lambda * decode_loss

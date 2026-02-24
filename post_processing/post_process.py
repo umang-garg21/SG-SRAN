@@ -186,18 +186,15 @@ def run_postprocess_from_config(
             if (
                 is_invariant_sr
                 and apply_invariant_sr_symmetry_match
-                and hasattr(core_model, "match_closest_symmetry")
+                and hasattr(core_model, "reduce_to_fz")
                 and sr_b.shape == hr_b.shape
                 and sr_b.dim() == 3
                 and sr_b.shape[0] == 4
             ):
                 h_sr, w_sr = int(sr_b.shape[1]), int(sr_b.shape[2])
                 sr_flat = sr_b.permute(1, 2, 0).reshape(-1, 4)
-                hr_flat = hr_b.to(sr_flat.device, non_blocking=True).permute(1, 2, 0).reshape(-1, 4)
-
                 sr_flat = core_model.normalize_quaternions(sr_flat)
-                hr_flat = core_model.normalize_quaternions(hr_flat)
-                sr_matched, _, _ = core_model.match_closest_symmetry(sr_flat, hr_flat)
+                sr_matched = core_model.reduce_to_fz(sr_flat)
                 sr_b = sr_matched.reshape(h_sr, w_sr, 4).permute(2, 0, 1)
 
             sr_np = to_spatial_quat(torch_to_numpy_quat(sr_b))

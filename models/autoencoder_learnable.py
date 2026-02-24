@@ -122,51 +122,33 @@ class FCCLearnableDecoderAutoEncoder(nn.Module):
         f4, f6 = self.encode(quats)
         return self.decode(f4, f6)
 
-    def match_closest_symmetry(
+    def reduce_to_fz(
         self,
-        q_decoded: torch.Tensor,
-        q_truth: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        q_decoded = q_decoded.to(self.device)
-        q_truth = q_truth.to(self.device)
-        q_decoded = self._normalize_quaternions(q_decoded)
-        q_truth = self._normalize_quaternions(q_truth)
+        quats: torch.Tensor,
+        return_op_map: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor] | torch.Tensor:
+        quats = self._normalize_quaternions(quats.to(self.device))
+        batch_size = quats.shape[0]
 
-        q_decoded_active = self._to_active_convention(q_decoded)
-        q_truth_active = self._to_active_convention(q_truth)
+        q_expanded = quats.unsqueeze(1).expand(-1, 24, -1)
+        syms = self.physics.fcc_syms.unsqueeze(0).expand(batch_size, -1, -1)
 
-        batch_size = q_truth_active.shape[0]
-        q_rec_expanded = q_decoded_active.unsqueeze(1).expand(-1, 24, -1)
-        fcc_syms_expanded = self.physics.fcc_syms.unsqueeze(0).expand(batch_size, -1, -1)
+        fam = self.quat_mul(
+            q_expanded.reshape(-1, 4),
+            syms.reshape(-1, 4),
+        ).view(batch_size, 24, 4)
+        fam = self._normalize_quaternions(fam.reshape(-1, 4)).view(batch_size, 24, 4)
 
-        q_flat = q_rec_expanded.reshape(-1, 4)
-        g_flat = fcc_syms_expanded.reshape(-1, 4)
+        w_abs = fam[..., 0].abs()
+        best_idx = torch.argmax(w_abs, dim=1)
+        batch_idx = torch.arange(batch_size, device=quats.device)
+        q_fz = fam[batch_idx, best_idx]
+        q_fz = torch.where(q_fz[:, :1] < 0, -q_fz, q_fz)
+        q_fz = self._normalize_quaternions(q_fz)
 
-        actions: list[tuple[str, torch.Tensor]] = [
-            ("right", self.quat_mul(q_flat, g_flat).view(batch_size, 24, 4)),
-            ("left", self.quat_mul(g_flat, q_flat).view(batch_size, 24, 4)),
-        ]
-
-        families = torch.cat([fam for _, fam in actions], dim=1)
-        families = self._normalize_quaternions(families)
-        q_truth_expanded = q_truth_active.unsqueeze(1).expand(-1, families.shape[1], -1)
-        delta = self.quat_mul(
-            families.reshape(-1, 4),
-            self._quat_conjugate(q_truth_expanded.reshape(-1, 4)),
-        ).view(batch_size, families.shape[1], 4)
-        delta = self._normalize_quaternions(delta)
-
-        w_abs = delta[..., 0].abs().clamp(max=1.0)
-        misorientation = 2.0 * torch.acos(w_abs)
-        best_flat_idx = torch.argmin(misorientation, dim=1)
-        errors = torch.gather(misorientation, 1, best_flat_idx.unsqueeze(1)).squeeze(1)
-
-        batch_indices = torch.arange(batch_size, device=self.device)
-        closest_active = families[batch_indices, best_flat_idx]
-        closest_quats = self._from_active_convention(closest_active)
-        best_indices = best_flat_idx % 24
-
-        return closest_quats, errors, best_indices
+        if return_op_map:
+            return q_fz, best_idx
+        return q_fz
 
     def reconstruct_batch_debug(
         self,
@@ -181,7 +163,10 @@ class FCCLearnableDecoderAutoEncoder(nn.Module):
         f4, f6 = self.encode(q_batch)
         dec = self.decode_with_debug(f4, f6)
         q_decoded = dec["q_output"]
-        q_reconstructed, errors, best_indices = self.match_closest_symmetry(q_decoded, q_batch)
+        q_reconstructed, best_indices = self.reduce_to_fz(
+            q_decoded,
+            return_op_map=True,
+        )
 
         out: dict[str, Any] = {
             "q_input": q_batch,
@@ -201,7 +186,7 @@ class FCCLearnableDecoderAutoEncoder(nn.Module):
             delta = self._normalize_quaternions(delta)
             w_abs = delta[:, 0].abs().clamp(max=1.0)
             misorientation_deg = 2.0 * torch.acos(w_abs) * 180.0 / torch.pi
-            out["errors"] = errors
+            out["errors"] = misorientation_deg * torch.pi / 180.0
             out["misorientation_deg"] = misorientation_deg
 
         return out
