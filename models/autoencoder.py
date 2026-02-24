@@ -46,35 +46,66 @@ class FCCPhysics(nn.Module):
 		inv_sqrt_2 = 1 / math.sqrt(2)
 		half = 0.5
 		self.fcc_syms = torch.tensor(
-			[
-				[1, 0, 0, 0],
-				[0, 1, 0, 0],
-				[0, 0, 1, 0],
-				[0, 0, 0, 1],
-				[inv_sqrt_2, inv_sqrt_2, 0, 0],
-				[inv_sqrt_2, 0, inv_sqrt_2, 0],
-				[inv_sqrt_2, 0, 0, inv_sqrt_2],
-				[inv_sqrt_2, -inv_sqrt_2, 0, 0],
-				[inv_sqrt_2, 0, -inv_sqrt_2, 0],
-				[inv_sqrt_2, 0, 0, -inv_sqrt_2],
-				[0, inv_sqrt_2, inv_sqrt_2, 0],
-				[0, inv_sqrt_2, 0, inv_sqrt_2],
-				[0, 0, inv_sqrt_2, inv_sqrt_2],
-				[0, inv_sqrt_2, -inv_sqrt_2, 0],
-				[0, 0, inv_sqrt_2, -inv_sqrt_2],
-				[0, inv_sqrt_2, 0, -inv_sqrt_2],
-				[half, half, half, half],
-				[half, -half, -half, half],
-				[half, -half, half, -half],
-				[half, half, -half, -half],
-				[half, half, half, -half],
-				[half, half, -half, half],
-				[half, -half, half, half],
-				[half, -half, -half, -half],
-			],
-			dtype=torch.float32,
-			device=device,
-		)
+		[
+			[1, 0, 0, 0],
+			[0, -1, 0, 0],
+			[0, 0, -1, 0],
+			[0, 0, 0, 1],
+			[inv_sqrt_2, -inv_sqrt_2, 0, 0],
+			[inv_sqrt_2, 0, -inv_sqrt_2, 0],
+			[inv_sqrt_2, 0, 0, -inv_sqrt_2],
+			[inv_sqrt_2, inv_sqrt_2, 0, 0],
+			[inv_sqrt_2, 0, inv_sqrt_2, 0],
+			[inv_sqrt_2, 0, 0, inv_sqrt_2],
+			[0, -inv_sqrt_2, -inv_sqrt_2, 0],
+			[0, -inv_sqrt_2, 0, -inv_sqrt_2],
+			[0, 0, -inv_sqrt_2, -inv_sqrt_2],
+			[0, -inv_sqrt_2, inv_sqrt_2, 0],
+			[0, 0, -inv_sqrt_2, inv_sqrt_2],
+			[0, -inv_sqrt_2, 0, inv_sqrt_2],
+			[half, -half, -half, -half],
+			[half, half, half, -half],
+			[half, half, -half, half],
+			[half, -half, half, half],
+			[half, -half, -half, half],
+			[half, -half, half, -half],
+			[half, half, -half, -half],
+			[half, half, half, half],
+		],
+		dtype=torch.float32,
+		device=device,
+	)
+
+		# self.fcc_syms = torch.tensor(
+		# 	[
+		# 		[1, 0, 0, 0],
+		# 		[0, 1, 0, 0],
+		# 		[0, 0, 1, 0],
+		# 		[0, 0, 0, 1],
+		# 		[inv_sqrt_2, inv_sqrt_2, 0, 0],
+		# 		[inv_sqrt_2, 0, inv_sqrt_2, 0],
+		# 		[inv_sqrt_2, 0, 0, inv_sqrt_2],
+		# 		[inv_sqrt_2, -inv_sqrt_2, 0, 0],
+		# 		[inv_sqrt_2, 0, -inv_sqrt_2, 0],
+		# 		[inv_sqrt_2, 0, 0, -inv_sqrt_2],
+		# 		[0, inv_sqrt_2, inv_sqrt_2, 0],
+		# 		[0, inv_sqrt_2, 0, inv_sqrt_2],
+		# 		[0, 0, inv_sqrt_2, inv_sqrt_2],
+		# 		[0, inv_sqrt_2, -inv_sqrt_2, 0],
+		# 		[0, 0, inv_sqrt_2, -inv_sqrt_2],
+		# 		[0, inv_sqrt_2, 0, -inv_sqrt_2],
+		# 		[half, half, half, half],
+		# 		[half, -half, -half, half],
+		# 		[half, -half, half, -half],
+		# 		[half, half, -half, -half],
+		# 		[half, half, half, -half],
+		# 		[half, half, -half, half],
+		# 		[half, -half, half, half],
+		# 		[half, -half, -half, -half],
+		# 	],
+		# 	dtype=torch.float32,
+		# 	device=device,
+		# )
 
 
 class FCCEncoder(nn.Module):
@@ -482,13 +513,16 @@ class FastLookupFCCDecoder(nn.Module):
 		if self.refine_steps <= 0:
 			return q_seed
 
+		f4_tgt = f4.to(torch.float32)
+		f6_tgt = f6.to(torch.float32)
+
 		with torch.enable_grad():
 			u = nn.Parameter(q_seed.detach().clone())
 			opt = torch.optim.Adam([u], lr=self.refine_lr)
 			for _ in range(self.refine_steps):
 				opt.zero_grad(set_to_none=True)
 				q = self._normalize_quat(u)
-				loss = self._loss(q, f4.to(torch.float32), f6.to(torch.float32)).mean()
+				loss = self._loss(q, f4_tgt, f6_tgt).mean()
 				loss.backward()
 				opt.step()
 		return self._normalize_quat(u.detach())
@@ -542,7 +576,11 @@ class FastLookupFCCDecoder(nn.Module):
 				"Expected (N, 27)."
 			)
 
-		t = torch.as_tensor(arr, dtype=torch.float32, device=torch.device(self.physics.device))
+		t = torch.as_tensor(
+			arr,
+			dtype=torch.float32,
+			device=torch.device(self.physics.device),
+		)
 		table_quats = t[:, :4]
 		table_feat = t[:, 4:26]
 		table_feat_norm = t[:, 26]
@@ -703,9 +741,15 @@ class FCCAutoEncoder(nn.Module):
 
 		load_result = self.decoder.load_state_dict(state_dict, strict=bool(strict))
 		if hasattr(load_result, "missing_keys") and len(load_result.missing_keys) > 0:
-			print(f"[FCCAutoEncoder] learnable decoder missing keys: {load_result.missing_keys[:8]}")
+			print(
+				"[FCCAutoEncoder] learnable decoder missing keys: "
+				f"{load_result.missing_keys[:8]}"
+			)
 		if hasattr(load_result, "unexpected_keys") and len(load_result.unexpected_keys) > 0:
-			print(f"[FCCAutoEncoder] learnable decoder unexpected keys: {load_result.unexpected_keys[:8]}")
+			print(
+				"[FCCAutoEncoder] learnable decoder unexpected keys: "
+				f"{load_result.unexpected_keys[:8]}"
+			)
 
 	@staticmethod
 	def quat_mul(q1: torch.Tensor, q2: torch.Tensor) -> torch.Tensor:
@@ -826,8 +870,6 @@ class FCCAutoEncoder(nn.Module):
 		- f6_0..f6_12
 		- (optional) q_dec_* and decode quality metrics
 		"""
-		from pathlib import Path
-
 		quats = self._sample_fz_quaternions(
 			resolution=resolution,
 			method=sampling_method,
@@ -866,8 +908,9 @@ class FCCAutoEncoder(nn.Module):
 			)
 			delta = self._normalize_quaternions(delta)
 			w_abs = delta[:, 0].abs().clamp(max=1.0)
-			errors = 2.0 * torch.acos(w_abs)
-			mis_deg = 2.0 * torch.acos(w_abs) * 180.0 / math.pi
+			angle = 2.0 * torch.acos(w_abs)
+			errors = angle
+			mis_deg = angle * 180.0 / math.pi
 
 			q_decoded_cpu = q_decoded.detach().cpu()
 			q_matched_cpu = q_matched.detach().cpu()
