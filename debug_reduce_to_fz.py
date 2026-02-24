@@ -52,11 +52,18 @@ def reduce_to_fz_with_ops_orix(
         raise ValueError("return_order must be 'xyzw' or 'wxyz'")
     
 if __name__ == "__main__":
-    q_xyzw = np.load("Open_718_Test_hr_x_block_0.npy")  # (H,W,4) scalar-last
+
+    q_xyzw = np.load("/data/warren/materials/EBSD/IN718_2D_SR_x4/Test/Original_Data/Open_718_Test_hr_x_block_0.npy")  # (H,W,4) scalar-last
 
     q_red_xyzw, s_l, s_r = reduce_to_fz_with_ops_orix(
         q_xyzw,
-        sym=symmetry.O,       # recommended for cubic proper
+        sym=symmetry.Oh,       # recommended for cubic proper
         verbose=True,
         return_order="xyzw"
     )
+
+    H, W, _ = q_xyzw.shape
+
+    # s_l.data and s_r.data are (N,4) where N=H*W in wxyz order
+    sL_HW = s_l.reshape(H, W)
+    sR_HW = s_r.reshape(H, W)
