@@ -1,5 +1,5 @@
 {
-    "dataset_root": "/data/home/umang/Materials/Materials_data_mount/EBSD/IN718_FZ_2D_SR_x4/Open718_QSR_x4",
+    "dataset_root": "/data/warren/materials/EBSD/IN718_FZ_2D_SR_x4",
     "epochs": 20,
     "batch_size": 8,
     "lr": 0.001,

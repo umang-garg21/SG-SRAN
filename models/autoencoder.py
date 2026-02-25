@@ -765,15 +765,15 @@ class FCCAutoEncoder(nn.Module):
 			dim=1,
 		)
 
-	@staticmethod
-	def _to_active_convention(quats: torch.Tensor) -> torch.Tensor:
-		"""Convert Bunge (passive) quaternion to active convention by conjugation."""
-		return torch.cat([quats[..., :1], -quats[..., 1:]], dim=-1)
+	# @staticmethod
+	# def _to_active_convention(quats: torch.Tensor) -> torch.Tensor:
+	# 	"""Convert Bunge (passive) quaternion to active convention by conjugation."""
+	# 	return torch.cat([quats[..., :1], -quats[..., 1:]], dim=-1)
 
-	@staticmethod
-	def _from_active_convention(quats: torch.Tensor) -> torch.Tensor:
-		"""Convert active quaternion back to Bunge (passive) convention by conjugation."""
-		return torch.cat([quats[..., :1], -quats[..., 1:]], dim=-1)
+	# @staticmethod
+	# def _from_active_convention(quats: torch.Tensor) -> torch.Tensor:
+	# 	"""Convert active quaternion back to Bunge (passive) convention by conjugation."""
+	# 	return torch.cat([quats[..., :1], -quats[..., 1:]], dim=-1)
 
 	def encode(self, quats: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
 		# Bunge inputs are passive; FCCEncoder expects active convention

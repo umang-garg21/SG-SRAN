@@ -43,6 +43,22 @@ def reduce_to_fz_with_ops_orix(
     # q_red is an Orientation; get back quaternions
     q_red_wxyz = q_red.data.reshape(orig_shape + (4,))
 
+    # Invert left-side symmetry ops so callers receive s^-1 on the left
+    try:
+        s_l_data = np.asarray(getattr(s_l, "data"))
+        s_l_data_inv = s_l_data.copy()
+        s_l_data_inv[..., 1:] *= -1.0
+        try:
+            s_l.data[...] = s_l_data_inv
+        except Exception:
+            s_l = s_l_data_inv
+    except Exception:
+        try:
+            s_l = np.asarray(s_l)
+            s_l[..., 1:] *= -1.0
+        except Exception:
+            pass
+
     if return_order.lower() == "wxyz":
         return q_red_wxyz, s_l, s_r
     elif return_order.lower() == "xyzw":

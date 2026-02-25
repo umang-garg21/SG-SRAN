@@ -1,0 +1,43 @@
+{
+  "input_npy": "/data/warren/materials/EBSD/IN718_2D_SR_x4/Test/Original_Data/Open_718_Test_hr_x_block_0.npy",
+  "num_compared": 117390,
+  "symmetry": "Oh",
+  "stats": [
+    {
+      "method": "np_vs_orix",
+      "mean_deg": 179.99999976032524,
+      "p95_deg": 180.0,
+      "max_deg": 180.0
+    },
+    {
+      "method": "model_vs_orix",
+      "mean_deg": 0.001224391869950174,
+      "p95_deg": 0.012617021425246329,
+      "max_deg": 0.03763180785716643
+    },
+    {
+      "method": "model_vs_np",
+      "mean_deg": 179.9999999852197,
+      "p95_deg": 180.0,
+      "max_deg": 180.0
+    },
+    {
+      "method": "orix_vs_orig",
+      "mean_deg": 0.0016646428406192815,
+      "p95_deg": 0.014806064206749523,
+      "max_deg": 0.02940644936937249
+    },
+    {
+      "method": "np_vs_orig",
+      "mean_deg": 179.99999996243898,
+      "p95_deg": 180.0,
+      "max_deg": 180.0
+    },
+    {
+      "method": "model_vs_orig",
+      "mean_deg": 0.0016906523120994866,
+      "p95_deg": 0.017804686606447902,
+      "max_deg": 0.041586999282958594
+    }
+  ]
+}
