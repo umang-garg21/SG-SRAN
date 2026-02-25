@@ -274,10 +274,10 @@ class EquivariantReynoldsWrap(nn.Module):
         assert C % Cg == 0, f"Channels {C} must be multiple of {Cg}"
         n_feats = C // Cg
 
-        # Lift (apply group action on quaternion axis)
+        # Lift: Bunge convention uses s⁻¹ ⊗ x, so apply group_tensor_inv
         x = x.view(B, n_feats, Cg, *spatial)  # (B,n,Cg,*)
-        # gamma_x[b,g,n,c,...] = sum_i group[g,c,i] * x[b,n,i,...]
-        gamma_x = torch.einsum("gci,bni...->bg nc...", self.group_tensor, x).reshape(
+        # gamma_x[b,g,n,c,...] = sum_i group_inv[g,c,i] * x[b,n,i,...] = s⁻¹ ⊗ x
+        gamma_x = torch.einsum("gci,bni...->bgnc...", self.group_tensor_inv, x).reshape(
             B * G, n_feats * Cg, *spatial
         )
 
@@ -288,8 +288,8 @@ class EquivariantReynoldsWrap(nn.Module):
         n_out = Cout // Cg
 
         fx = fx.view(B, G, n_out, Cg, *spatial_out)  # (B,G,n_out,Cg,*)
-        # project back: sum_i group_inv[g,c,i] * fx[b,g,n,i,...]
-        fx = torch.einsum("gci,bgni...->bgnc...", self.group_tensor_inv, fx)
+        # Project back: inverse of s⁻¹ is s, so apply group_tensor = s ⊗ y
+        fx = torch.einsum("gci,bgni...->bgnc...", self.group_tensor, fx)
 
         # Average over group
         return fx.mean(dim=1).reshape(B, Cout, *spatial_out)

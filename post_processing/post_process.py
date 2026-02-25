@@ -214,6 +214,18 @@ def run_postprocess_from_config(
                 overwrite=True,
             )
 
+            # Also render a simpler input vs output (LR -> SR) comparison
+            io_out = out_dir / f"input_output_comparison_{sample_counter:03d}.png"
+            render_input_output_side_by_side(
+                input_q_arr=lr_np,
+                output_q_arr=sr_np,
+                sym_class=sym_class,
+                out_png=str(io_out),
+                ref_dir="ALL",
+                include_key=True,
+                overwrite=True,
+            )
+
             if render_fz_ipf:
                 from visualization.unfolded_ipf import fz_ipf_sr_hr_side_by_side
 

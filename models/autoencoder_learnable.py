@@ -133,9 +133,12 @@ class FCCLearnableDecoderAutoEncoder(nn.Module):
         q_expanded = quats.unsqueeze(1).expand(-1, 24, -1)
         syms = self.physics.fcc_syms.unsqueeze(0).expand(batch_size, -1, -1)
 
+        syms_flat = syms.reshape(-1, 4)
+        # Bunge convention: s⁻¹ ⊗ q  (left orbit under crystal symmetry)
+        syms_inv_flat = torch.cat([syms_flat[:, :1], -syms_flat[:, 1:]], dim=-1)
         fam = self.quat_mul(
+            syms_inv_flat,
             q_expanded.reshape(-1, 4),
-            syms.reshape(-1, 4),
         ).view(batch_size, 24, 4)
         fam = self._normalize_quaternions(fam.reshape(-1, 4)).view(batch_size, 24, 4)
 

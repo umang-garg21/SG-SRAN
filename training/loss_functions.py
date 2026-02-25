@@ -222,12 +222,14 @@ def reduce_to_fz_min_angle_torch_fast(
         dtype=torch.float32,
         device=q.device,
     )  # (M,4)
+    # Bunge convention: s⁻¹ ⊗ q  (unit quat inverse = conjugate: negate vector part)
+    sym_ops_inv = torch.cat([sym_ops[:, :1], -sym_ops[:, 1:]], dim=-1)
 
     # Flatten quaternion field to (4, N)
     q_flat = q.view(B, C, -1).reshape(C, N)
 
-    # Left multiply: output (M,4,N)
-    cand = quat_left_multiply_torch(q_flat, sym_ops, eps=eps, normalize=True)
+    # Left multiply with s⁻¹: output (M,4,N)
+    cand = quat_left_multiply_torch(q_flat, sym_ops_inv, eps=eps, normalize=True)
 
     # Pick symmetry op with max scalar part
     w_vals = cand[:, 0, :]  # (M, N)

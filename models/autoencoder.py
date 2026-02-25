@@ -765,11 +765,23 @@ class FCCAutoEncoder(nn.Module):
 			dim=1,
 		)
 
+	@staticmethod
+	def _to_active_convention(quats: torch.Tensor) -> torch.Tensor:
+		"""Convert Bunge (passive) quaternion to active convention by conjugation."""
+		return torch.cat([quats[..., :1], -quats[..., 1:]], dim=-1)
+
+	@staticmethod
+	def _from_active_convention(quats: torch.Tensor) -> torch.Tensor:
+		"""Convert active quaternion back to Bunge (passive) convention by conjugation."""
+		return torch.cat([quats[..., :1], -quats[..., 1:]], dim=-1)
+
 	def encode(self, quats: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-		return self.encoder(quats)
+		# Bunge inputs are passive; FCCEncoder expects active convention
+		return self.encoder(self._to_active_convention(quats))
 
 	def decode(self, f4: torch.Tensor, f6: torch.Tensor) -> torch.Tensor:
-		return self.decoder(f4, f6)
+		# Decoder operates in active convention; convert result back to Bunge
+		return self._from_active_convention(self.decoder(f4, f6))
 
 	def forward(self, quats: torch.Tensor, normalize_input: bool = True) -> torch.Tensor:
 		quats = quats.to(self.device)
@@ -795,7 +807,10 @@ class FCCAutoEncoder(nn.Module):
 
 		q_flat = q_expanded.reshape(-1, 4)
 		s_flat = syms.reshape(-1, 4)
-		fam = self.quat_mul(q_flat, s_flat).view(batch_size, 24, 4)
+		# Bunge convention: s⁻¹ ⊗ q  (left orbit under crystal symmetry)
+		# For unit quaternions, s⁻¹ = s* (negate vector part)
+		s_flat_inv = torch.cat([s_flat[:, :1], -s_flat[:, 1:]], dim=-1)
+		fam = self.quat_mul(s_flat_inv, q_flat).view(batch_size, 24, 4)
 		fam = self._normalize_quaternions(fam.reshape(-1, 4)).view(batch_size, 24, 4)
 
 		w_abs = fam[..., 0].abs()

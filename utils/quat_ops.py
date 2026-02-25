@@ -557,10 +557,13 @@ def reduce_to_fz_min_angle(
         return q_out
 
     # 2. Apply symmetry ops (vectorized)
+    # Bunge convention: s⁻¹ ⊗ q  (unit quat inverse = conjugate: negate vector part)
     ops = sym.data.astype(np.float32, copy=False)
-    M = ops.shape[0]
+    ops_inv = ops.copy()
+    ops_inv[:, 1:] *= -1.0
+    M = ops_inv.shape[0]
     cand = quat_left_multiply_numpy(
-        q_spatial, ops, eps=eps, normalize=True, layout="quat_last"
+        q_spatial, ops_inv, eps=eps, normalize=True, layout="quat_last"
     )
     cand_flat = cand.reshape(M * N, 4)
 
