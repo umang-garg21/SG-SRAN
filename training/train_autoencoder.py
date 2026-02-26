@@ -14,7 +14,7 @@ from models.autoencoder_learnable import FCCLearnableDecoderAutoEncoder
 from training.autoencoder_trainer import AutoencoderTrainer
 from training.config_utils import load_and_prepare_config
 from training.data_loading import build_dataloader
-from training.loss_functions import build_loss
+from training.loss_functions import build_loss, reduce_to_fz_min_angle_torch_fast
 from training.optimizer_utils import build_optimizer
 from training.schedulers import build_scheduler
 from training.seed_utils import set_seed
@@ -186,23 +186,20 @@ def print_simple_encoder_decoder_stats(model, data_loader, split_name: str = "te
     all_errors = []
     all_misorientation_angles = []
 
+    # Build FZ-reduction helper once (uses model's own 24-element O group via
+    # fcc_syms, not orix's Oh which is the 48-element full cubic group).
+    _core = getattr(model, "core", model)
+    _reduce = getattr(_core, "reduce_to_fz", None)
+
     for batch_start in range(0, num_quats, batch_size):
         batch_end = min(batch_start + batch_size, num_quats)
         q_batch = q_all[batch_start:batch_end]
 
-        q_dec = model(q_batch, normalize_input=True)
-        if hasattr(model, "_to_active_convention") and hasattr(model, "_quat_conjugate"):
-            qA = model._to_active_convention(q_dec)
-            qB = model._to_active_convention(q_batch)
-            delta = model.quat_mul(qA, model._quat_conjugate(qB))
-        else:
-            q_conj = torch.stack(
-                [q_batch[:, 0], -q_batch[:, 1], -q_batch[:, 2], -q_batch[:, 3]],
-                dim=1,
-            )
-            delta = model.quat_mul(q_dec, q_conj)
+        q_dec_fz = model(q_batch, normalize_input=True)
+        q_orig_fz = _reduce(q_batch)
 
-        w_errors = delta[:, 0]
+        # Disorientation = dot product of FZ-reduced quaternions (w of q_orig⁻¹⊗q_dec)
+        w_errors = torch.sum(q_orig_fz * q_dec_fz, dim=-1)
         w_errors_clamped = torch.clamp(torch.abs(w_errors), max=1.0)
         errors = 2.0 * torch.acos(w_errors_clamped)
         misorientation_angles = 2.0 * torch.acos(w_errors_clamped) * 180.0 / torch.pi

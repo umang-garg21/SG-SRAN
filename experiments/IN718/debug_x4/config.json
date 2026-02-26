@@ -31,7 +31,7 @@
     "decoder_lookup_resolution": 1,
     "decoder_lookup_npy_path": "symmetry_groups/fast_lookup_res1.npy",
     "decoder_lookup_rebuild": false,
-    "decoder_lookup_refine_steps": 32,
+    "decoder_lookup_refine_steps": 0,
     "decoder_lookup_refine_lr": 0.001,
     "decoder_w6": 0.5,
     "logging": {

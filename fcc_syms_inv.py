@@ -51,7 +51,7 @@ def build_fcc_syms_inv() -> torch.Tensor:
 			[1, 0, 0, 0],
 			[0, -1, 0, 0],
 			[0, 0, -1, 0],
-			[0, 0, 0, 1],
+			[0, 0, 0, -1],
 			[inv_sqrt_2, -inv_sqrt_2, 0, 0],
 			[inv_sqrt_2, 0, -inv_sqrt_2, 0],
 			[inv_sqrt_2, 0, 0, -inv_sqrt_2],

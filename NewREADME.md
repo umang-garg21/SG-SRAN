@@ -12,6 +12,8 @@ scripts/train.sh /home/warren/projects/Reynolds-QSR/experiments/IN718/debug_x4 -
 
 scripts/train_autoencoder.sh /home/warren/projects/Reynolds-QSR/experiments/IN718/debug_x4 --config config_smoke.json
 
+scripts/train_autoencoder.sh /home/warren/projects/Reynolds-QSR/experiments/IN718/debug_x4 --config config.json
+
 scripts/train_autoencoder.sh /home/warren/projects/Reynolds-QSR/experiments/IN718/LAE_01 --config config_tiny.json
 
 scripts/train.sh /home/warren/projects/Reynolds-QSR/experiments/IN718/invariant_sr
