@@ -38,32 +38,17 @@ def reduce_to_fz_with_ops_orix(
     ori = Orientation(q_wxyz.reshape(-1, 4), symmetry=sym)
 
     # This is the call you referenced:
-    q_red, s_l, s_r = ori.map_into_symmetry_reduced_zone_with_ops(verbose=verbose)
+    q_red = ori.reduce(verbose=verbose)
 
     # q_red is an Orientation; get back quaternions
     q_red_wxyz = q_red.data.reshape(orig_shape + (4,))
 
-    # Invert left-side symmetry ops so callers receive s^-1 on the left
-    try:
-        s_l_data = np.asarray(getattr(s_l, "data"))
-        s_l_data_inv = s_l_data.copy()
-        s_l_data_inv[..., 1:] *= -1.0
-        try:
-            s_l.data[...] = s_l_data_inv
-        except Exception:
-            s_l = s_l_data_inv
-    except Exception:
-        try:
-            s_l = np.asarray(s_l)
-            s_l[..., 1:] *= -1.0
-        except Exception:
-            pass
 
     if return_order.lower() == "wxyz":
-        return q_red_wxyz, s_l, s_r
+        return q_red_wxyz
     elif return_order.lower() == "xyzw":
         q_red_xyzw = np.stack([q_red_wxyz[..., 1], q_red_wxyz[..., 2], q_red_wxyz[..., 3], q_red_wxyz[..., 0]], axis=-1)
-        return q_red_xyzw, s_l, s_r
+        return q_red_xyzw
     else:
         raise ValueError("return_order must be 'xyzw' or 'wxyz'")
     
@@ -71,7 +56,7 @@ if __name__ == "__main__":
 
     q_xyzw = np.load("/data/warren/materials/EBSD/IN718_2D_SR_x4/Test/Original_Data/Open_718_Test_hr_x_block_0.npy")  # (H,W,4) scalar-last
 
-    q_red_xyzw, s_l, s_r = reduce_to_fz_with_ops_orix(
+    q_red_xyzw = reduce_to_fz_with_ops_orix(
         q_xyzw,
         sym=symmetry.Oh,       # recommended for cubic proper
         verbose=True,
@@ -79,7 +64,3 @@ if __name__ == "__main__":
     )
 
     H, W, _ = q_xyzw.shape
-
-    # s_l.data and s_r.data are (N,4) where N=H*W in wxyz order
-    sL_HW = s_l.reshape(H, W)
-    sR_HW = s_r.reshape(H, W)

@@ -1,26 +1,68 @@
+"""Small utilities to visualise orientations as unfolded FZ-IPF / Rodrigues plots.
+
+Depends on: numpy, matplotlib, orix
+
+Provides a helper `plot_fz_ipf_helper` and `fz_ipf_sr_hr_side_by_side`.
+When run as a script the module will load a .npy file and show a plot.
+"""
+
+from typing import Optional, Tuple
 import os
+import sys
+from copy import deepcopy
+from pathlib import Path
+
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import matplotlib.path as mpath
-from copy import deepcopy
+
 from orix.quaternion import Orientation, symmetry
 from orix.vector import Vector3d
+from orix.quaternion.symmetry import Oh
+import orix.plot
+import torch
+# ensure project root is on sys.path so local `utils` package imports work
+_here = Path(__file__).resolve().parent
+repo_root = None
+p = _here
+while True:
+    if (p / "utils").exists() or (p / "requirements.txt").exists() or (p / ".git").exists():
+        repo_root = str(p)
+        break
+    if p.parent == p:
+        break
+    p = p.parent
+if repo_root and repo_root not in sys.path:
+    sys.path.insert(0, repo_root)
+
 from utils.quat_ops import (
     normalize_quaternions,
     enforce_hemisphere,
     reduce_to_fz_min_angle,
 )
 
-import numpy as np
-import matplotlib.pyplot as plt
-from orix.quaternion import Orientation, symmetry
-from orix.vector import Vector3d
-from utils.quat_ops import (
-    normalize_quaternions,
-    enforce_hemisphere,
-    reduce_to_fz_min_angle,
-)
+def reduce_to_fz_oh_many(q_Nx4, sym_inv_Gx4: torch.Tensor) -> torch.Tensor:
+    if q_Nx4.dim() == 1:
+        q_Nx4 = q_Nx4.unsqueeze(0)
+    device = q_Nx4.device
+    dtype = q_Nx4.dtype
+    sym = sym_inv_Gx4.to(device=device, dtype=dtype)
+    s = sym[:, None, :]
+    q = q_Nx4[None, :, :]
+    wa, xa, ya, za = s[..., 0], s[..., 1], s[..., 2], s[..., 3]
+    wb, xb, yb, zb = q[..., 0], q[..., 1], q[..., 2], q[..., 3]
+    c0 = wa*wb - xa*xb - ya*yb - za*zb
+    c1 = wa*xb + xa*wb + ya*zb - za*yb
+    c2 = wa*yb - xa*zb + ya*wb + za*xb
+    c3 = wa*zb + xa*yb - ya*xb + za*wb
+    cands = torch.stack([c0, c1, c2, c3], dim=-1)
+    cands = torch.where(cands[..., 0:1] < 0, -cands, cands)
+    ws = cands[..., 0]
+    best_idx = ws.argmax(dim=0)
+    ar = torch.arange(q_Nx4.shape[0], device=device)
+    best = cands[best_idx, ar, :]
+    return best, best_idx
 
 
 def plot_fz_ipf_helper(ax, q_flat, sym_class, ref_dir="Z", tol_deg=0.5, label=""):
@@ -38,15 +80,31 @@ def plot_fz_ipf_helper(ax, q_flat, sym_class, ref_dir="Z", tol_deg=0.5, label=""
     q_flat = normalize_quaternions(q_flat, axis=-1)
     q_flat = enforce_hemisphere(q_flat, scalar_first=True)
 
-    q_fz, op_map = reduce_to_fz_min_angle(
-        q_flat,
-        sym=sym,
-        normalize=False,
-        hemisphere=False,
-        return_op_map=True,
-    )
 
-    ori_fz = Orientation(q_fz, symmetry=sym).map_into_symmetry_reduced_zone()
+    q_flat = torch.from_numpy(q_flat)
+
+    oh_ops_np = np.asarray(sym.data, dtype=np.float32)     # (48, 4)
+    oh_ops     = torch.from_numpy(oh_ops_np)                   # (48, 4)
+    # Unit-quaternion inverse = conjugate: negate xyz
+    oh_ops_inv = oh_ops.clone()
+    oh_ops_inv[:, 1:] *= -1.0                                  # (48, 4)
+    oh_ops_inv = oh_ops_inv[:24]
+
+
+
+    q_fz, op_map = reduce_to_fz_oh_many(q_flat, oh_ops_inv)
+    op_map = op_map.detach().cpu().numpy()
+    q_fz = q_fz.detach().cpu().numpy()
+
+    # q_fz, op_map = reduce_to_fz_min_angle(
+    #     q_flat,
+    #     sym=sym,
+    #     normalize=False,
+    #     hemisphere=False,
+    #     return_op_map=True,
+    # )
+
+    ori_fz = Orientation(q_fz, symmetry=sym).reduce()
     ori_orig = Orientation(q_flat, symmetry=sym)
     outside_mask = op_map != 0
     frac_outside = outside_mask.mean() * 100
@@ -122,10 +180,10 @@ def plot_fz_ipf_helper(ax, q_flat, sym_class, ref_dir="Z", tol_deg=0.5, label=""
     # Blue symmetry reference axes
     # -------------------------------------------------------------
     v4fold = Vector3d([[0, 0, 1], [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0]])
-    ax.draw_circle(v4fold, color="blue")
+    ax.draw_circle(v4fold, color="black")
 
     v3fold = Vector3d([[1, 1, 1], [1, -1, 1], [-1, -1, 1], [-1, 1, 1]])
-    ax.draw_circle(v3fold, color="blue")
+    ax.draw_circle(v3fold, color="black")
 
     v2fold = Vector3d(
         [
@@ -139,22 +197,22 @@ def plot_fz_ipf_helper(ax, q_flat, sym_class, ref_dir="Z", tol_deg=0.5, label=""
             [1, -1, 0],
         ]
     )
-    ax.draw_circle(v2fold, color="blue")
-    # sector = sym.fundamental_sector
-    # original_pole = deepcopy(sector._pole)
-    # sector._pole = ax.pole
-    # edges = sector.edges
-    # sector._pole = original_pole
-    # x, y, _ = ax._pretransform_input((edges,))
-    # patch = mpatches.PathPatch(
-    #     mpath.Path(np.column_stack([x, y]), closed=True),
-    #     facecolor="none",
-    #     edgecolor="black",
-    #     linewidth=1.5,
-    #     alpha=0.9,
-    #     zorder=5,
-    # )
-    # ax.add_patch(patch)
+    ax.draw_circle(v2fold, color="black")
+    sector = sym.fundamental_sector
+    original_pole = deepcopy(sector._pole)
+    sector._pole = ax.pole
+    edges = sector.edges
+    sector._pole = original_pole
+    x, y, _ = ax._pretransform_input((edges,))
+    patch = mpatches.PathPatch(
+        mpath.Path(np.column_stack([x, y]), closed=True),
+        facecolor="none",
+        edgecolor="red",
+        linewidth=1.5,
+        alpha=0.9,
+        zorder=5,
+    )
+    ax.add_patch(patch)
     # -------------------------------------------------------------
     # Axis formatting
     # -------------------------------------------------------------
@@ -162,7 +220,7 @@ def plot_fz_ipf_helper(ax, q_flat, sym_class, ref_dir="Z", tol_deg=0.5, label=""
     ax.show_hemisphere_label()
     ax.legend(loc="upper right", fontsize=8)
 
-    return frac_outside
+    return frac_outside, op_map
 
 
 def fz_ipf_sr_hr_side_by_side(
@@ -253,6 +311,53 @@ def fz_ipf_sr_hr_side_by_side(
         "HR_frac_outside": hr_frac,
         "out_png": out_png,
     }
+
+def xyzw_to_wxyz(q_xyzw: np.ndarray) -> np.ndarray:
+    return np.stack([q_xyzw[..., 3], q_xyzw[..., 0], q_xyzw[..., 1], q_xyzw[..., 2]], axis=-1)
+
+
+if __name__ == "__main__":
+    # Run directly without argparse: optional first CLI arg is input .npy file
+    import sys
+    default_file = (
+        "/data/warren/materials/EBSD/IN718_2D_SR_x4/Test/Original_Data/Open_718_Test_hr_x_block_0.npy"
+    )
+    data = np.load(default_file)
+    data = xyzw_to_wxyz(data)
+
+
+    #     print(f"Input file not found at {infile}; generating random demo quaternions")
+    #     N = 20000
+    #     rand = np.random.randn(N, 4).astype(np.float32)
+    #     rand /= np.linalg.norm(rand, axis=1, keepdims=True)
+    #     data = rand
+
+    # expect last axis size 4
+    if data.ndim < 1 or data.shape[-1] != 4:
+        raise SystemExit("Input must have last axis size 4 (w,x,y,z)")
+
+    q_flat = data.reshape(-1, 4)
+
+    fig, ax = plt.subplots(subplot_kw={"projection": "stereographic"}, figsize=(6, 6))
+    fz_frac, op_map = plot_fz_ipf_helper(ax, q_flat, sym_class="Oh", ref_dir="Z", tol_deg=0.5, label="Data")
+    plt.show()
+
+# if __name__ == "__main__":
+#     # Example usage with dummy data
+#     sr_quat = np.random.rand(10000, 4)  # Replace with actual SR quaternions
+#     hr_quat = np.random.rand(10000, 4)  # Replace with actual HR quaternions
+
+#     results = fz_ipf_sr_hr_side_by_side(
+#         sr_quat,
+#         hr_quat,
+#         sym_class="Oh",
+#         ref_dir="Z",
+#         max_points=5000,
+#         tol_deg=0.5,
+#         out_png="fz_ipf_sr_hr.png",
+#         overwrite=True,
+#     )
+#     print(results)
 
 
 # def plot_fz_ipf_helper(ax, q_flat, sym_class, ref_dir="Z", tol_deg=0.5, label=""):

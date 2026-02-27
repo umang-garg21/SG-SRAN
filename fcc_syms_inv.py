@@ -85,7 +85,7 @@ def normalize_quats(q: np.ndarray, eps: float = 1e-12) -> np.ndarray:
 
 
 def quat_inverse(q: np.ndarray) -> np.ndarray:
-	q = normalize_quats(q)
+	# q = normalize_quats(q)
 	q_inv = q.copy()
 	q_inv[..., 1:] *= -1.0
 	return q_inv
@@ -123,7 +123,7 @@ def compare_with_orix(fcc_syms_inv: np.ndarray, group_name: str = "O", tol: floa
 
 	orix_group = getattr(symmetry, group_name)
 	orix_ops = np.asarray(orix_group.data, dtype=np.float64)
-	orix_ops = normalize_quats(orix_ops)
+	# orix_ops = normalize_quats(orix_ops)
 	orix_inv = quat_inverse(orix_ops)
 
 	return {
@@ -141,7 +141,7 @@ if __name__ == "__main__":
 
     # Compare computed inverse
     fcc_syms = build_fcc_syms().cpu().numpy().astype(np.float64, copy=False)
-    fcc_syms_norm = normalize_quats(fcc_syms)
+    fcc_syms_norm = fcc_syms # normalize_quats(fcc_syms)
     fcc_syms_inv_computed = quat_inverse(fcc_syms_norm)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -152,7 +152,7 @@ if __name__ == "__main__":
 
     # Compare hardcoded build_fcc_syms_inv
     fcc_syms_inv_hardcoded = build_fcc_syms_inv().cpu().numpy().astype(np.float64, copy=False)
-    fcc_syms_inv_hardcoded = normalize_quats(fcc_syms_inv_hardcoded)
+    # fcc_syms_inv_hardcoded = normalize_quats(fcc_syms_inv_hardcoded)
 
     try:
         print("\n--- Comparison: Computed Inverse ---")
