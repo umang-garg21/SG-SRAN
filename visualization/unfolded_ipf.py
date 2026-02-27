@@ -41,7 +41,7 @@ from utils.quat_ops import (
     enforce_hemisphere,
     reduce_to_fz_min_angle,
 )
-
+# TODO: CHECK WHY THIS IS WRONG, MTEX reduces this 
 def reduce_to_fz_oh_many(q_Nx4, sym_inv_Gx4: torch.Tensor) -> torch.Tensor:
     if q_Nx4.dim() == 1:
         q_Nx4 = q_Nx4.unsqueeze(0)
@@ -104,8 +104,9 @@ def plot_fz_ipf_helper(ax, q_flat, sym_class, ref_dir="Z", tol_deg=0.5, label=""
     #     return_op_map=True,
     # )
 
-    ori_fz = Orientation(q_fz, symmetry=sym).reduce()
+    ori_fz = Orientation(q_fz, symmetry=sym)
     ori_orig = Orientation(q_flat, symmetry=sym)
+    
     outside_mask = op_map != 0
     frac_outside = outside_mask.mean() * 100
 
