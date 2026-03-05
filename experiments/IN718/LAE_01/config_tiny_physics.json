@@ -1,0 +1,46 @@
+{
+    "dataset_root": "/data/warren/materials/EBSD/IN718_FZ_2D_SR_x4",
+    "epochs": 1,
+    "batch_size": 8,
+    "lr": 0.0003,
+    "scale": 4,
+    "symmetry_group": "O",
+    "loss": "rotational_distance",
+    "amp": false,
+    "clip": 1.0,
+    "vis_every": 1,
+    "num_workers": 0,
+    "preload": true,
+    "preload_torch": true,
+    "pin_memory": true,
+    "scheduler": {
+        "type": "cosine",
+        "warmup_epochs": 1,
+        "min_lr": 1e-06
+    },
+    "optimizer": {
+        "type": "AdamW",
+        "weight_decay": 0.0001
+    },
+    "model": {
+        "type": "fcc_autoencoder"
+    },
+    "grid_res": 2048,
+    "decoder_backend": "optimizing",
+    "decoder_num_starts": 8,
+    "decoder_steps": 40,
+    "decoder_lr": 0.08,
+    "decoder_w6": 0.5,
+    "decoder_log_optimization": true,
+    "decoder_log_every": 1,
+    "symmetry": "O",
+    "symmetry_group_path": "symmetry_groups/O_group.npy",
+    "logging": {
+        "tensorboard": true,
+        "save_best_only": true,
+        "val_freq": 1
+    },
+    "smoke_test": true,
+    "save_every": 1,
+    "seed": 42
+}

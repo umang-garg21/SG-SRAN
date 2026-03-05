@@ -1,0 +1,49 @@
+{
+    "dataset_root": "/data/home/umang/Materials/Materials_data_mount/EBSD/IN718_FZ_2D_SR_x4/Open718_QSR_x4",
+    "epochs": 150,
+    "batch_size": 3,
+    "lr": 0.0003,
+    "scale": 4,
+    "symmetry_group": "O",
+    "loss": "simple_symmetry_rotational",
+    "amp": false,
+    "clip": 1.0,
+    "num_workers": 0,
+    "preload": true,
+    "preload_torch": true,
+    "pin_memory": true,
+    "scheduler": {
+        "type": "cosine",
+        "warmup_epochs": 3,
+        "min_lr": 1e-06
+    },
+    "optimizer": {
+        "type": "AdamW",
+        "weight_decay": 0.0001
+    },
+    "model": {
+        "type": "fcc_autoencoder_sr_boundary_guided"
+    },
+    "lr_shape": [64, 64],
+    "lr_conv_kernel_size_1": 5,
+    "lr_conv_kernel_size_2": 9,
+    "upsample_residual": false,
+    "bg_window_size": 3,
+    "bg_init_sigma": 0.5,
+    "bg_init_lambda": 2.0,
+    "bg_init_gamma": 1.0,
+    "hr_attn_num_blocks": 2,
+    "hr_attn_num_channels": 8,
+    "hr_attn_block_size": 16,
+    "decoder_backend": "lookup",
+    "decoder_lookup_resolution": 3,
+    "decoder_w6": 0.5,
+    "decoder_lookup_refine_steps": 0,
+    "logging": {
+        "tensorboard": true,
+        "save_best_only": true,
+        "val_freq": 1
+    },
+    "smoke_test": false,
+    "save_every": 5
+}
