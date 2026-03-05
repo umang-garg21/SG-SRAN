@@ -1,4 +1,4 @@
-# SG-SRAN (Symmetry-group aware Super-Resolution Attention Network (SG-SRAN))
+# SG-SRAN (Symmetry-group aware Super-Resolution Attention Network)
 
 Physics-aware, symmetry-constrained super-resolution for EBSD orientation fields using quaternion representations and e3nn/O(3)-equivariant feature processing.
 
