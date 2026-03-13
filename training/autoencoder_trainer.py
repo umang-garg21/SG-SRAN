@@ -26,12 +26,37 @@ class AutoencoderTrainer:
         self.use_amp = bool(cfg.get("amp", False))
         self.scaler = GradScaler("cuda", enabled=self.use_amp)
         self.log_recon_metrics = bool(cfg.get("log_recon_metrics", True))
+        self.canonical_target_for_loss = bool(cfg.get("canonical_target_for_loss", False))
+        self.canonicalize_pred_for_loss = bool(cfg.get("canonicalize_pred_for_loss", False))
         self.last_train_metrics = {}
         self.last_val_metrics = {}
         self.has_optimizer = self.optimizer is not None
 
     def _compute_loss(self, pred_flat, target_flat):
         return self.loss_fn(pred_flat, target_flat)
+
+    def _prepare_loss_quaternions(
+        self,
+        pred_flat: torch.Tensor,
+        target_flat: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if not self.canonical_target_for_loss and not self.canonicalize_pred_for_loss:
+            return pred_flat, target_flat
+
+        canonicalize = getattr(self.model, "canonicalize_for_metrics", None)
+        if not callable(canonicalize):
+            raise ValueError(
+                "canonical_target_for_loss/canonicalize_pred_for_loss requested, "
+                "but model does not expose canonicalize_for_metrics()."
+            )
+
+        pred_loss = pred_flat
+        tgt_loss = target_flat
+        if self.canonicalize_pred_for_loss:
+            pred_loss = canonicalize(pred_loss)
+        if self.canonical_target_for_loss:
+            tgt_loss = canonicalize(tgt_loss)
+        return pred_loss, tgt_loss
 
     @staticmethod
     def _normalize_quaternions(quats: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
@@ -75,7 +100,7 @@ class AutoencoderTrainer:
         return out
 
     def _compute_recon_metrics(self, pred_flat, target_flat):
-        # Direct reconstruction metrics (no symmetry matching in trainer path).
+        # Reconstruction metrics with optional model-provided canonicalization.
         if not hasattr(self.model, "quat_mul"):
             return {}
 
@@ -86,6 +111,11 @@ class AutoencoderTrainer:
             else:
                 pred_norm = self._normalize_quaternions(pred_flat)
                 target_norm = self._normalize_quaternions(target_flat)
+
+            canonicalize = getattr(self.model, "canonicalize_for_metrics", None)
+            if callable(canonicalize):
+                pred_norm = canonicalize(pred_norm)
+                target_norm = canonicalize(target_norm)
 
             if hasattr(self.model, "_to_active_convention") and hasattr(self.model, "_quat_conjugate"):
                 qA = self.model._to_active_convention(pred_norm)
@@ -131,20 +161,23 @@ class AutoencoderTrainer:
             if self.use_amp and self.has_optimizer:
                 with autocast("cuda", dtype=torch.float16):
                     q_pred = self.model(q_target, normalize_input=True)
-                    loss = self._compute_loss(q_pred, q_target)
+                    q_pred_loss, q_target_loss = self._prepare_loss_quaternions(q_pred, q_target)
+                    loss = self._compute_loss(q_pred_loss, q_target_loss)
                 self.scaler.scale(loss).backward()
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.cfg["clip"])
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
             elif self.has_optimizer:
                 q_pred = self.model(q_target, normalize_input=True)
-                loss = self._compute_loss(q_pred, q_target)
+                q_pred_loss, q_target_loss = self._prepare_loss_quaternions(q_pred, q_target)
+                loss = self._compute_loss(q_pred_loss, q_target_loss)
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.cfg["clip"])
                 self.optimizer.step()
             else:
                 q_pred = self.model(q_target, normalize_input=True)
-                loss = self._compute_loss(q_pred, q_target)
+                q_pred_loss, q_target_loss = self._prepare_loss_quaternions(q_pred, q_target)
+                loss = self._compute_loss(q_pred_loss, q_target_loss)
 
             total_loss += float(loss.item())
 
@@ -178,10 +211,12 @@ class AutoencoderTrainer:
             if self.use_amp:
                 with autocast("cuda", dtype=torch.float16):
                     q_pred = self.model(q_target, normalize_input=True)
-                    loss = self._compute_loss(q_pred, q_target)
+                    q_pred_loss, q_target_loss = self._prepare_loss_quaternions(q_pred, q_target)
+                    loss = self._compute_loss(q_pred_loss, q_target_loss)
             else:
                 q_pred = self.model(q_target, normalize_input=True)
-                loss = self._compute_loss(q_pred, q_target)
+                q_pred_loss, q_target_loss = self._prepare_loss_quaternions(q_pred, q_target)
+                loss = self._compute_loss(q_pred_loss, q_target_loss)
 
             total_loss += float(loss.item())
 

@@ -47,7 +47,7 @@ ori_quat = Orientation(rot_quat, symmetry=pg432)
 print(ori_quat.size)
 
 np.random.seed(42)  # For reproducibility of the random sample
-n = 10000
+n = 1000
 ori_cube2 = ori_cube.get_random_sample(n)
 ori_euler2 = ori_euler.get_random_sample(n)
 ori_quat2 = ori_quat.get_random_sample(n)

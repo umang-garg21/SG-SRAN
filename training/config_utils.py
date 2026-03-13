@@ -33,7 +33,12 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "n_feats": 32,
     "kernel_size": 3,
     "symmetry_group": "O",  # overwritten if dataset_info.json has it
-    "loss": "rotational_distance",
+    # Best-practice SR setup: equivariant model + Bunge symmetry-aware misorientation loss
+    "loss": "bunge_symmetry_misorientation",
+    "loss_symmetry_grad_weight": 0.0,
+    "loss_mse_weight": 0.05,
+    "quaternion_convention": "bunge_passive_wxyz",
+    "detect_anomaly": False,
     "amp": False,
     "clip": 1.0,
     "vis_every": 2,
@@ -42,6 +47,23 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "preload_torch": True,
     "pin_memory": True,
     "seed": 42,  # Random seed for reproducibility
+    "smoke_take_first": 8,
+    # Metric controls
+    "metric_symmetry_enabled": True,
+    "metric_compute_train": False,
+    "metric_compute_val": True,
+    "metric_symmetry_chunk_size": 65536,
+    # Optional: canonicalize target quaternions to one FZ branch before loss.
+    "canonical_target_for_loss": False,
+    "canonicalize_pred_for_loss": False,
+    "quat_norm_reg_weight": 0.0,
+    # Optional Bunge-invariant feature adapter in DataLoader
+    "invariant_adapter_enabled": False,
+    "invariant_adapter_method": "hybrid",
+    "invariant_adapter_beta": 64.0,
+    "invariant_adapter_apply_to": "lr",
+    "invariant_adapter_channel_first": True,
+    "invariant_adapter_cache": False,
     "scheduler": {
         "type": "cosine",
         "warmup_epochs": 2,
@@ -55,6 +77,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # a positive integer (e.g., 100) to generate visualizations every N epochs.
     # Set to 0 or a negative value to disable periodic visualizations.
     "save_every": 100,
+    "skip_postprocess": False,
     "model": {
         "type": "Reynolds_QSR",
         "dropout": 0.0,

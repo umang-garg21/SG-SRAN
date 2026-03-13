@@ -3,6 +3,8 @@ from models.reynolds_qsr import Reynolds_QSR
 from models.autoencoder import FCCAutoEncoder
 from models.autoencoder_learnable import FCCLearnableDecoderAutoEncoder
 from models.invariant_sr import InvariantSRModel
+from models.invariant_autoencoder_bunge import InvariantAutoencoderBunge
+from models.e3nn_invariant_autoencoder import E3nnInvariantAutoencoderBunge, parse_ls_arg
 
 
 def _build_fcc_autoencoder(cfg):
@@ -65,11 +67,48 @@ def _build_invariant_sr(cfg):
         eval_decode_mode=getattr(cfg, "eval_decode_mode", "spherical"),
     )
 
+
+def _build_invariant_autoencoder_bunge(cfg):
+    return InvariantAutoencoderBunge(
+        device=getattr(cfg, "device", None),
+        latent_dim=getattr(cfg, "latent_dim", 32),
+        encoder_hidden_dim=getattr(cfg, "encoder_hidden_dim", 128),
+        encoder_layers=getattr(cfg, "encoder_layers", 3),
+        decoder_hidden_dim=getattr(cfg, "decoder_hidden_dim", 128),
+        decoder_layers=getattr(cfg, "decoder_layers", 3),
+        dropout=getattr(cfg, "decoder_dropout", 0.0),
+        canonicalize_output=bool(getattr(cfg, "canonicalize_output", True)),
+    )
+
+
+def _build_e3nn_invariant_autoencoder_bunge(cfg):
+    ls_cfg = getattr(cfg, "e3nn_ls", getattr(cfg, "ls", None))
+    return E3nnInvariantAutoencoderBunge(
+        device=getattr(cfg, "device", None),
+        Ls=parse_ls_arg(ls_cfg),
+        stack_re_im=bool(getattr(cfg, "e3nn_stack_re_im", True)),
+        normalize_wigner_features=bool(getattr(cfg, "e3nn_normalize_wigner_features", True)),
+        basis_rel_tol=float(getattr(cfg, "e3nn_basis_rel_tol", 1e-8)),
+        basis_abs_tol=float(getattr(cfg, "e3nn_basis_abs_tol", 1e-6)),
+        basis_eig_tol=float(getattr(cfg, "e3nn_basis_eig_tol", 1e-5)),
+        canonicalize_basis=bool(getattr(cfg, "e3nn_canonicalize_basis", True)),
+        latent_dim=int(getattr(cfg, "latent_dim", 64)),
+        encoder_hidden_dim=int(getattr(cfg, "encoder_hidden_dim", 256)),
+        encoder_layers=int(getattr(cfg, "encoder_layers", 2)),
+        decoder_hidden_dim=int(getattr(cfg, "decoder_hidden_dim", 256)),
+        decoder_layers=int(getattr(cfg, "decoder_layers", 3)),
+        dropout=float(getattr(cfg, "decoder_dropout", 0.0)),
+        canonicalize_output=bool(getattr(cfg, "canonicalize_output", True)),
+    )
+
+
 MODEL_REGISTRY = {
     "reynolds_qsr": Reynolds_QSR,
     "fcc_autoencoder": _build_fcc_autoencoder,
     "fcc_autoencoder_learnable_decoder": _build_fcc_autoencoder_learnable_decoder,
     "invariant_sr": _build_invariant_sr,
+    "invariant_autoencoder_bunge": _build_invariant_autoencoder_bunge,
+    "e3nn_invariant_autoencoder_bunge": _build_e3nn_invariant_autoencoder_bunge,
 }
 
 

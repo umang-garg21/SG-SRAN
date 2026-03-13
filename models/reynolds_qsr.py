@@ -12,6 +12,7 @@ Description: Reynolds-averaged equivariant quaternion SR model
 from __future__ import annotations
 import os
 import math
+from pathlib import Path
 import numpy as np
 import torch
 import torch.nn as nn
@@ -384,12 +385,44 @@ class Reynolds_QSR(nn.Module):
         # ------------------------------------------------------------------
         # Load global symmetry group tensors
         # ------------------------------------------------------------------
-        gt_path = "/data/home/umang/Materials/Reynolds-QSR/symmetry_groups/O_group.npy"
-        gti_path = (
-            "/data/home/umang/Materials/Reynolds-QSR/symmetry_groups/O_group_inv.npy"
-        )
-        gt = torch.tensor(np.load(gt_path), dtype=torch.float32)
-        gti = torch.tensor(np.load(gti_path), dtype=torch.float32)
+        def _quat_to_left_mats(q: np.ndarray) -> np.ndarray:
+            q = np.asarray(q, dtype=np.float32)
+            w, x, y, z = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
+            mats = np.empty((q.shape[0], 4, 4), dtype=np.float32)
+            mats[:, 0, 0] = w
+            mats[:, 0, 1] = -x
+            mats[:, 0, 2] = -y
+            mats[:, 0, 3] = -z
+            mats[:, 1, 0] = x
+            mats[:, 1, 1] = w
+            mats[:, 1, 2] = -z
+            mats[:, 1, 3] = y
+            mats[:, 2, 0] = y
+            mats[:, 2, 1] = z
+            mats[:, 2, 2] = w
+            mats[:, 2, 3] = -x
+            mats[:, 3, 0] = z
+            mats[:, 3, 1] = -y
+            mats[:, 3, 2] = x
+            mats[:, 3, 3] = w
+            return mats
+
+        def _load_group_tensor(path: str | os.PathLike, name: str) -> torch.Tensor:
+            arr = np.load(path)
+            if arr.ndim == 3 and arr.shape[1:] == (4, 4):
+                return torch.as_tensor(arr, dtype=torch.float32)
+            if arr.ndim == 2 and arr.shape[1] == 4:
+                return torch.as_tensor(_quat_to_left_mats(arr), dtype=torch.float32)
+            raise ValueError(
+                f"{name} expected shape (G,4,4) or (G,4), got {tuple(arr.shape)} from {path}"
+            )
+
+        default_sym_dir = (Path(__file__).resolve().parents[1] / "symmetry_groups")
+        gt_path = str(getattr(cfg, "sym_np_path", default_sym_dir / "O_group.npy"))
+        gti_path = str(getattr(cfg, "sym_inv_np_path", default_sym_dir / "O_group_inv.npy"))
+
+        gt = _load_group_tensor(gt_path, "sym_np_path")
+        gti = _load_group_tensor(gti_path, "sym_inv_np_path")
         self.register_buffer("group_tensor", gt)
         self.register_buffer("group_tensor_inv", gti)
 

@@ -1,0 +1,22 @@
+{
+  "lsets": [
+    "4",
+    "4,6",
+    "4,6,8",
+    "4,6,8,10",
+    "4,6,8,10,12"
+  ],
+  "seeds": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "num_samples": 8192,
+  "tau_deg": 5.0,
+  "inv_thresh": 1e-05,
+  "se_p95_thresh": 5.0,
+  "collision_thresh": 0.05,
+  "picked_smallest_passing_lset": "4",
+  "normalize_features": true
+}

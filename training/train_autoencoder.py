@@ -11,6 +11,8 @@ from tqdm import tqdm
 
 from models.autoencoder import FCCAutoEncoder
 from models.autoencoder_learnable import FCCLearnableDecoderAutoEncoder
+from models.invariant_autoencoder_bunge import InvariantAutoencoderBunge
+from models.e3nn_invariant_autoencoder import E3nnInvariantAutoencoderBunge, parse_ls_arg
 from training.autoencoder_trainer import AutoencoderTrainer
 from training.config_utils import load_and_prepare_config
 from training.data_loading import build_dataloader
@@ -41,6 +43,12 @@ class TrainableFCCAutoEncoder(nn.Module):
 
     def quat_mul(self, q1: torch.Tensor, q2: torch.Tensor):
         return self.core.quat_mul(q1, q2)
+
+    def canonicalize_for_metrics(self, quats: torch.Tensor) -> torch.Tensor:
+        fn = getattr(self.core, "canonicalize_for_metrics", None)
+        if callable(fn):
+            return fn(quats)
+        return quats
 
 
 def parse_args():
@@ -142,7 +150,8 @@ def render_autoencoder_input_output(
         ref_dir="ALL",
         include_key=True,
         overwrite=True,
-        format_input=False,
+        format_input=True,
+        align_output_to_input=True,
         dpi=300,
     )
 
@@ -268,6 +277,14 @@ def main():
             pin_memory=cfg.pin_memory,
             take_first=10 if cfg.smoke_test else None,
             seed=seed,
+            invariant_adapter_enabled=bool(getattr(cfg, "invariant_adapter_enabled", False)),
+            invariant_adapter_method=str(getattr(cfg, "invariant_adapter_method", "hybrid")),
+            invariant_adapter_beta=float(getattr(cfg, "invariant_adapter_beta", 64.0)),
+            invariant_adapter_apply_to=str(getattr(cfg, "invariant_adapter_apply_to", "lr")),
+            invariant_adapter_channel_first=bool(
+                getattr(cfg, "invariant_adapter_channel_first", True)
+            ),
+            invariant_adapter_cache=bool(getattr(cfg, "invariant_adapter_cache", False)),
         )
         for split in ["train", "val", "test"]
     }
@@ -287,6 +304,36 @@ def main():
             hidden_dim=int(getattr(cfg, "decoder_hidden_dim", 128)),
             num_layers=int(getattr(cfg, "decoder_num_layers", 3)),
             dropout=float(getattr(cfg, "decoder_dropout", 0.0)),
+        ).to(device)
+    elif requested_model_type == "invariant_autoencoder_bunge":
+        core_model = InvariantAutoencoderBunge(
+            device=device,
+            latent_dim=int(getattr(cfg, "latent_dim", 32)),
+            encoder_hidden_dim=int(getattr(cfg, "encoder_hidden_dim", 128)),
+            encoder_layers=int(getattr(cfg, "encoder_layers", 3)),
+            decoder_hidden_dim=int(getattr(cfg, "decoder_hidden_dim", 128)),
+            decoder_layers=int(getattr(cfg, "decoder_layers", 3)),
+            dropout=float(getattr(cfg, "decoder_dropout", 0.0)),
+            canonicalize_output=bool(getattr(cfg, "canonicalize_output", True)),
+        ).to(device)
+    elif requested_model_type == "e3nn_invariant_autoencoder_bunge":
+        ls_cfg = getattr(cfg, "e3nn_ls", getattr(cfg, "ls", None))
+        core_model = E3nnInvariantAutoencoderBunge(
+            device=device,
+            Ls=parse_ls_arg(ls_cfg),
+            stack_re_im=bool(getattr(cfg, "e3nn_stack_re_im", True)),
+            normalize_wigner_features=bool(getattr(cfg, "e3nn_normalize_wigner_features", True)),
+            basis_rel_tol=float(getattr(cfg, "e3nn_basis_rel_tol", 1e-8)),
+            basis_abs_tol=float(getattr(cfg, "e3nn_basis_abs_tol", 1e-6)),
+            basis_eig_tol=float(getattr(cfg, "e3nn_basis_eig_tol", 1e-5)),
+            canonicalize_basis=bool(getattr(cfg, "e3nn_canonicalize_basis", True)),
+            latent_dim=int(getattr(cfg, "latent_dim", 64)),
+            encoder_hidden_dim=int(getattr(cfg, "encoder_hidden_dim", 256)),
+            encoder_layers=int(getattr(cfg, "encoder_layers", 2)),
+            decoder_hidden_dim=int(getattr(cfg, "decoder_hidden_dim", 256)),
+            decoder_layers=int(getattr(cfg, "decoder_layers", 3)),
+            dropout=float(getattr(cfg, "decoder_dropout", 0.0)),
+            canonicalize_output=bool(getattr(cfg, "canonicalize_output", True)),
         ).to(device)
     elif requested_model_type == "fcc_autoencoder":
         decoder_config = {
@@ -322,7 +369,8 @@ def main():
     else:
         raise ValueError(
             f"Unsupported model.type='{requested_model_type}' for train_autoencoder.py. "
-            "Supported: fcc_autoencoder, fcc_autoencoder_learnable_decoder. "
+            "Supported: fcc_autoencoder, fcc_autoencoder_learnable_decoder, "
+            "invariant_autoencoder_bunge, e3nn_invariant_autoencoder_bunge. "
             "Use scripts/train.sh for other models like invariant_sr."
         )
 

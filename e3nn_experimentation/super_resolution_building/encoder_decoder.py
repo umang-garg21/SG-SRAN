@@ -204,6 +204,8 @@ class EquivariantSpatialConv(nn.Module):
         # Output multiple copies for pixelshuffle upsampling (r^2 copies)
         self.irreps_out = Irreps(f"{self._upsample_copies}x4e + {self._upsample_copies}x6e")
         
+
+        
         # One tensor product per SR copy to keep weights independent
         self.tp_per_copy = nn.ModuleList([
             FullyConnectedTensorProduct(

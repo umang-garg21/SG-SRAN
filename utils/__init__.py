@@ -10,11 +10,11 @@ from .quat_ops import (
     normalize_quaternions,
     enforce_hemisphere,
     # --- Quaternion algebra ---
-    quat_left_multiply_numpy,
-    quat_left_multiply_torch,
+    # quat_left_multiply_numpy,
+    # quat_left_multiply_torch,
     # --- Fundamental Zone ---
-    is_in_fz,
-    reduce_to_fz_min_angle,
+    # is_in_fz,
+    # reduce_to_fz_min_angle,
     # --- High-level convenience ---
     format_quaternions,
     to_torch_quat_spatial,
@@ -62,11 +62,11 @@ __all__ = [
     "normalize_quaternions",
     "enforce_hemisphere",
     # Algebra
-    "quat_left_multiply_numpy",
-    "quat_left_multiply_torch",
+    # "quat_left_multiply_numpy",
+    # "quat_left_multiply_torch",
     # FZ
-    "is_in_fz",
-    "reduce_to_fz_min_angle",
+    # "is_in_fz",
+    # "reduce_to_fz_min_angle",
     # High-level
     "format_quaternions",
     "quaternion_left_matrix",

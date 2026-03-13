@@ -1,0 +1,57 @@
+{
+  "mode": "random_so3",
+  "input_path": null,
+  "input_source": "random_so3:30000",
+  "features_path": null,
+  "features_source": "encoded_on_the_fly:Ls=[4, 6, 8, 10, 12]",
+  "features_key": "features",
+  "quaternion_shape": [
+    30000,
+    4
+  ],
+  "feature_shape": [
+    30000,
+    220
+  ],
+  "n_total": 30000,
+  "n_scatter": 25000,
+  "symmetry": "m-3m",
+  "ref_dir": "Z",
+  "bins": 28,
+  "pca_var_ratio": [
+    0.019102706603502335,
+    0.01894562717579553
+  ],
+  "scalar_order_input": "wxyz",
+  "quaternion_convention_after_conversion": "bunge_passive_wxyz",
+  "basis_ranks": {
+    "4": 1,
+    "6": 1,
+    "8": 1,
+    "10": 1,
+    "12": 2
+  },
+  "verify_symmetry": true,
+  "invariance_stats": {
+    "sample_count": 2048,
+    "sym_l2_max": 3.675299012684263e-05,
+    "sym_l2_mean": 9.111076906265225e-06,
+    "sym_linf_max": 1.5694648027420044e-05,
+    "sym_linf_mean": 3.3029666610673303e-06,
+    "sign_l2_max": 1.8536629795562476e-05,
+    "sign_l2_mean": 3.0406317819142714e-06,
+    "sign_linf_max": 8.746515959501266e-06,
+    "sign_linf_mean": 1.1644876849459251e-06
+  },
+  "saved_plots": [
+    "out/random_so3_irrep_mapping/quat_irrep_mapping_overview.png",
+    "out/random_so3_irrep_mapping/quat_irrep_feature_surface.png",
+    "out/random_so3_irrep_mapping/quat_irrep_feature_hexbin.png",
+    "out/random_so3_irrep_mapping/quat_irrep_stereo_density.png",
+    "out/random_so3_irrep_mapping/quat_irrep_feature_marginals.png",
+    "out/random_so3_irrep_mapping/quat_irrep_bin_centroid_correspondence.png",
+    "out/random_so3_irrep_mapping/symmetry_invariance_hist.png",
+    "out/random_so3_irrep_mapping/symmetry_invariance_per_op.png",
+    "out/random_so3_irrep_mapping/symmetry_orbit_examples.png"
+  ]
+}

@@ -67,12 +67,12 @@ if __name__ == "__main__":
     print(f"Dataset saved to: {DATASET_OUT_ROOT}/{DATASET_NAME}")
     print(f"Metadata: {dataset_info.get('splits', {})}")
 
-    # save_dataset_ipfs(
-    #     dataset_root=os.path.join(DATASET_OUT_ROOT, DATASET_NAME),
-    #     splits=("Train", "Val", "Test"),
-    #     which_list=("HR", "LR", "Original"),
-    #     ref_dir="ALL",
-    #     include_key=True,
-    #     overwrite=False,
-    #     num_workers=4,
-    # )
+    save_dataset_ipfs(
+        dataset_root=os.path.join(DATASET_OUT_ROOT, DATASET_NAME),
+        splits=("Train", "Val", "Test"),
+        which_list=("HR", "LR", "Original"),
+        ref_dir="ALL",
+        include_key=True,
+        overwrite=False,
+        num_workers=4,
+    )

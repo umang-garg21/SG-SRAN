@@ -138,9 +138,8 @@ def compute_seeds_from_quaternions(sym_quaternions, device="cpu"):
     seeds = {}
 
     # 2. Loop for L=4 and L=6
-    for l in range(1, 10):
+    for l in range(0, 13):
         dim = 2 * l + 1
-
         # A. Compute Wigner D matrices for all 24 ops
         # Shape: (24, dim, dim)
         # Note: wigner_D internally uses CPU tensors, so keep angles on CPU
@@ -158,9 +157,21 @@ def compute_seeds_from_quaternions(sym_quaternions, device="cpu"):
         # Extract the vector corresponding to the largest eigenvalue (approx 1.0)
         seed = evecs[:, -1]
 
+
+        print(f"L={l}: Max Eigenvalue = {evals[-1]:.4f}")
+
+        print(f"Raw Eigenvalues for L={l}:")
+        print(evals)
+
+        print(f"Raw Seed for L={l} (before post-processing):")
+        print(seed)
+        print( "\n" + "-" * 50 + "\n" )
+
         # Validation
         if evals[-1] < 0.99:
             print(f"⚠️  WARNING: No invariant found for L={l}")
+
+            print( "\n" + "-" * 50 + "\n" )
             continue
 
         # D. Post-Processing (Standardize Sign/Phase)

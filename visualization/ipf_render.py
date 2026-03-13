@@ -125,7 +125,7 @@ def render_ipf_image(
             hemisphere=True,
             reduce_fz=True,
             sym=sym_class,
-            quat_first=False,
+            to_quat_first=False,
         )
 
     # Render RGB map(s)

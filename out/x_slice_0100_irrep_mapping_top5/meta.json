@@ -1,0 +1,91 @@
+{
+  "mode": "data",
+  "input_path": "/data/warren/materials/materials_data_mount/x_slice_0100.npy",
+  "input_source": "npy:data",
+  "features_path": "out/x_slice_0100_irreps.npz",
+  "features_source": "file:out/x_slice_0100_irreps.npz",
+  "features_key": "features",
+  "quaternion_shape": [
+    420,
+    549,
+    4
+  ],
+  "feature_shape": [
+    420,
+    549,
+    220
+  ],
+  "n_total": 230580,
+  "n_scatter": 35000,
+  "symmetry": "m-3m",
+  "ref_dir": "Z",
+  "bins": 30,
+  "pca_var_ratio": [
+    0.05981940531312938,
+    0.0504450666954996
+  ],
+  "scalar_order_input": "xyzw",
+  "quaternion_convention_after_conversion": "bunge_passive_wxyz",
+  "basis_ranks": {
+    "4": 1,
+    "6": 1,
+    "8": 1,
+    "10": 1,
+    "12": 2
+  },
+  "run_top5": true,
+  "top5_stats": {
+    "1_misorientation_vs_feature_distance": {
+      "pair_count": 60000.0,
+      "mis_deg_mean": 40.212100982666016,
+      "mis_deg_max": 62.639957427978516,
+      "feat_dist_mean": 1.3924612998962402,
+      "feat_dist_max": 1.499993085861206,
+      "pearson_corr": 0.5552458523283104
+    },
+    "2_orbit_collapse_residual": {
+      "sample_count": 2048.0,
+      "mean_err_mean": 9.16727731237188e-06,
+      "mean_err_max": 1.5034638636279851e-05,
+      "max_err_mean": 1.495654578320682e-05,
+      "max_err_max": 2.7489375497680157e-05
+    },
+    "3_knn_retrieval_map": {
+      "pool_size": 12000.0,
+      "query_count": 6.0,
+      "k": 8.0,
+      "mean_misorientation_deg": 0.08756929636001587
+    },
+    "4_per_l_energy_decomposition": {
+      "l4_energy_mean": 0.40824776887893677,
+      "l6_energy_mean": 0.40824806690216064,
+      "l8_energy_mean": 0.4082479774951935,
+      "l10_energy_mean": 0.4082486033439636,
+      "l12_energy_mean": 0.5773507356643677
+    },
+    "5_jacobian_sensitivity": {
+      "sample_count": 768.0,
+      "angle_min_deg": 0.10000000149011612,
+      "angle_max_deg": 5.0,
+      "mean_slope": 0.09655116158475031,
+      "max_slope": 0.09700286988909737
+    }
+  },
+  "verify_symmetry": false,
+  "invariance_stats": null,
+  "saved_plots": [
+    "out/x_slice_0100_irrep_mapping_top5/quat_irrep_mapping_overview.png",
+    "out/x_slice_0100_irrep_mapping_top5/quat_irrep_feature_surface.png",
+    "out/x_slice_0100_irrep_mapping_top5/quat_irrep_feature_hexbin.png",
+    "out/x_slice_0100_irrep_mapping_top5/quat_irrep_stereo_density.png",
+    "out/x_slice_0100_irrep_mapping_top5/quat_irrep_feature_marginals.png",
+    "out/x_slice_0100_irrep_mapping_top5/quat_irrep_bin_centroid_correspondence.png",
+    "out/x_slice_0100_irrep_mapping_top5/quat_irrep_spatial_bin_id_map.png",
+    "out/x_slice_0100_irrep_mapping_top5/1_misorientation_vs_feature_distance.png",
+    "out/x_slice_0100_irrep_mapping_top5/2_orbit_collapse_residual.png",
+    "out/x_slice_0100_irrep_mapping_top5/3_knn_retrieval_map.png",
+    "out/x_slice_0100_irrep_mapping_top5/4_per_l_energy_absolute.png",
+    "out/x_slice_0100_irrep_mapping_top5/4_per_l_energy_ratio.png",
+    "out/x_slice_0100_irrep_mapping_top5/5_jacobian_sensitivity_vs_angle.png"
+  ]
+}

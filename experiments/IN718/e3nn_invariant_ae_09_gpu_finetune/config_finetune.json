@@ -1,0 +1,60 @@
+{
+  "dataset_root": "/data/warren/materials/EBSD/IN718_FZ_2D_SR_x4",
+  "epochs": 90,
+  "batch_size": 16,
+  "lr": 0.0003,
+  "scale": 4,
+  "symmetry_group": "O",
+  "loss": "rotational_distance_plus_mse",
+  "quaternion_convention": "bunge_passive_wxyz",
+  "canonical_target_for_loss": false,
+  "canonicalize_pred_for_loss": false,
+  "amp": true,
+  "clip": 1.0,
+  "vis_every": 1,
+  "num_workers": 4,
+  "preload": false,
+  "preload_torch": false,
+  "pin_memory": true,
+  "scheduler": {
+    "type": "cosine",
+    "warmup_epochs": 2,
+    "min_lr": 1e-06
+  },
+  "optimizer": {
+    "type": "AdamW",
+    "weight_decay": 0.0001
+  },
+  "model": {
+    "type": "e3nn_invariant_autoencoder_bunge",
+    "dropout": 0.0
+  },
+  "e3nn_ls": [
+    4,
+    6
+  ],
+  "e3nn_stack_re_im": true,
+  "e3nn_normalize_wigner_features": true,
+  "e3nn_basis_rel_tol": 1e-08,
+  "e3nn_basis_abs_tol": 1e-06,
+  "e3nn_basis_eig_tol": 1e-05,
+  "e3nn_canonicalize_basis": true,
+  "latent_dim": 32,
+  "encoder_hidden_dim": 128,
+  "encoder_layers": 2,
+  "decoder_hidden_dim": 128,
+  "decoder_layers": 3,
+  "decoder_dropout": 0.0,
+  "canonicalize_output": false,
+  "logging": {
+    "tensorboard": true,
+    "save_best_only": true,
+    "val_freq": 1
+  },
+  "smoke_test": false,
+  "save_every": 10,
+  "skip_postprocess": true,
+  "decode_chunk_size": 8192,
+  "log_recon_metrics": false,
+  "loss_mse_weight": 0.12
+}

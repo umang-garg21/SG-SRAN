@@ -313,6 +313,48 @@ def enforce_hemisphere(
 # ----------------------
 
 
+def quat_conjugate(q: np.ndarray) -> np.ndarray:
+    """
+    Quaternion conjugate for scalar-first quaternions (w, x, y, z).
+
+    Supports arbitrary leading dimensions with final axis size 4.
+    """
+    q = np.asarray(q, dtype=np.float32)
+    if q.shape[-1] != 4:
+        raise ValueError(f"Expected quaternion-last shape (...,4), got {q.shape}")
+    out = q.copy()
+    out[..., 1:] *= -1.0
+    return out
+
+
+def quat_mul_np(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """
+    Hamilton product for scalar-first quaternions (w, x, y, z).
+
+    Inputs are broadcast against each other; output shape is broadcast(..., 4).
+    """
+    a = np.asarray(a, dtype=np.float32)
+    b = np.asarray(b, dtype=np.float32)
+    if a.shape[-1] != 4 or b.shape[-1] != 4:
+        raise ValueError(
+            f"Expected quaternion-last inputs (...,4); got {a.shape} and {b.shape}"
+        )
+
+    aw, ax, ay, az = a[..., 0], a[..., 1], a[..., 2], a[..., 3]
+    bw, bx, by, bz = b[..., 0], b[..., 1], b[..., 2], b[..., 3]
+
+    out = np.stack(
+        [
+            aw * bw - ax * bx - ay * by - az * bz,
+            aw * bx + ax * bw + ay * bz - az * by,
+            aw * by - ax * bz + ay * bw + az * bx,
+            aw * bz + ax * by - ay * bx + az * bw,
+        ],
+        axis=-1,
+    )
+    return out.astype(np.float32, copy=False)
+
+
 def quat_left_multiply_numpy(
     q_right: np.ndarray,
     q_left: np.ndarray,
@@ -595,7 +637,7 @@ def format_quaternions(
     hemisphere: bool = True,
     reduce_fz: bool = False,
     sym=None,
-    quat_first: bool = False,
+    to_quat_first: bool = False,
     eps: float = 1e-12,
 ) -> np.ndarray:
     """
@@ -654,7 +696,7 @@ def format_quaternions(
         )
 
     # 5. Final layout
-    if quat_first:
+    if to_quat_first:
         q_out = to_quat_spatial(q_out)
     else:
         q_out = to_spatial_quat(q_out)

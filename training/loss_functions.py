@@ -280,6 +280,138 @@ def safe_normalize(q):
     return q / norm
 
 
+def _quat_conjugate(q: torch.Tensor) -> torch.Tensor:
+    out = q.clone()
+    out[..., 1:] = -out[..., 1:]
+    return out
+
+
+def _quat_mul(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    """
+    Hamilton product for broadcastable tensors with trailing quaternion dim.
+    a,b: (...,4) -> (...,4)
+    """
+    wa, xa, ya, za = a[..., 0], a[..., 1], a[..., 2], a[..., 3]
+    wb, xb, yb, zb = b[..., 0], b[..., 1], b[..., 2], b[..., 3]
+    return torch.stack(
+        [
+            wa * wb - xa * xb - ya * yb - za * zb,
+            wa * xb + xa * wb + ya * zb - za * yb,
+            wa * yb - xa * zb + ya * wb + za * xb,
+            wa * zb + xa * yb - ya * xb + za * wb,
+        ],
+        dim=-1,
+    )
+
+
+class BungeSymmetryMisorientationLoss(torch.nn.Module):
+    """
+    Crystal-symmetry-aware misorientation loss for Bunge/passive quaternions.
+
+    For each target quaternion q_t, we evaluate its left crystal orbit
+    q_t^(s) = s^{-1} ⊗ q_t and minimize geodesic distance to q_pred:
+
+        min_s 2*acos(|<q_pred, q_t^(s)>|)
+
+    The absolute value makes the metric invariant to quaternion sign (q ~ -q).
+    """
+
+    def __init__(self, sym_quats_wxyz: torch.Tensor, gradient_weight: float = 0.0):
+        super().__init__()
+
+        if not torch.is_tensor(sym_quats_wxyz):
+            sym_quats_wxyz = torch.as_tensor(sym_quats_wxyz, dtype=torch.float32)
+        sym_quats_wxyz = sym_quats_wxyz.to(dtype=torch.float32)
+        if sym_quats_wxyz.ndim != 2 or sym_quats_wxyz.shape[1] != 4:
+            raise ValueError(
+                f"Expected symmetry quaternions shape (G,4), got {tuple(sym_quats_wxyz.shape)}"
+            )
+
+        syms = F.normalize(sym_quats_wxyz, p=2, dim=-1, eps=1e-12)
+        self.register_buffer("sym_quats", syms)
+        self.register_buffer("sym_quats_inv", _quat_conjugate(syms))
+        self.gradient_weight = float(gradient_weight)
+
+        self.register_buffer(
+            "kernel_x", torch.tensor([[[[-1.0, 1.0]]]], dtype=torch.float32)
+        )
+        self.register_buffer(
+            "kernel_y", torch.tensor([[[[-1.0], [1.0]]]], dtype=torch.float32)
+        )
+
+    @staticmethod
+    def _flatten_quats(q: torch.Tensor) -> torch.Tensor:
+        if q.dim() == 2 and q.shape[-1] == 4:
+            return q
+        if q.dim() == 4 and q.shape[1] == 4:
+            return q.permute(0, 2, 3, 1).contiguous().view(-1, 4)
+        if q.dim() == 4 and q.shape[-1] == 4:
+            return q.contiguous().view(-1, 4)
+        if q.dim() == 3 and q.shape[0] == 4:
+            return q.permute(1, 2, 0).contiguous().view(-1, 4)
+        raise ValueError(f"Unsupported quaternion tensor shape: {tuple(q.shape)}")
+
+    def _grad_mag(self, q: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+        kx = self.kernel_x.expand(q.size(1), 1, 1, 2).to(dtype=q.dtype)
+        ky = self.kernel_y.expand(q.size(1), 1, 2, 1).to(dtype=q.dtype)
+        gx = F.conv2d(q, kx, groups=q.size(1))
+        gy = F.conv2d(q, ky, groups=q.size(1))
+        gx = F.pad(gx, (0, 1, 0, 0), mode="replicate")
+        gy = F.pad(gy, (0, 0, 0, 1), mode="replicate")
+        return torch.sqrt(gx.pow(2) + gy.pow(2) + eps)
+
+    def forward(
+        self,
+        q_pred: torch.Tensor,
+        q_target: torch.Tensor,
+        eps: float = 1e-8,
+    ) -> torch.Tensor:
+        norm_eps = max(float(eps), 1e-6)
+        angle_eps = max(float(eps), 1e-4)
+
+        qp = self._flatten_quats(q_pred)
+        qt = self._flatten_quats(q_target)
+        if qp.shape != qt.shape:
+            raise ValueError(
+                f"q_pred and q_target must flatten to same shape, got {tuple(qp.shape)} vs {tuple(qt.shape)}"
+            )
+
+        # Guard against occasional NaN/Inf values from unstable early training steps.
+        qp = torch.nan_to_num(qp, nan=0.0, posinf=0.0, neginf=0.0)
+        qt = torch.nan_to_num(qt, nan=0.0, posinf=0.0, neginf=0.0)
+
+        qp = qp / qp.norm(dim=-1, keepdim=True).clamp_min(norm_eps)
+        qt = qt / qt.norm(dim=-1, keepdim=True).clamp_min(norm_eps)
+        qp = torch.nan_to_num(qp, nan=0.0, posinf=0.0, neginf=0.0)
+        qt = torch.nan_to_num(qt, nan=0.0, posinf=0.0, neginf=0.0)
+
+        # Bunge passive convention: left orbit q_equiv = s^{-1} ⊗ q_target.
+        q_equiv = _quat_mul(self.sym_quats_inv[None, :, :], qt[:, None, :])  # (N,G,4)
+        q_equiv = torch.nan_to_num(q_equiv, nan=0.0, posinf=0.0, neginf=0.0)
+        q_equiv = q_equiv / q_equiv.norm(dim=-1, keepdim=True).clamp_min(norm_eps)
+        q_equiv = torch.nan_to_num(q_equiv, nan=0.0, posinf=0.0, neginf=0.0)
+
+        dots = (qp[:, None, :] * q_equiv).sum(dim=-1).abs()
+        dots = torch.nan_to_num(dots, nan=0.0, posinf=0.0, neginf=0.0)
+        dots = torch.clamp(dots, min=0.0, max=1.0 - angle_eps)
+        ang = 2.0 * torch.acos(dots)  # (N,G)
+        ang = torch.nan_to_num(ang, nan=float(np.pi), posinf=float(np.pi), neginf=0.0)
+        loss = ang.min(dim=1).values.mean()
+
+        if (
+            self.gradient_weight > 0.0
+            and q_pred.dim() == 4
+            and q_target.dim() == 4
+            and q_pred.shape[1] == 4
+            and q_target.shape[1] == 4
+        ):
+            grad_pred = self._grad_mag(q_pred, eps=eps)
+            grad_target = self._grad_mag(q_target, eps=eps)
+            loss = loss + self.gradient_weight * F.l1_loss(grad_pred, grad_target)
+
+        return loss
+
+
 def rotational_distance_loss(q_pred, q_target, eps: float = 1e-12):
     # supports (N,4) or (B,4,H,W)
     if q_pred.dim() > 2:
@@ -305,6 +437,31 @@ def rotational_distance_loss(q_pred, q_target, eps: float = 1e-12):
     v_norm = torch.sqrt(rx * rx + ry * ry + rz * rz + eps)
     angle = 2.0 * torch.atan2(v_norm, torch.clamp(rw, min=eps))
     return angle.mean()
+
+
+def rotational_distance_plus_mse_loss(
+    q_pred: torch.Tensor,
+    q_target: torch.Tensor,
+    mse_weight: float = 0.05,
+    eps: float = 1e-12,
+) -> torch.Tensor:
+    """
+    Rotational geodesic loss plus a small quaternion-component MSE term.
+    The MSE term helps stabilize branch selection/color consistency when
+    targets are already in a canonical branch (e.g., FZ-reduced datasets).
+    """
+    rd = rotational_distance_loss(q_pred, q_target, eps=eps)
+
+    if q_pred.dim() > 2:
+        qp = q_pred.permute(0, 2, 3, 1).reshape(-1, 4)
+        qt = q_target.permute(0, 2, 3, 1).reshape(-1, 4)
+    else:
+        qp, qt = q_pred, q_target
+
+    qp = F.normalize(qp, p=2, dim=1, eps=eps)
+    qt = F.normalize(qt, p=2, dim=1, eps=eps)
+    mse = F.mse_loss(qp, qt)
+    return rd + float(mse_weight) * mse
 
 
 def orientation_gradient_loss(
@@ -657,7 +814,9 @@ def fz_reduced_rotational_distance_loss(
 def build_loss(cfg):
     # Get the loss type and symmetry from the configuration
     loss_type = cfg.get("loss", "rotational_distance").lower()
-    symmetry = cfg.get("symmetry", "Oh")  # Default to 'Oh' symmetry if not provided
+    symmetry = cfg.get(
+        "symmetry_group", cfg.get("symmetry", "Oh")
+    )  # prefer config symmetry_group
 
     # Resolve symmetry if it's a string (e.g., 'Oh') or pass it as an object
     resolved_symmetry = resolve_symmetry(symmetry)
@@ -668,6 +827,13 @@ def build_loss(cfg):
         )
     elif loss_type == "rotational_distance":
         return rotational_distance_loss
+    elif loss_type == "rotational_distance_plus_mse":
+        mse_weight = float(cfg.get("loss_mse_weight", 0.05))
+        return lambda q_pred, q_target: rotational_distance_plus_mse_loss(
+            q_pred,
+            q_target,
+            mse_weight=mse_weight,
+        )
     elif loss_type == "rotational_distance_orientation":
         # Return a Module instance that caches kernels as buffers. This
         # reduces CPU/GPU sync overhead caused by allocating small tensors
@@ -688,6 +854,25 @@ def build_loss(cfg):
     elif loss_type == "simple_symmetry_rotational":
         return SimpleSymmetryRotationalLoss(
             sym_group_path=cfg.get("symmetry_group_path", "symmetry_groups/O_group.npy")
+        )
+    elif loss_type == "bunge_symmetry_misorientation":
+        conv = str(cfg.get("quaternion_convention", "bunge_passive_wxyz")).strip().lower()
+        if conv not in {"bunge_passive_wxyz", "bunge", "bunge_passive"}:
+            raise ValueError(
+                "bunge_symmetry_misorientation expects Bunge/passive quaternions in [w,x,y,z]. "
+                f"Got quaternion_convention={cfg.get('quaternion_convention')}."
+            )
+
+        # Build quaternion symmetry operators from the resolved crystal group.
+        # resolve_symmetry(sym) returns orix quaternions in [w,x,y,z].
+        sym_quats = np.asarray(getattr(resolved_symmetry, "data", resolved_symmetry), dtype=np.float32)
+        if sym_quats.ndim != 2 or sym_quats.shape[-1] != 4:
+            raise ValueError(
+                f"Resolved symmetry must provide quaternion table (G,4), got {tuple(sym_quats.shape)}"
+            )
+        return BungeSymmetryMisorientationLoss(
+            sym_quats_wxyz=torch.from_numpy(sym_quats),
+            gradient_weight=float(cfg.get("loss_symmetry_grad_weight", 0.0)),
         )
     elif loss_type == "l1":
         return torch.nn.L1Loss()

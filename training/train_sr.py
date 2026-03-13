@@ -20,8 +20,6 @@ from training.seed_utils import set_seed, get_seed_from_config
 from models import build_model
 from post_processing.post_process import run_postprocess_from_config
 
-torch.autograd.set_detect_anomaly(True)
-
 # ----------------------------------------------------------------------
 # CLI Argument Parsing
 # ----------------------------------------------------------------------
@@ -67,6 +65,7 @@ def main():
     config_path = exp_dir / args_cli.config
     run_config_path = exp_dir / "logs" / "run_config.json"
     cfg = load_and_prepare_config(config_path, run_config_path)
+    torch.autograd.set_detect_anomaly(bool(getattr(cfg, "detect_anomaly", False)))
 
     # --- Set Random Seed for Reproducibility ---
     seed = 42  # Always use seed 42
@@ -96,8 +95,20 @@ def main():
             preload=cfg.preload,
             preload_torch=cfg.preload_torch,
             pin_memory=cfg.pin_memory,
-            take_first=8 if cfg.smoke_test else None,
+            take_first=(
+                int(getattr(cfg, "smoke_take_first", 8))
+                if getattr(cfg, "smoke_test", False)
+                else None
+            ),
             seed=seed,  # Pass seed for reproducibility
+            invariant_adapter_enabled=bool(getattr(cfg, "invariant_adapter_enabled", False)),
+            invariant_adapter_method=str(getattr(cfg, "invariant_adapter_method", "hybrid")),
+            invariant_adapter_beta=float(getattr(cfg, "invariant_adapter_beta", 64.0)),
+            invariant_adapter_apply_to=str(getattr(cfg, "invariant_adapter_apply_to", "lr")),
+            invariant_adapter_channel_first=bool(
+                getattr(cfg, "invariant_adapter_channel_first", True)
+            ),
+            invariant_adapter_cache=bool(getattr(cfg, "invariant_adapter_cache", False)),
         )
         for split in ["train", "val", "test"]
     }
@@ -276,10 +287,39 @@ def main():
         current_lr = scheduler.get_last_lr()[0] if scheduler is not None else optimizer.param_groups[0]['lr']
         learning_rates.append(current_lr)
 
-        # Update tqdm bar with current loss
-        epoch_bar.set_postfix(
-            train_loss=f"{train_loss:.6f}", val_loss=f"{val_loss:.6f}", lr=f"{current_lr:.2e}"
-        )
+        # Update tqdm bar with loss + key orientation metrics
+        train_metrics = getattr(trainer, "last_train_metrics", {}) or {}
+        val_metrics = getattr(trainer, "last_val_metrics", {}) or {}
+        postfix = {
+            "train_loss": f"{train_loss:.6f}",
+            "val_loss": f"{val_loss:.6f}",
+            "lr": f"{current_lr:.2e}",
+        }
+        if "raw_deg_mean" in val_metrics:
+            postfix["val_raw_deg"] = f"{val_metrics['raw_deg_mean']:.3f}"
+        if "sym_deg_mean" in val_metrics:
+            postfix["val_sym_deg"] = f"{val_metrics['sym_deg_mean']:.3f}"
+        if "pred_norm_err_mean" in val_metrics:
+            postfix["val_norm_err"] = f"{val_metrics['pred_norm_err_mean']:.3e}"
+        if "norm_reg_loss" in val_metrics:
+            postfix["val_norm_reg"] = f"{val_metrics['norm_reg_loss']:.3e}"
+        epoch_bar.set_postfix(postfix)
+
+        summary = [
+            f"epoch={epoch+1}/{cfg.epochs}",
+            f"train_loss={train_loss:.6f}",
+            f"val_loss={val_loss:.6f}",
+            f"lr={current_lr:.2e}",
+        ]
+        if "raw_deg_mean" in val_metrics:
+            summary.append(f"val_raw_deg={val_metrics['raw_deg_mean']:.3f}")
+        if "sym_deg_mean" in val_metrics:
+            summary.append(f"val_sym_deg={val_metrics['sym_deg_mean']:.3f}")
+        if "pred_norm_err_mean" in val_metrics:
+            summary.append(f"val_norm_err={val_metrics['pred_norm_err_mean']:.3e}")
+        if "norm_reg_loss" in val_metrics:
+            summary.append(f"val_norm_reg={val_metrics['norm_reg_loss']:.3e}")
+        print(" | ".join(summary))
 
         trainer.maybe_save_best(val_loss)
         # save a 'last checkpoint' every epoch so resume can continue exactly
@@ -326,16 +366,18 @@ def main():
                 epoch_viz_dir = viz_dir / f"epoch_{epoch+1:04d}"
                 epoch_viz_dir.mkdir(parents=True, exist_ok=True)
 
-                # run postprocess (renders sr/hr/lr comparisons) using best/last checkpoint
-                # keep sample size modest to avoid long pauses
-                import traceback
-                print(f"🖼️ Generating visualizations at epoch {epoch+1}...")
-                # Call postprocessing and explicitly pass string path to avoid type issues
-                run_postprocess_from_config(
-                    str(exp_dir),
-                    max_samples=4 if getattr(cfg, "smoke_test", False) else 8,
-                    output_dir=str(epoch_viz_dir),
-                )
+                # run postprocess (renders sr/hr/lr comparisons) unless explicitly disabled
+                if not bool(getattr(cfg, "skip_postprocess", False)):
+                    import traceback
+                    print(f"🖼️ Generating visualizations at epoch {epoch+1}...")
+                    # Call postprocessing and explicitly pass string path to avoid type issues
+                    run_postprocess_from_config(
+                        str(exp_dir),
+                        max_samples=4 if getattr(cfg, "smoke_test", False) else 8,
+                        output_dir=str(epoch_viz_dir),
+                    )
+                else:
+                    print(f"⏭️ Skipping postprocess visualizations at epoch {epoch+1} (skip_postprocess=true)")
 
                 # After postprocess returns, list produced visualization files so user can see IPF images
                 from pathlib import Path as _P
@@ -370,11 +412,14 @@ def main():
         start_epoch=start_epoch,
     )
 
-    run_postprocess_from_config(
-        exp_dir,
-        max_samples=8 if cfg.smoke_test else 20,
-        output_dir=str(exp_dir / "visualizations" / "final"),
-    )
+    if not bool(getattr(cfg, "skip_postprocess", False)):
+        run_postprocess_from_config(
+            exp_dir,
+            max_samples=8 if cfg.smoke_test else 20,
+            output_dir=str(exp_dir / "visualizations" / "final"),
+        )
+    else:
+        print("⏭️ Skipping final postprocess visualizations (skip_postprocess=true)")
 
 # ----------------------------------------------------------------------
 # Plotting helper

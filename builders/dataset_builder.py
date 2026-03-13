@@ -44,6 +44,8 @@ from utils.dataset_utils import (
 # ---------------------------
 
 
+
+
 def build_quaternion_sr_dataset(
     hr_glob: Optional[str] = None,
     out_root: str = "datasets",
@@ -58,6 +60,7 @@ def build_quaternion_sr_dataset(
     normalize: bool = True,
     hemisphere: bool = True,
     reduce_to_fz: bool = False,
+    quat_first: bool = False,
     creator: str = "Unknown",
     contact: str = "unknown@example.com",
 ) -> Dict:
@@ -180,7 +183,7 @@ def build_quaternion_sr_dataset(
                 hemisphere=hemisphere,
                 reduce_fz=reduce_to_fz,
                 sym=sym_canon if reduce_to_fz else None,
-                quat_first=True,
+                quat_first=quat_first, 
             )
 
             # Extract HR/LR patches

@@ -1,0 +1,100 @@
+{
+  "mode": "random_so3",
+  "input_path": null,
+  "input_source": "random_so3:25000",
+  "features_path": null,
+  "features_source": "encoded_on_the_fly:Ls=[4, 6, 8, 10, 12]",
+  "features_key": "features",
+  "quaternion_shape": [
+    25000,
+    4
+  ],
+  "feature_shape": [
+    25000,
+    220
+  ],
+  "n_total": 25000,
+  "n_scatter": 22000,
+  "symmetry": "m-3m",
+  "ref_dir": "Z",
+  "bins": 28,
+  "pca_var_ratio": [
+    0.019153510985854636,
+    0.01904455080563472
+  ],
+  "scalar_order_input": "wxyz",
+  "quaternion_convention_after_conversion": "bunge_passive_wxyz",
+  "basis_ranks": {
+    "4": 1,
+    "6": 1,
+    "8": 1,
+    "10": 1,
+    "12": 2
+  },
+  "run_top5": true,
+  "top5_stats": {
+    "1_misorientation_vs_feature_distance": {
+      "pair_count": 24999.0,
+      "mis_deg_mean": 40.65497970581055,
+      "mis_deg_max": 62.14106369018555,
+      "feat_dist_mean": 1.4113459587097168,
+      "feat_dist_max": 1.4999667406082153,
+      "pearson_corr": 0.5356978794521715
+    },
+    "2_orbit_collapse_residual": {
+      "sample_count": 2048.0,
+      "mean_err_mean": 9.09843402041588e-06,
+      "mean_err_max": 2.0038798538735136e-05,
+      "max_err_mean": 1.4883335097692907e-05,
+      "max_err_max": 3.427659976296127e-05
+    },
+    "3_knn_retrieval_map": {
+      "pool_size": 9000.0,
+      "query_count": 6.0,
+      "k": 8.0,
+      "mean_misorientation_deg": 3.781098405520121
+    },
+    "4_per_l_energy_decomposition": {
+      "l4_energy_mean": 0.408247709274292,
+      "l6_energy_mean": 0.40824809670448303,
+      "l8_energy_mean": 0.40824803709983826,
+      "l10_energy_mean": 0.40824851393699646,
+      "l12_energy_mean": 0.5773508548736572
+    },
+    "5_jacobian_sensitivity": {
+      "sample_count": 768.0,
+      "angle_min_deg": 0.10000000149011612,
+      "angle_max_deg": 10.0,
+      "mean_slope": 0.09539390494990452,
+      "max_slope": 0.09702232521739118
+    }
+  },
+  "verify_symmetry": true,
+  "invariance_stats": {
+    "sample_count": 2048,
+    "sym_l2_max": 3.129138713120483e-05,
+    "sym_l2_mean": 9.098527698370162e-06,
+    "sym_linf_max": 1.574307680130005e-05,
+    "sym_linf_mean": 3.2963262128760107e-06,
+    "sign_l2_max": 1.3461446542351041e-05,
+    "sign_l2_mean": 3.088224730163347e-06,
+    "sign_linf_max": 8.236616849899292e-06,
+    "sign_linf_mean": 1.1655778280328377e-06
+  },
+  "saved_plots": [
+    "out/random_so3_irrep_mapping_top5/quat_irrep_mapping_overview.png",
+    "out/random_so3_irrep_mapping_top5/quat_irrep_feature_surface.png",
+    "out/random_so3_irrep_mapping_top5/quat_irrep_feature_hexbin.png",
+    "out/random_so3_irrep_mapping_top5/quat_irrep_stereo_density.png",
+    "out/random_so3_irrep_mapping_top5/quat_irrep_feature_marginals.png",
+    "out/random_so3_irrep_mapping_top5/quat_irrep_bin_centroid_correspondence.png",
+    "out/random_so3_irrep_mapping_top5/1_misorientation_vs_feature_distance.png",
+    "out/random_so3_irrep_mapping_top5/2_orbit_collapse_residual.png",
+    "out/random_so3_irrep_mapping_top5/3_knn_retrieval_map.png",
+    "out/random_so3_irrep_mapping_top5/4_per_l_energy_ratio_bar.png",
+    "out/random_so3_irrep_mapping_top5/5_jacobian_sensitivity_vs_angle.png",
+    "out/random_so3_irrep_mapping_top5/symmetry_invariance_hist.png",
+    "out/random_so3_irrep_mapping_top5/symmetry_invariance_per_op.png",
+    "out/random_so3_irrep_mapping_top5/symmetry_orbit_examples.png"
+  ]
+}
