@@ -30,9 +30,8 @@ LOOKUP_PATH = PROJECT_ROOT / "symmetry_groups" / "local_iso_lookup_D6_z_axis_res
 OUT_DIR = PROJECT_ROOT / "out" / "local_iso_hcp_ipf" / "test_ds_first10"
 
 NUM_SAMPLES = int(os.environ.get("NUM_SAMPLES", "10"))
-# Optional crop for faster testing. Set to None for full image.
-# Example env override: CROP_HW=32,32
-_crop_hw_env = os.environ.get("CROP_HW", "32,32").strip()
+# Full HR by default. Optional env override: CROP_HW=H,W
+_crop_hw_env = os.environ.get("CROP_HW", "none").strip()
 if _crop_hw_env.lower() in {"", "none", "full"}:
     CROP_HW = None
 else:
@@ -65,7 +64,10 @@ def run_one(
         q_hw4 = q_hw4[:h, :w, :]
 
     h, w, _ = q_hw4.shape
-    q_in = torch.from_numpy(q_hw4.reshape(-1, 4).copy()).to(torch.float32)
+    q_in = torch.from_numpy(q_hw4.reshape(-1, 4).copy()).to(
+        device=model.device,
+        dtype=torch.float32,
+    )
 
     q_out_parts = []
     for start in range(0, q_in.shape[0], DECODE_CHUNK):
