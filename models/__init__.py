@@ -5,6 +5,16 @@ from models.autoencoder_learnable import FCCLearnableDecoderAutoEncoder
 from models.invariant_sr import InvariantSRModel
 from models.invariant_autoencoder_bunge import InvariantAutoencoderBunge
 from models.e3nn_invariant_autoencoder import E3nnInvariantAutoencoderBunge, parse_ls_arg
+from models.local_iso_embedding_test_slow import (
+    LocalIsoCrystalEmbedding,
+    build_local_iso_fcc_embedding,
+    build_local_iso_hcp_embedding,
+)
+from models.local_iso_embedding import (
+    FastLocalIsoIrrepEncoder,
+    build_fast_local_iso_fcc_encoder,
+    build_fast_local_iso_hcp_encoder,
+)
 
 
 def _build_fcc_autoencoder(cfg):

@@ -236,3 +236,5 @@ checkpoint_*/*.npy
 # model artifacts
 *.npy
 *.npy
+
+out/tmp_hcp_export.csv

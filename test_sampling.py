@@ -15,7 +15,7 @@ plt.rcParams.update(
     }
 )
 
-pg432 = symmetry.Oh
+pg432 = symmetry.D6h
 
 resolution2 = 1
 
