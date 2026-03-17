@@ -283,6 +283,120 @@ def _build_nonscalar_projector(
     return proj, irreps_no_scalar
 
 
+def _so3_character_from_angle(
+    l: int,
+    theta: torch.Tensor,
+    eps: float = 1e-12,
+) -> torch.Tensor:
+    """
+    Character of the SO(3) irrep of degree l for rotation angle theta.
+
+    chi_l(theta) = sin((l + 1/2) * theta) / sin(theta / 2)
+    with the theta -> 0 limit equal to (2l + 1).
+    """
+    theta = theta.to(dtype=torch.float64)
+    half = 0.5 * theta
+    denom = torch.sin(half)
+    numer = torch.sin((l + 0.5) * theta)
+    near_identity = denom.abs() < eps
+    safe_denom = torch.where(
+        near_identity,
+        torch.ones_like(denom),
+        denom,
+    )
+    ratio = numer / safe_denom
+    return torch.where(
+        near_identity,
+        torch.full_like(ratio, float(2 * l + 1)),
+        ratio,
+    )
+
+
+def _a1_multiplicity_table_from_group(
+    group_mats: torch.Tensor,
+    max_l: int,
+    rounding_tol: float = 1e-6,
+) -> dict[int, int]:
+    """
+    Compute multiplicity of the trivial irrep A1 inside each SO(3) l-band:
+        m_l = (1 / |G|) * sum_{g in G} chi_l(g)
+
+    This uses only the group rotation matrices and SO(3) character formula.
+    """
+    if group_mats.ndim != 3 or group_mats.shape[-2:] != (3, 3):
+        raise ValueError(f"Expected (G,3,3), got {tuple(group_mats.shape)}")
+
+    traces = group_mats.diagonal(dim1=-2, dim2=-1).sum(dim=-1).to(torch.float64)
+    cos_theta = ((traces - 1.0) * 0.5).clamp(-1.0, 1.0)
+    theta = torch.acos(cos_theta)
+
+    out: dict[int, int] = {}
+    for l in range(int(max_l) + 1):
+        mean_char = float(_so3_character_from_angle(l, theta).mean().item())
+        rounded = int(round(mean_char))
+        if abs(mean_char - rounded) > rounding_tol:
+            raise RuntimeError(
+                f"A1 multiplicity rounding drift for l={l}: "
+                f"mean_char={mean_char:.8f}, rounded={rounded}"
+            )
+        out[l] = max(0, rounded)
+    return out
+
+
+def _select_irrep_blocks(
+    proj: torch.Tensor,
+    irreps: o3.Irreps,
+    keep_mask: list[bool],
+) -> tuple[torch.Tensor, o3.Irreps]:
+    if len(keep_mask) != len(irreps):
+        raise ValueError(
+            f"keep_mask length {len(keep_mask)} must match irreps length {len(irreps)}"
+        )
+
+    keep_cols = []
+    keep_irreps = []
+    for keep, sl, mul_ir in zip(keep_mask, irreps.slices(), irreps):
+        if not keep:
+            continue
+        keep_cols.append(torch.arange(sl.start, sl.stop, device=proj.device))
+        keep_irreps.append(mul_ir)
+
+    if len(keep_cols) == 0:
+        return proj[:, :0], o3.Irreps()
+
+    col_idx = torch.cat(keep_cols, dim=0)
+    return proj.index_select(dim=1, index=col_idx).contiguous(), o3.Irreps(keep_irreps).regroup()
+
+
+def _prune_irreps_with_no_a1(
+    proj: torch.Tensor,
+    irreps: o3.Irreps,
+    a1_multiplicity_by_l: dict[int, int],
+) -> tuple[torch.Tensor, o3.Irreps]:
+    """
+    Drop whole irrep bands whose l has no A1 content under the crystal group.
+    """
+    keep_mask = [a1_multiplicity_by_l.get(ir.l, 0) > 0 for _, ir in irreps]
+    return _select_irrep_blocks(proj, irreps, keep_mask)
+
+
+def _prune_irreps_inactive_at_identity(
+    proj: torch.Tensor,
+    irreps: o3.Irreps,
+    x_identity_flat: torch.Tensor,
+    tol: float = 1e-10,
+) -> tuple[torch.Tensor, o3.Irreps]:
+    """
+    Drop irrep blocks that evaluate to zero at R = I for this orbit descriptor.
+    """
+    if irreps.dim == 0 or proj.numel() == 0:
+        return proj, irreps
+
+    y0 = x_identity_flat @ proj
+    keep_mask = [bool(y0[sl].norm().item() > tol) for sl in irreps.slices()]
+    return _select_irrep_blocks(proj, irreps, keep_mask)
+
+
 # ============================================================
 # Main module
 # ============================================================
@@ -306,7 +420,7 @@ class LocalIsoCrystalEmbedding(nn.Module):
 
     Notes:
     - Default dtype is float32 for training.
-    - Geometry diagnostics are evaluated in float64 automatically.
+    - Geometry diagnostics can be run in high precision via the `dtype` argument.
     """
 
     def __init__(
@@ -373,10 +487,16 @@ class LocalIsoCrystalEmbedding(nn.Module):
         self.register_buffer("group_mats", group_mats, persistent=False)
 
         self.blocks = nn.ModuleList()
-        irreps_out_parts = []
+        irreps_full_parts = []
+        irreps_a1_parts = []
 
-        # Build projectors in float64 first, then cast to training dtype
-        build_dtype = torch.float64 if dtype == torch.float32 else dtype
+        # Build projectors in high precision first, then cast to runtime dtype.
+        compute_dtype = torch.float64 if dtype == torch.float32 else dtype
+        max_rank = max(spec.rank for spec in specs)
+        self.a1_multiplicity_by_l = _a1_multiplicity_table_from_group(
+            self.group_mats.to(dtype=compute_dtype),
+            max_l=max_rank,
+        )
 
         for spec in specs:
             block = nn.Module()
@@ -384,26 +504,77 @@ class LocalIsoCrystalEmbedding(nn.Module):
             block.rank = spec.rank
             block.beta = float(spec.beta)
 
-            anchors = torch.matmul(self.group_mats, spec.reference_direction)  # [G, 3]
-            anchors_t = anchors.transpose(0, 1).contiguous()  # [3, G]
+            # Orbit directions {g u}_g from HL notation (reference direction u).
+            orbit_directions = torch.matmul(self.group_mats, spec.reference_direction)  # [G, 3]
+            orbit_directions_t = orbit_directions.transpose(0, 1).contiguous()  # [3, G]
 
-            proj64, irreps_no_scalar = _build_nonscalar_projector(
+            proj_full, irreps_no_scalar = _build_nonscalar_projector(
                 spec.rank,
                 spec.formula,
-                dtype=build_dtype,
+                dtype=compute_dtype,
                 device=device,
             )
 
-            block.register_buffer("anchors_t", anchors_t, persistent=False)
-            block.register_buffer("proj", proj64.to(dtype=dtype), persistent=False)
-            block.irreps = irreps_no_scalar
-            block.out_dim = proj64.shape[-1]
+            # First prune l-bands that provably have no A1 under this group.
+            proj_in, irreps_active = _prune_irreps_with_no_a1(
+                proj_full,
+                irreps_no_scalar,
+                self.a1_multiplicity_by_l,
+            )
+
+            # Then prune any residual dead blocks for this specific orbit descriptor.
+            x0_flat = _tensor_power_flat_fast(
+                orbit_directions.to(dtype=compute_dtype).unsqueeze(0),
+                spec.rank,
+            ).mean(dim=-2).squeeze(0)
+            proj_in, irreps_active = _prune_irreps_inactive_at_identity(
+                proj=proj_in,
+                irreps=irreps_active,
+                x_identity_flat=x0_flat,
+                tol=1e-10 if compute_dtype == torch.float64 else 1e-6,
+            )
+
+            block.register_buffer(
+                "orbit_directions_t",
+                orbit_directions_t,
+                persistent=False,
+            )
+            block.register_buffer("proj_out", proj_full.to(dtype=dtype), persistent=False)
+            block.register_buffer(
+                "proj_in",
+                proj_in.to(dtype=dtype),
+                persistent=False,
+            )
+            block.irreps_full = irreps_no_scalar
+            block.irreps_a1 = irreps_active
+            block.out_dim = proj_full.shape[-1]
+            block.in_dim = proj_in.shape[-1]
             block.raw_dim = 3**spec.rank
 
             self.blocks.append(block)
-            irreps_out_parts += list(irreps_no_scalar)
+            irreps_full_parts += list(irreps_no_scalar)
+            irreps_a1_parts += list(irreps_active)
 
-        self.irreps_out = o3.Irreps(irreps_out_parts).regroup()
+        self.irreps_full = o3.Irreps(irreps_full_parts).regroup()
+        self.irreps_a1 = o3.Irreps(irreps_a1_parts).regroup()
+        # String helpers for TP declarations.
+        self.irreps_full_str = str(self.irreps_full)
+        self.irreps_full_tp = " + ".join(str(part) for part in self.irreps_full)
+        self.irreps_a1_str = str(self.irreps_a1)
+
+    def get_a1_multiplicity_table(self, max_l: Optional[int] = None) -> dict[int, int]:
+        if max_l is None:
+            return dict(self.a1_multiplicity_by_l)
+        max_l = int(max_l)
+        known_max = max(self.a1_multiplicity_by_l.keys(), default=-1)
+        if max_l > known_max:
+            self.a1_multiplicity_by_l.update(
+                _a1_multiplicity_table_from_group(
+                    self.group_mats.to(dtype=torch.float64),
+                    max_l=max_l,
+                )
+            )
+        return {l: self.a1_multiplicity_by_l[l] for l in range(max_l + 1)}
 
     # --------------------------------------------------------
     # Fast forward path
@@ -415,12 +586,12 @@ class LocalIsoCrystalEmbedding(nn.Module):
     def _orbit_average_flat(
         self,
         R: torch.Tensor,
-        anchors_t: torch.Tensor,
+        orbit_directions_t: torch.Tensor,
         rank: int,
     ) -> torch.Tensor:
-        # R: (..., 3, 3), anchors_t: (3, G)
+        # R: (..., 3, 3), orbit_directions_t: (3, G)
         # -> v: (..., G, 3)
-        v = torch.matmul(R, anchors_t).transpose(-2, -1)
+        v = torch.matmul(R, orbit_directions_t).transpose(-2, -1)
         return _tensor_power_flat_fast(v, rank).mean(dim=-2)
 
     def forward_raw(self, R: torch.Tensor) -> torch.Tensor:
@@ -430,7 +601,7 @@ class LocalIsoCrystalEmbedding(nn.Module):
         R = self._to_device_dtype(R)
         outs = []
         for block in self.blocks:
-            x_flat = self._orbit_average_flat(R, block.anchors_t, block.rank)
+            x_flat = self._orbit_average_flat(R, block.orbit_directions_t, block.rank)
             outs.append(block.beta * x_flat)
         return torch.cat(outs, dim=-1)
 
@@ -441,12 +612,31 @@ class LocalIsoCrystalEmbedding(nn.Module):
         R = self._to_device_dtype(R)
         outs = []
         for block in self.blocks:
-            x_flat = self._orbit_average_flat(R, block.anchors_t, block.rank)
-            y = x_flat @ block.proj
+            x_flat = self._orbit_average_flat(R, block.orbit_directions_t, block.rank)
+            y = x_flat @ block.proj_out
             outs.append(block.beta * y)
         return torch.cat(outs, dim=-1)
 
-    def forward_irreps_passive(self, quats_passive: torch.Tensor) -> torch.Tensor:
+    def forward_irreps_a1(self, R: torch.Tensor) -> torch.Tensor:
+        """
+        Return only active (A1-supported) non-scalar irrep bands.
+        """
+        if R.shape[-2:] != (3, 3):
+            raise ValueError(f"Expected (..., 3, 3), got {tuple(R.shape)}")
+
+        R = self._to_device_dtype(R)
+        outs = []
+        for block in self.blocks:
+            x_flat = self._orbit_average_flat(R, block.orbit_directions_t, block.rank)
+            y = x_flat @ block.proj_in
+            outs.append(block.beta * y)
+        return torch.cat(outs, dim=-1)
+
+    def forward_irreps_passive(
+        self,
+        quats_passive: torch.Tensor,
+        active_only: bool = False,
+    ) -> torch.Tensor:
         """
         Compute irreps embedding from passive quaternions.
 
@@ -456,23 +646,28 @@ class LocalIsoCrystalEmbedding(nn.Module):
         q_passive = self._to_device_dtype(quats_passive)
         q_active = _quat_conjugate(q_passive)
         R = _quat_to_matrix_active(q_active)
-        return self.forward_irreps(R)
+        return self.forward_irreps_a1(R) if active_only else self.forward_irreps(R)
 
     def forward_from_quaternions(
-        self, quats: torch.Tensor, raw: bool = False
+        self,
+        quats: torch.Tensor,
+        raw: bool = False,
+        active_only: bool = False,
     ) -> torch.Tensor:
         """
         Quaternion path that expects active quaternions [w, x, y, z].
         """
         q = self._to_device_dtype(quats)
         R = _quat_to_matrix_active(q)
-        return self.forward_raw(R) if raw else self.forward_irreps(R)
+        if raw:
+            return self.forward_raw(R)
+        return self.forward_irreps_a1(R) if active_only else self.forward_irreps(R)
 
     def forward(self, R: torch.Tensor) -> torch.Tensor:
         return self.forward_irreps(R)
 
     # --------------------------------------------------------
-    # Diagnostics (robust, float64)
+    # Diagnostics (high precision)
     # --------------------------------------------------------
 
     @torch.no_grad()
@@ -484,7 +679,7 @@ class LocalIsoCrystalEmbedding(nn.Module):
     ) -> torch.Tensor:
         """
         Robust local-isometry diagnostic.
-        Runs in float64 by default even if model trains in float32.
+        Runs in high precision by default even if model trains in float32.
         """
         if eps is None:
             eps = 1e-7 if dtype == torch.float64 else 1e-4

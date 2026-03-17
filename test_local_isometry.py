@@ -410,6 +410,8 @@
 #     print("D6 feature shape:", yD6.shape)
 
 import math
+import importlib.util
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Callable, List, Tuple
 
@@ -806,6 +808,69 @@ def max_right_invariance_error(
             errs.append((ERg - ER).abs().max())
 
     return float(torch.stack(errs).max().item())
+
+
+def _load_repo_local_iso_module():
+    """
+    Load models/local_iso_embedding.py directly to avoid models/__init__ side effects.
+    """
+    p = Path(__file__).resolve().parent / "models" / "local_iso_embedding.py"
+    spec = importlib.util.spec_from_file_location("repo_local_iso_embedding", p)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _rand_unit_quats(n: int, *, dtype: torch.dtype = torch.float32) -> torch.Tensor:
+    q = torch.randn(n, 4, dtype=dtype)
+    return q / q.norm(dim=-1, keepdim=True).clamp_min(1e-12)
+
+
+def test_repo_local_iso_fcc_auto_prunes_to_4e():
+    mod = _load_repo_local_iso_module()
+    emb = mod.build_local_iso_fcc_embedding(dtype=torch.float32).eval()
+
+    assert str(emb.irreps_a1) == "1x4e"
+    assert emb.irreps_a1.dim == 9
+    assert str(emb.irreps_full) == "1x2e+1x4e"
+    assert emb.irreps_full.dim == 14
+
+    table = emb.get_a1_multiplicity_table(6)
+    assert table == {0: 1, 1: 0, 2: 0, 3: 0, 4: 1, 5: 0, 6: 1}
+
+    q = _rand_unit_quats(1024, dtype=torch.float32)
+    y_full = emb.forward_irreps_passive(q)
+    y_in = emb.forward_irreps_passive(q, active_only=True)
+    assert tuple(y_full.shape) == (1024, 14)
+    assert tuple(y_in.shape) == (1024, 9)
+
+    # FCC full output keeps 2e block for TP bookkeeping, but it should be numerically dead.
+    two_e_slice = emb.irreps_full.slices()[0]
+    assert float(y_full[:, two_e_slice].abs().max().item()) < 1e-5
+    assert float(y_in.abs().max().item()) > 1e-2
+
+
+def test_repo_local_iso_hcp_irreps_and_multiplicities():
+    mod = _load_repo_local_iso_module()
+    emb = mod.build_local_iso_hcp_embedding(dtype=torch.float32, d6_convention="z_axis").eval()
+
+    assert str(emb.irreps_a1) == "2x2e+1x4e+1x6e"
+    assert emb.irreps_a1.dim == 32
+    assert str(emb.irreps_full) == "2x2e+1x4e+1x6e"
+    assert emb.irreps_full.dim == 32
+
+    table = emb.get_a1_multiplicity_table(6)
+    assert table == {0: 1, 1: 0, 2: 1, 3: 0, 4: 1, 5: 0, 6: 2}
+
+    q = _rand_unit_quats(1024, dtype=torch.float32)
+    y = emb.forward_irreps_passive(q)
+    y_in = emb.forward_irreps_passive(q, active_only=True)
+    assert tuple(y.shape) == (1024, 32)
+    assert tuple(y_in.shape) == (1024, 32)
+
+    for (_, _), sl in zip(emb.irreps_full, emb.irreps_full.slices()):
+        block = y[:, sl]
+        assert float(block.abs().max().item()) > 1e-2
 
 
 def run_tests(dtype=torch.float64, device="cpu", d6_convention="z_axis"):

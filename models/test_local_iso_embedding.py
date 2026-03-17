@@ -237,7 +237,8 @@ def run_one_model(
     print(f"group_name     = {model.group_name}")
     if model.group_name == "D6":
         print(f"d6_convention  = {model.d6_convention}")
-    print(f"irreps_out     = {model.irreps_out}")
+    print(f"irreps_full    = {model.irreps_full}")
+    print(f"irreps_a1      = {model.irreps_a1}")
     print("-" * 90)
 
     ok = True

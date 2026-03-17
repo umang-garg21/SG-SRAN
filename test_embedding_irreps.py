@@ -19,12 +19,14 @@ fcc = mod.build_local_iso_fcc_embedding(dtype=torch.float32).eval()
 hcp = mod.build_local_iso_hcp_embedding(dtype=torch.float32, d6_convention="z_axis").eval()
 
 # Passive input path
-fcc_feat = fcc.forward_irreps_passive(q)[0]
-hcp_feat = hcp.forward_irreps_passive(q)[0]
+fcc_feat = fcc.forward_irreps_passive(q, active_only=True)[0]
+hcp_feat = hcp.forward_irreps_passive(q, active_only=True)[0]
 
 def print_irreps(name, emb, feat):
-    print(f"\n{name} irreps_out: {emb.irreps_out} (dim={emb.irreps_out.dim})")
-    for (mul, ir), sl in zip(emb.irreps_out, emb.irreps_out.slices()):
+    print(f"\n{name} irreps_a1 : {emb.irreps_a1} (dim={emb.irreps_a1.dim})")
+    print(f"{name} irreps_full: {emb.irreps_full} (dim={emb.irreps_full.dim})")
+    print(f"{name} irreps_full_tp: {emb.irreps_full_tp}")
+    for (mul, ir), sl in zip(emb.irreps_a1, emb.irreps_a1.slices()):
         vals = ", ".join(f"{float(v):+.6f}" for v in feat[sl])
         print(f"  {mul}x{ir}: [{vals}]")
 

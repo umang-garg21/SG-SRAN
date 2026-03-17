@@ -243,14 +243,14 @@ class LocalIsoHCPEncoder(nn.Module):
 			dtype=torch.float32,
 			device=device,
 		).eval()
-		self.out_dim = int(self.embedding.irreps_out.dim)
+		self.out_dim = int(self.embedding.irreps_a1.dim)
 
 	def forward(self, quats_passive: torch.Tensor) -> torch.Tensor:
 		quats_passive = quats_passive.to(
 			device=self.embedding.group_mats.device,
 			dtype=self.embedding.group_mats.dtype,
 		)
-		return self.embedding.forward_irreps_passive(quats_passive)
+		return self.embedding.forward_irreps_passive(quats_passive, active_only=True)
 
 
 class OptimizingFCCDecoder(nn.Module):
