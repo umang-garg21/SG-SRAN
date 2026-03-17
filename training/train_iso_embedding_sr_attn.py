@@ -58,12 +58,29 @@ def parse_args() -> argparse.Namespace:
 
 
 def _flatten_quat_chw_batch(q: torch.Tensor) -> tuple[torch.Tensor, tuple[int, int]]:
-    """Convert (B,4,H,W) quaternion image batch to (B,H*W,4)."""
-    if q.dim() != 4 or q.shape[1] != 4:
-        raise ValueError(f"Expected (B,4,H,W), got {tuple(q.shape)}")
-    bsz, _, h, w = q.shape
-    q_flat = q.permute(0, 2, 3, 1).reshape(bsz, h * w, 4)
-    return q_flat, (h, w)
+    """Convert (B,4,H,W) or (B,H,W,4) quaternion batch to (B,H*W,4)."""
+    if q.dim() != 4:
+        raise ValueError(f"Expected rank-4 quaternion batch, got {tuple(q.shape)}")
+    if q.shape[1] == 4:
+        bsz, _, h, w = q.shape
+        q_flat = q.permute(0, 2, 3, 1).reshape(bsz, h * w, 4)
+        return q_flat, (h, w)
+    if q.shape[-1] == 4:
+        bsz, h, w, _ = q.shape
+        q_flat = q.reshape(bsz, h * w, 4)
+        return q_flat, (h, w)
+    raise ValueError(f"Expected quaternion axis of size 4 in dim=1 or dim=-1, got {tuple(q.shape)}")
+
+
+def _to_hwc_quat_single(q: torch.Tensor) -> torch.Tensor:
+    """Convert single quaternion image to (H,W,4) from (4,H,W) or (H,W,4)."""
+    if q.dim() != 3:
+        raise ValueError(f"Expected rank-3 quaternion image, got {tuple(q.shape)}")
+    if q.shape[0] == 4:
+        return q.permute(1, 2, 0)
+    if q.shape[-1] == 4:
+        return q
+    raise ValueError(f"Expected quaternion axis of size 4 in dim=0 or dim=-1, got {tuple(q.shape)}")
 
 
 def _get_take_first(cfg, split: str):
@@ -223,12 +240,12 @@ def _render_sr_hr_lr_ipf(
         model_core.eval()
 
         device = next(model_core.parameters()).device
-        lr0 = lr[0].to(device=device, dtype=torch.float32)  # (4,h,w)
-        hr0 = hr[0].to(device=device, dtype=torch.float32)  # (4,H,W)
-        lr_h, lr_w = int(lr0.shape[1]), int(lr0.shape[2])
-        hr_h, hr_w = int(hr0.shape[1]), int(hr0.shape[2])
+        lr0 = _to_hwc_quat_single(lr[0].to(device=device, dtype=torch.float32))
+        hr0 = _to_hwc_quat_single(hr[0].to(device=device, dtype=torch.float32))
+        lr_h, lr_w = int(lr0.shape[0]), int(lr0.shape[1])
+        hr_h, hr_w = int(hr0.shape[0]), int(hr0.shape[1])
 
-        lr_flat = lr0.permute(1, 2, 0).reshape(-1, 4)
+        lr_flat = lr0.reshape(-1, 4)
         q_sr_flat = model_core.forward_sr(
             lr_flat,
             lr_shape=(lr_h, lr_w),
@@ -240,8 +257,8 @@ def _render_sr_hr_lr_ipf(
                 f"SR output size mismatch: got N={int(q_sr_flat.shape[0])}, expected {hr_h * hr_w}"
             )
 
-        lr_np = lr0.permute(1, 2, 0).detach().cpu().numpy()
-        hr_np = hr0.permute(1, 2, 0).detach().cpu().numpy()
+        lr_np = lr0.detach().cpu().numpy()
+        hr_np = hr0.detach().cpu().numpy()
         sr_np = q_sr_flat.reshape(hr_h, hr_w, 4).detach().cpu().numpy()
 
         out_png.parent.mkdir(parents=True, exist_ok=True)
@@ -305,7 +322,7 @@ def main() -> None:
         d6_convention=str(getattr(cfg, "d6_convention", "z_axis")),
         device=device,
         upsample_factor=int(getattr(cfg, "scale", 4)),
-        upsample_residual=bool(getattr(cfg, "upsample_residual", False)),
+        upsample_residual=bool(getattr(cfg, "upsample_residual", True)),
         num_hr_attn_blocks=int(getattr(cfg, "num_hr_attn_blocks", 1)),
         hr_attn_num_channels=int(getattr(cfg, "hr_attn_num_channels", 8)),
         hr_attn_block_size=int(getattr(cfg, "hr_attn_block_size", 16)),
@@ -314,6 +331,10 @@ def main() -> None:
         decoder_steps=int(getattr(cfg, "decoder_steps", 1)),
         decoder_lr=float(getattr(cfg, "decoder_lr", 0.05)),
         decoder_method=str(getattr(cfg, "decoder_method", "cubochoric")),
+        decoder_max_table_rows=getattr(cfg, "decoder_max_table_rows", None),
+        decoder_table_cache_dir=getattr(
+            cfg, "decoder_table_cache_dir", "out/decoder_lookup_tables"
+        ),
         decoder_backend=str(getattr(cfg, "decoder_backend", "optimizing")),
         decoder_learnable_hidden_dim=int(
             getattr(cfg, "decoder_learnable_hidden_dim", 256)

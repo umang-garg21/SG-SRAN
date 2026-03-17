@@ -37,6 +37,36 @@ The active test suite is scoped to `tests/` via `pytest.ini` and ignores `archiv
 
 ## Train
 
+HCP real-data training:
+
+```bash
+python -m training.train_iso_embedding_sr_attn \
+  --exp_dir experiments/Ti64/iso_embedding_sr_attn_hcp_01 \
+  --config config.json \
+  --gpu_ids 0
+```
+
+Resume:
+
+```bash
+python -m training.train_iso_embedding_sr_attn \
+  --exp_dir experiments/Ti64/iso_embedding_sr_attn_hcp_01 \
+  --config config.json \
+  --gpu_ids 0 \
+  --resume
+```
+
+Smoke run:
+
+```bash
+python -m training.train_iso_embedding_sr_attn \
+  --exp_dir experiments/Ti64/iso_embedding_sr_attn_hcp_01 \
+  --config config_smoke.json \
+  --gpu_ids 0
+```
+
+IN718 example:
+
 ```bash
 ./scripts/train_iso_embedding_sr_attn.sh experiments/IN718/iso_embedding_sr_attn_01 --config config.json
 ```
@@ -45,15 +75,6 @@ Smoke run:
 
 ```bash
 ./scripts/train_iso_embedding_sr_attn.sh experiments/IN718/iso_embedding_sr_attn_01 --config config_smoke.json
-```
-
-To use the learnable decoder, set in config:
-
-```json
-"decoder_backend": "learnable",
-"decoder_learnable_hidden_dim": 256,
-"decoder_learnable_num_layers": 3,
-"decoder_learnable_dropout": 0.0
 ```
 
 ## Inference

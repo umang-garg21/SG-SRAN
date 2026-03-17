@@ -79,11 +79,27 @@ def parse_args() -> argparse.Namespace:
 
 
 def _flatten_quat_chw(q: torch.Tensor) -> tuple[torch.Tensor, tuple[int, int]]:
-    if q.dim() != 3 or q.shape[0] != 4:
-        raise ValueError(f"Expected (4,H,W), got {tuple(q.shape)}")
-    _, h, w = q.shape
-    q_flat = q.permute(1, 2, 0).reshape(h * w, 4)
-    return q_flat, (h, w)
+    if q.dim() != 3:
+        raise ValueError(f"Expected rank-3 quaternion image, got {tuple(q.shape)}")
+    if q.shape[0] == 4:
+        _, h, w = q.shape
+        q_flat = q.permute(1, 2, 0).reshape(h * w, 4)
+        return q_flat, (h, w)
+    if q.shape[-1] == 4:
+        h, w, _ = q.shape
+        q_flat = q.reshape(h * w, 4)
+        return q_flat, (h, w)
+    raise ValueError(f"Expected quaternion axis of size 4 in dim=0 or dim=-1, got {tuple(q.shape)}")
+
+
+def _to_hwc_quat_single(q: torch.Tensor) -> torch.Tensor:
+    if q.dim() != 3:
+        raise ValueError(f"Expected rank-3 quaternion image, got {tuple(q.shape)}")
+    if q.shape[0] == 4:
+        return q.permute(1, 2, 0)
+    if q.shape[-1] == 4:
+        return q
+    raise ValueError(f"Expected quaternion axis of size 4 in dim=0 or dim=-1, got {tuple(q.shape)}")
 
 
 def _resolve_checkpoint(cfg, exp_dir: Path, ckpt_arg: str) -> Path:
@@ -104,7 +120,7 @@ def _load_model_from_checkpoint(
         d6_convention=str(getattr(cfg, "d6_convention", "z_axis")),
         device=device,
         upsample_factor=int(getattr(cfg, "scale", 4)),
-        upsample_residual=bool(getattr(cfg, "upsample_residual", False)),
+        upsample_residual=bool(getattr(cfg, "upsample_residual", True)),
         num_hr_attn_blocks=int(getattr(cfg, "num_hr_attn_blocks", 1)),
         hr_attn_num_channels=int(getattr(cfg, "hr_attn_num_channels", 8)),
         hr_attn_block_size=int(getattr(cfg, "hr_attn_block_size", 16)),
@@ -113,6 +129,10 @@ def _load_model_from_checkpoint(
         decoder_steps=int(getattr(cfg, "decoder_steps", 1)),
         decoder_lr=float(getattr(cfg, "decoder_lr", 0.05)),
         decoder_method=str(getattr(cfg, "decoder_method", "cubochoric")),
+        decoder_max_table_rows=getattr(cfg, "decoder_max_table_rows", None),
+        decoder_table_cache_dir=getattr(
+            cfg, "decoder_table_cache_dir", "out/decoder_lookup_tables"
+        ),
         decoder_backend=str(getattr(cfg, "decoder_backend", "optimizing")),
         decoder_learnable_hidden_dim=int(
             getattr(cfg, "decoder_learnable_hidden_dim", 256)
@@ -195,11 +215,12 @@ def main() -> None:
             bsz = int(lr_batch.shape[0])
 
             for j in range(bsz):
-                lr = lr_batch[j]  # (4,h,w)
-                hr = hr_batch[j]  # (4,H,W)
+                lr = lr_batch[j]
+                hr = hr_batch[j]
 
                 lr_flat, lr_shape = _flatten_quat_chw(lr)
-                _, hr_h, hr_w = hr.shape
+                hr_hwc = _to_hwc_quat_single(hr)
+                hr_h, hr_w = int(hr_hwc.shape[0]), int(hr_hwc.shape[1])
 
                 sr_flat = model.forward_sr(lr_flat, lr_shape=lr_shape, normalize_input=True)
                 if int(sr_flat.shape[0]) != int(hr_h * hr_w):
@@ -208,8 +229,8 @@ def main() -> None:
                     )
 
                 sr_np = sr_flat.reshape(hr_h, hr_w, 4).detach().cpu().numpy().astype(np.float32)
-                hr_np = hr.permute(1, 2, 0).detach().cpu().numpy().astype(np.float32)
-                lr_np = lr.permute(1, 2, 0).detach().cpu().numpy().astype(np.float32)
+                hr_np = hr_hwc.detach().cpu().numpy().astype(np.float32)
+                lr_np = _to_hwc_quat_single(lr).detach().cpu().numpy().astype(np.float32)
 
                 sid = total_written
                 sr_path = sr_dir / f"sample_{sid:06d}_sr.npy"

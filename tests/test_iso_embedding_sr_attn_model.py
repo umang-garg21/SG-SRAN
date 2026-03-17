@@ -8,7 +8,6 @@ pytest.importorskip("orix")
 
 from models.SR_double_conv_SRattn import (
     IsoEmbeddingSRAttn,
-    LearnableA1QuaternionDecoder,
 )
 
 
@@ -34,23 +33,6 @@ def small_model() -> IsoEmbeddingSRAttn:
         decoder_steps=0,
         decoder_lr=0.05,
         decoder_method="cubochoric",
-    )
-    return model
-
-
-@pytest.fixture(scope="module")
-def small_model_learnable_decoder() -> IsoEmbeddingSRAttn:
-    model = IsoEmbeddingSRAttn(
-        crystal="fcc",
-        device="cpu",
-        upsample_factor=2,
-        num_hr_attn_blocks=1,
-        hr_attn_num_channels=4,
-        hr_attn_block_size=4,
-        decoder_backend="learnable",
-        decoder_learnable_hidden_dim=64,
-        decoder_learnable_num_layers=2,
-        decoder_learnable_dropout=0.0,
     )
     return model
 
@@ -123,34 +105,10 @@ def test_feature_loss_scalar_and_backward(small_model: IsoEmbeddingSRAttn) -> No
     assert model.conv_lr1.spatial_weights.grad is not None
 
 
-def test_learnable_decoder_forward_sr(
-    small_model_learnable_decoder: IsoEmbeddingSRAttn,
-) -> None:
-    model = small_model_learnable_decoder.eval()
-    assert isinstance(model.decoder, LearnableA1QuaternionDecoder)
-
-    lr_shape = (2, 2)
-    q_lr = _random_unit_quats(4, seed=55)
-
-    with torch.no_grad():
-        q_sr = model.forward_sr(q_lr, lr_shape=lr_shape, normalize_input=True)
-
-    assert q_sr.shape == (16, 4)
-    assert torch.isfinite(q_sr).all().item()
-    norms = q_sr.norm(dim=-1)
-    assert torch.allclose(norms, torch.ones_like(norms), atol=1e-4, rtol=1e-4)
-
-
-def test_learnable_decoder_backward(
-    small_model_learnable_decoder: IsoEmbeddingSRAttn,
-) -> None:
-    model = small_model_learnable_decoder.train()
-    model.decoder.zero_grad(set_to_none=True)
-
-    feat = torch.randn(8, model.feature_dim_a1, dtype=torch.float32, requires_grad=True)
-    q = model.decoder(feat)
-    loss = q.pow(2).mean()
-    loss.backward()
-
-    grads = [p.grad for p in model.decoder.parameters() if p.requires_grad]
-    assert any(g is not None for g in grads)
+def test_non_optimizing_decoder_backend_rejected() -> None:
+    with pytest.raises(ValueError, match="Only decoder_backend='optimizing' is supported"):
+        IsoEmbeddingSRAttn(
+            crystal="fcc",
+            device="cpu",
+            decoder_backend="learnable",
+        )

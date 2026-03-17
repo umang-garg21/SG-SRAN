@@ -91,6 +91,21 @@ class QuaternionDataset(Dataset):
         lr_glob = info["splits"][self.split]["LR_glob"]
         hr_files = sorted(glob.glob(hr_glob))
         lr_files = sorted(glob.glob(lr_glob))
+        if len(hr_files) == 0 or len(lr_files) == 0:
+            # Some dataset_info.json files contain machine-specific absolute globs.
+            # Fall back to paths relative to dataset_root when those globs are stale.
+            dataset_dir = (
+                os.path.dirname(info_path)
+                if info_path.endswith("dataset_info.json")
+                else dataset_root
+            )
+            fallback_hr_glob = os.path.join(dataset_dir, self.split, "HR_Data", "*.npy")
+            fallback_lr_glob = os.path.join(dataset_dir, self.split, "LR_Data", "*.npy")
+            hr_fallback = sorted(glob.glob(fallback_hr_glob))
+            lr_fallback = sorted(glob.glob(fallback_lr_glob))
+            if len(hr_fallback) > 0 and len(lr_fallback) > 0:
+                hr_files = hr_fallback
+                lr_files = lr_fallback
         if take_first:
             hr_files = hr_files[:take_first]
             lr_files = lr_files[:take_first]

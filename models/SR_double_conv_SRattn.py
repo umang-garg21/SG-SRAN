@@ -10,13 +10,17 @@ Key requirements addressed:
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
+from pathlib import Path
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from e3nn import o3
 from e3nn.o3 import FullyConnectedTensorProduct, Irreps, Linear as IrrepsLinear
+import numpy as np
 
 from models.local_iso_embedding import (
     build_fcc_syms_mtex,
@@ -147,6 +151,7 @@ class CubochoricOptimizingLocalIsoDecoder(nn.Module):
         target_irreps: str = "a1",
         max_table_rows: int | None = None,
         table_encode_chunk_size: int = 256,
+        table_cache_dir: str | Path | None = "out/decoder_lookup_tables",
     ):
         super().__init__()
         self.encoder = encoder
@@ -158,6 +163,11 @@ class CubochoricOptimizingLocalIsoDecoder(nn.Module):
         self.target_irreps = str(target_irreps).lower()
         self.max_table_rows = max_table_rows
         self.table_encode_chunk_size = max(1, int(table_encode_chunk_size))
+        self.table_cache_dir = (
+            Path(table_cache_dir).expanduser().resolve()
+            if table_cache_dir is not None
+            else None
+        )
 
         if self.cubochoric_resolution < 1:
             raise ValueError(
@@ -170,31 +180,102 @@ class CubochoricOptimizingLocalIsoDecoder(nn.Module):
             self.encoder.out_dim_a1 if self.target_irreps == "a1" else self.encoder.out_dim_full
         )
 
-        if self.max_table_rows is None and self.encoder.group_name == "D6":
-            # HCP rank-6 embedding can be memory-heavy; cap default table size.
-            self.max_table_rows = 512
-
         with torch.no_grad():
-            table_quats = _sample_fz_quaternions_passive(
-                group_name=self.encoder.group_name,
-                resolution=self.cubochoric_resolution,
-                method=self.method,
-                dtype=torch.float32,
-                device=self.encoder.embedding.group_mats.device,
-                max_rows=self.max_table_rows,
-            )
-            feat_chunks = []
-            for start in range(0, int(table_quats.shape[0]), self.table_encode_chunk_size):
-                end = min(start + self.table_encode_chunk_size, int(table_quats.shape[0]))
-                feat_chunks.append(
-                    self._encode_target_features(table_quats[start:end]).to(torch.float32)
+            cached = self._try_load_cached_table()
+            if cached is not None:
+                table_quats, table_feat = cached
+            else:
+                table_quats = _sample_fz_quaternions_passive(
+                    group_name=self.encoder.group_name,
+                    resolution=self.cubochoric_resolution,
+                    method=self.method,
+                    dtype=torch.float32,
+                    device=self.encoder.embedding.group_mats.device,
+                    max_rows=self.max_table_rows,
                 )
-            table_feat = torch.cat(feat_chunks, dim=0)
+                feat_chunks = []
+                for start in range(0, int(table_quats.shape[0]), self.table_encode_chunk_size):
+                    end = min(start + self.table_encode_chunk_size, int(table_quats.shape[0]))
+                    feat_chunks.append(
+                        self._encode_target_features(table_quats[start:end]).to(torch.float32)
+                    )
+                table_feat = torch.cat(feat_chunks, dim=0)
+                self._save_cached_table(table_quats, table_feat)
             table_feat_norm = (table_feat * table_feat).sum(dim=-1)
 
         self.register_buffer("table_quats", table_quats, persistent=False)
         self.register_buffer("table_feat", table_feat, persistent=False)
         self.register_buffer("table_feat_norm", table_feat_norm, persistent=False)
+
+    def _cache_metadata(self) -> dict[str, object]:
+        return {
+            "cache_version": 1,
+            "group_name": str(self.encoder.group_name),
+            "d6_convention": str(getattr(self.encoder.embedding, "d6_convention", "na")),
+            "target_irreps": str(self.target_irreps),
+            "target_dim": int(self.target_dim),
+            "irreps_a1": str(self.encoder.irreps_a1),
+            "irreps_full": str(self.encoder.irreps_full),
+            "cubochoric_resolution": int(self.cubochoric_resolution),
+            "method": str(self.method),
+            "max_table_rows": None if self.max_table_rows is None else int(self.max_table_rows),
+        }
+
+    def _cache_paths(self) -> tuple[Path, Path, Path] | None:
+        if self.table_cache_dir is None:
+            return None
+        meta = self._cache_metadata()
+        meta_str = json.dumps(meta, sort_keys=True, separators=(",", ":"))
+        digest = hashlib.sha1(meta_str.encode("utf-8")).hexdigest()[:16]
+        stem = (
+            f"{self.encoder.group_name.lower()}_"
+            f"{self.target_irreps}_{self.method}_r{self.cubochoric_resolution}_{digest}"
+        )
+        q_path = self.table_cache_dir / f"{stem}_quats.npy"
+        f_path = self.table_cache_dir / f"{stem}_feat.npy"
+        m_path = self.table_cache_dir / f"{stem}_meta.json"
+        return q_path, f_path, m_path
+
+    def _try_load_cached_table(self) -> tuple[torch.Tensor, torch.Tensor] | None:
+        paths = self._cache_paths()
+        if paths is None:
+            return None
+        q_path, f_path, _ = paths
+        if not q_path.exists() or not f_path.exists():
+            return None
+
+        try:
+            quats_np = np.load(q_path)
+            feat_np = np.load(f_path)
+        except Exception:
+            return None
+
+        if quats_np.ndim != 2 or quats_np.shape[1] != 4:
+            return None
+        if feat_np.ndim != 2:
+            return None
+        if feat_np.shape[0] != quats_np.shape[0]:
+            return None
+        if feat_np.shape[1] != self.target_dim:
+            return None
+
+        device = self.encoder.embedding.group_mats.device
+        table_quats = torch.from_numpy(quats_np.astype(np.float32, copy=False)).to(device=device)
+        table_feat = torch.from_numpy(feat_np.astype(np.float32, copy=False)).to(device=device)
+        table_quats = _normalize_quaternions(table_quats)
+        return table_quats, table_feat
+
+    def _save_cached_table(self, table_quats: torch.Tensor, table_feat: torch.Tensor) -> None:
+        paths = self._cache_paths()
+        if paths is None:
+            return
+        q_path, f_path, m_path = paths
+        q_path.parent.mkdir(parents=True, exist_ok=True)
+
+        np.save(q_path, table_quats.detach().cpu().numpy().astype(np.float32, copy=False))
+        np.save(f_path, table_feat.detach().cpu().numpy().astype(np.float32, copy=False))
+        with open(m_path, "w") as f:
+            json.dump(self._cache_metadata(), f, indent=2)
 
     def _nearest_seed_indices(self, feat_target: torch.Tensor) -> torch.Tensor:
         k = min(self.num_starts, int(self.table_feat.shape[0]))
@@ -564,7 +645,7 @@ class IsoEmbeddingSRAttn(nn.Module):
         d6_convention: str = "z_axis",
         device: str | torch.device | None = None,
         upsample_factor: int = 4,
-        upsample_residual: bool = False,
+        upsample_residual: bool = True,
         num_hr_attn_blocks: int = 1,
         hr_attn_num_channels: int = 8,
         hr_attn_block_size: int = 16,
@@ -573,6 +654,8 @@ class IsoEmbeddingSRAttn(nn.Module):
         decoder_steps: int = 25,
         decoder_lr: float = 0.05,
         decoder_method: str = "cubochoric",
+        decoder_max_table_rows: int | None = None,
+        decoder_table_cache_dir: str | Path | None = "out/decoder_lookup_tables",
         decoder_backend: str = "optimizing",
         decoder_learnable_hidden_dim: int = 256,
         decoder_learnable_num_layers: int = 3,
@@ -599,27 +682,21 @@ class IsoEmbeddingSRAttn(nn.Module):
         self.hr_attn_block_size = int(hr_attn_block_size)
 
         self.decoder_backend = str(decoder_backend).lower()
-        if self.decoder_backend == "optimizing":
-            self.decoder = CubochoricOptimizingLocalIsoDecoder(
-                encoder=self.encoder,
-                cubochoric_resolution=int(decoder_cubochoric_resolution),
-                method=str(decoder_method),
-                num_starts=int(decoder_num_starts),
-                steps=int(decoder_steps),
-                lr=float(decoder_lr),
-                target_irreps="a1",
-            )
-        elif self.decoder_backend == "learnable":
-            self.decoder = LearnableA1QuaternionDecoder(
-                input_dim=self.feature_dim_a1,
-                hidden_dim=int(decoder_learnable_hidden_dim),
-                num_layers=int(decoder_learnable_num_layers),
-                dropout=float(decoder_learnable_dropout),
-            )
-        else:
+        if self.decoder_backend != "optimizing":
             raise ValueError(
-                f"decoder_backend must be 'optimizing' or 'learnable', got {decoder_backend}"
+                f"Only decoder_backend='optimizing' is supported, got {decoder_backend}"
             )
+        self.decoder = CubochoricOptimizingLocalIsoDecoder(
+            encoder=self.encoder,
+            cubochoric_resolution=int(decoder_cubochoric_resolution),
+            method=str(decoder_method),
+            num_starts=int(decoder_num_starts),
+            steps=int(decoder_steps),
+            lr=float(decoder_lr),
+            target_irreps="a1",
+            max_table_rows=decoder_max_table_rows,
+            table_cache_dir=decoder_table_cache_dir,
+        )
 
         # Requested architecture:
         # LR conv1 k=3: a1 -> full
@@ -627,7 +704,8 @@ class IsoEmbeddingSRAttn(nn.Module):
             kernel_size=3,
             irreps_in=self.irreps_a1,
             irreps_out=self.irreps_full,
-            use_residual=False,
+            # Keep a projected skip to avoid early feature collapse (a1 -> full).
+            use_residual=True,
         )
         # LR conv2 k=9: full -> full
         self.conv_lr2 = EquivariantSpatialConv(

@@ -14,7 +14,7 @@
   "scale": 4,
   "crystal": "fcc",
   "d6_convention": "z_axis",
-  "upsample_residual": false,
+  "upsample_residual": true,
   "num_hr_attn_blocks": 1,
   "hr_attn_num_channels": 8,
   "hr_attn_block_size": 16,
