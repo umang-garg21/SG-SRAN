@@ -124,6 +124,8 @@ def _load_model_from_checkpoint(
         num_hr_attn_blocks=int(getattr(cfg, "num_hr_attn_blocks", 1)),
         hr_attn_num_channels=int(getattr(cfg, "hr_attn_num_channels", 8)),
         hr_attn_block_size=int(getattr(cfg, "hr_attn_block_size", 16)),
+        hr_attn_tp_out_chunk_size=getattr(cfg, "hr_attn_tp_out_chunk_size", 2048),
+        hr_attn_checkpoint=bool(getattr(cfg, "hr_attn_checkpoint", False)),
         decoder_cubochoric_resolution=int(getattr(cfg, "decoder_cubochoric_resolution", 1)),
         decoder_num_starts=int(getattr(cfg, "decoder_num_starts", 2)),
         decoder_steps=int(getattr(cfg, "decoder_steps", 1)),

@@ -152,6 +152,11 @@ def _train_one_epoch(
     optimizer: torch.optim.Optimizer,
     device: torch.device,
     clip: float,
+    use_amp: bool,
+    amp_dtype: torch.dtype,
+    scaler,
+    memory_debug_every: int = 0,
+    cuda_empty_cache_every: int = 0,
 ) -> float:
     model_core.train()
     total_loss = 0.0
@@ -164,19 +169,51 @@ def _train_one_epoch(
         hr_flat, _ = _flatten_quat_chw_batch(hr)
 
         optimizer.zero_grad(set_to_none=True)
-        loss = model_core.feature_loss_sr(
-            lr_flat,
-            hr_flat,
-            lr_shape=lr_shape,
-            normalize_input=True,
-        )
-        loss.backward()
-        if clip > 0:
-            torch.nn.utils.clip_grad_norm_(model_core.parameters(), clip)
-        optimizer.step()
+        with torch.autocast(
+            device_type=device.type,
+            dtype=amp_dtype,
+            enabled=bool(use_amp and device.type == "cuda"),
+        ):
+            loss = model_core.feature_loss_sr(
+                lr_flat,
+                hr_flat,
+                lr_shape=lr_shape,
+                normalize_input=True,
+            )
+        if scaler is not None:
+            scaler.scale(loss).backward()
+            if clip > 0:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model_core.parameters(), clip)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            if clip > 0:
+                torch.nn.utils.clip_grad_norm_(model_core.parameters(), clip)
+            optimizer.step()
 
         total_loss += float(loss.detach().item())
         n_steps += 1
+        if (
+            device.type == "cuda"
+            and int(cuda_empty_cache_every) > 0
+            and (n_steps % int(cuda_empty_cache_every) == 0)
+        ):
+            torch.cuda.empty_cache()
+        if (
+            device.type == "cuda"
+            and int(memory_debug_every) > 0
+            and (n_steps % int(memory_debug_every) == 0)
+        ):
+            alloc_gb = torch.cuda.memory_allocated(device) / (1024**3)
+            resv_gb = torch.cuda.memory_reserved(device) / (1024**3)
+            max_alloc_gb = torch.cuda.max_memory_allocated(device) / (1024**3)
+            max_resv_gb = torch.cuda.max_memory_reserved(device) / (1024**3)
+            print(
+                f"[cuda-mem] step={n_steps} alloc={alloc_gb:.2f}G reserved={resv_gb:.2f}G "
+                f"max_alloc={max_alloc_gb:.2f}G max_reserved={max_resv_gb:.2f}G"
+            )
 
     return total_loss / max(1, n_steps)
 
@@ -186,6 +223,8 @@ def _validate_one_epoch(
     model_core: torch.nn.Module,
     loader,
     device: torch.device,
+    use_amp: bool,
+    amp_dtype: torch.dtype,
 ) -> float:
     model_core.eval()
     total_loss = 0.0
@@ -197,12 +236,17 @@ def _validate_one_epoch(
         lr_flat, lr_shape = _flatten_quat_chw_batch(lr)
         hr_flat, _ = _flatten_quat_chw_batch(hr)
 
-        loss = model_core.feature_loss_sr(
-            lr_flat,
-            hr_flat,
-            lr_shape=lr_shape,
-            normalize_input=True,
-        )
+        with torch.autocast(
+            device_type=device.type,
+            dtype=amp_dtype,
+            enabled=bool(use_amp and device.type == "cuda"),
+        ):
+            loss = model_core.feature_loss_sr(
+                lr_flat,
+                hr_flat,
+                lr_shape=lr_shape,
+                normalize_input=True,
+            )
         total_loss += float(loss.detach().item())
         n_steps += 1
 
@@ -301,6 +345,20 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     cfg.device = str(device)
     print(f"Using device: {device}")
+    amp_dtype_str = str(getattr(cfg, "amp_dtype", "bf16")).lower()
+    if amp_dtype_str in ("bf16", "bfloat16"):
+        amp_dtype = torch.bfloat16
+    elif amp_dtype_str in ("fp16", "float16", "half"):
+        amp_dtype = torch.float16
+    else:
+        raise ValueError(f"Unsupported amp_dtype={amp_dtype_str!r}; use 'bf16' or 'fp16'")
+    use_amp = bool(getattr(cfg, "use_amp", True)) and device.type == "cuda"
+    scaler = (
+        torch.cuda.amp.GradScaler(enabled=True)
+        if (use_amp and amp_dtype == torch.float16)
+        else None
+    )
+    print(f"AMP enabled: {use_amp} (dtype={amp_dtype_str})")
 
     loaders = {}
     for split in ("train", "val", "test"):
@@ -313,6 +371,7 @@ def main() -> None:
             preload_torch=bool(cfg.preload_torch),
             pin_memory=bool(cfg.pin_memory),
             shuffle=(split == "train"),
+            drop_last=(split == "train"),
             take_first=_get_take_first(cfg, split),
             seed=seed,
         )
@@ -326,6 +385,8 @@ def main() -> None:
         num_hr_attn_blocks=int(getattr(cfg, "num_hr_attn_blocks", 1)),
         hr_attn_num_channels=int(getattr(cfg, "hr_attn_num_channels", 8)),
         hr_attn_block_size=int(getattr(cfg, "hr_attn_block_size", 16)),
+        hr_attn_tp_out_chunk_size=getattr(cfg, "hr_attn_tp_out_chunk_size", 2048),
+        hr_attn_checkpoint=bool(getattr(cfg, "hr_attn_checkpoint", False)),
         decoder_cubochoric_resolution=int(getattr(cfg, "decoder_cubochoric_resolution", 1)),
         decoder_num_starts=int(getattr(cfg, "decoder_num_starts", 2)),
         decoder_steps=int(getattr(cfg, "decoder_steps", 1)),
@@ -384,6 +445,8 @@ def main() -> None:
     save_every = int(getattr(cfg, "save_every", 1))
     viz_every = int(getattr(cfg, "viz_every", save_every))
     viz_ref_dir = str(getattr(cfg, "viz_ref_dir", "ALL"))
+    memory_debug_every = int(getattr(cfg, "memory_debug_every", 0))
+    cuda_empty_cache_every = int(getattr(cfg, "cuda_empty_cache_every", 0))
     epochs = int(cfg.epochs)
     sym_class = resolve_symmetry(getattr(cfg, "symmetry_group", "O"))
 
@@ -395,11 +458,18 @@ def main() -> None:
             optimizer,
             device,
             clip=clip,
+            use_amp=use_amp,
+            amp_dtype=amp_dtype,
+            scaler=scaler,
+            memory_debug_every=memory_debug_every,
+            cuda_empty_cache_every=cuda_empty_cache_every,
         )
         val_loss = _validate_one_epoch(
             model_core,
             loaders["val"],
             device,
+            use_amp=use_amp,
+            amp_dtype=amp_dtype,
         )
 
         if scheduler is not None:

@@ -18,6 +18,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 from e3nn import o3
 from e3nn.o3 import FullyConnectedTensorProduct, Irreps, Linear as IrrepsLinear
 import numpy as np
@@ -550,11 +551,19 @@ class EquivariantTransposeConv(nn.Module):
 class AttentionBlock(nn.Module):
     """Block-local equivariant attention on full-feature tensors."""
 
-    def __init__(self, irreps_feat: Irreps | str, num_channels: int = 8):
+    def __init__(
+        self,
+        irreps_feat: Irreps | str,
+        num_channels: int = 8,
+        tp_out_chunk_size: int | None = 2048,
+    ):
         super().__init__()
         self.irreps_feat = Irreps(irreps_feat)
         self.feat_dim = int(self.irreps_feat.dim)
         self.sh_irreps = Irreps("1x0e + 1x2e")
+        self.tp_out_chunk_size = (
+            None if tp_out_chunk_size is None else max(1, int(tp_out_chunk_size))
+        )
 
         hidden_terms = []
         for mul, ir in self.irreps_feat:
@@ -617,7 +626,18 @@ class AttentionBlock(nn.Module):
         sh_flat = sh_block.unsqueeze(0).expand(Bb, Nb, -1).reshape(Bb * Nb, -1)
         vals = self.tp_val(h.reshape(Bb * Nb, Ch), sh_flat).reshape(Bb, Nb, Ch)
         ctx = torch.bmm(attn, vals)
-        h_out = self.tp_out(h.reshape(Bb * Nb, Ch), ctx.reshape(Bb * Nb, Ch)).reshape(Bb, Nb, Ch)
+        h_flat = h.reshape(Bb * Nb, Ch)
+        ctx_flat = ctx.reshape(Bb * Nb, Ch)
+        if self.tp_out_chunk_size is None or int(h_flat.shape[0]) <= self.tp_out_chunk_size:
+            h_out_flat = self.tp_out(h_flat, ctx_flat)
+        else:
+            chunks = []
+            step = int(self.tp_out_chunk_size)
+            for start in range(0, int(h_flat.shape[0]), step):
+                end = min(start + step, int(h_flat.shape[0]))
+                chunks.append(self.tp_out(h_flat[start:end], ctx_flat[start:end]))
+            h_out_flat = torch.cat(chunks, dim=0)
+        h_out = h_out_flat.reshape(Bb, Nb, Ch)
         delta_blocks = self.lin_out(h_out.reshape(Bb * Nb, Ch)).reshape(Bb, Nb, C)
 
         delta = (
@@ -649,6 +669,8 @@ class IsoEmbeddingSRAttn(nn.Module):
         num_hr_attn_blocks: int = 1,
         hr_attn_num_channels: int = 8,
         hr_attn_block_size: int = 16,
+        hr_attn_tp_out_chunk_size: int | None = 2048,
+        hr_attn_checkpoint: bool = False,
         decoder_cubochoric_resolution: int = 1,
         decoder_num_starts: int = 6,
         decoder_steps: int = 25,
@@ -680,6 +702,7 @@ class IsoEmbeddingSRAttn(nn.Module):
         self.output_dim = self.feature_dim_a1
         self.upsample_factor = int(upsample_factor)
         self.hr_attn_block_size = int(hr_attn_block_size)
+        self.hr_attn_checkpoint = bool(hr_attn_checkpoint)
 
         self.decoder_backend = str(decoder_backend).lower()
         if self.decoder_backend != "optimizing":
@@ -729,7 +752,11 @@ class IsoEmbeddingSRAttn(nn.Module):
         # Attention block(s)
         self.attention_blocks = nn.ModuleList(
             [
-                AttentionBlock(self.irreps_full, num_channels=int(hr_attn_num_channels))
+                AttentionBlock(
+                    self.irreps_full,
+                    num_channels=int(hr_attn_num_channels),
+                    tp_out_chunk_size=hr_attn_tp_out_chunk_size,
+                )
                 for _ in range(max(1, int(num_hr_attn_blocks)))
             ]
         )
@@ -852,7 +879,14 @@ class IsoEmbeddingSRAttn(nn.Module):
 
         sh_block = self._get_hr_sh_block(block_h, block_w, feat.device, feat.dtype)
         for block in self.attention_blocks:
-            feat = feat + block(feat, sh_block, Hr_pad, Wr_pad, block_h, block_w)
+            if self.hr_attn_checkpoint and self.training and feat.requires_grad:
+                def _run_block(x: torch.Tensor, _block=block) -> torch.Tensor:
+                    return _block(x, sh_block, Hr_pad, Wr_pad, block_h, block_w)
+
+                delta = checkpoint(_run_block, feat, use_reentrant=True)
+            else:
+                delta = block(feat, sh_block, Hr_pad, Wr_pad, block_h, block_w)
+            feat = feat + delta
 
         if pad_h > 0 or pad_w > 0:
             feat = feat.reshape(B, Hr_pad, Wr_pad, C)[:, :Hr, :Wr, :].reshape(B, Hr * Wr, C)
