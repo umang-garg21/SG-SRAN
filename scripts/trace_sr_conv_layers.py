@@ -1,16 +1,21 @@
 """
-Step through SR_conv (local-iso FCC SR pipeline) layer by layer.
+Trace IsoEmbeddingSRAttn layer-by-layer.
 
-Prints tensor shapes, summary stats, and a small value preview for:
+This script prints tensor statistics (and optionally full tensors) for each stage:
 1) input LR quaternions
 2) encode_a1
-3) encode_full_target
-4) lift_layer (a1 -> full)
-5) first conv_layer (a1 -> full)
-6) upsample_conv
-7) conv_hr
-8) decoder raw output
-9) FZ-reduced output
+3) LR conv1
+4) LR conv2
+5) transpose upsample conv
+6) HR conv1
+7) each attention block output
+8) final full->a1 projection
+9) decoder raw output
+10) FZ-reduced output
+11) forward_sr output (consistency check)
+
+It also saves spatial color plots for each stage.
+No argparse: edit CONFIG directly.
 """
 
 from __future__ import annotations
@@ -19,35 +24,41 @@ import importlib.util
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")
 import torch
+import torch.nn.functional as F
 from matplotlib import pyplot as plt
 
 
-# Edit these values directly (no argparse).
 CONFIG = {
+    "crystal": "fcc",  # "fcc" or "hcp"
+    "d6_convention": "z_axis",
     "lr_h": 2,
     "lr_w": 2,
     "upsample_factor": 2,
-    "upsampler": "conv",  # "conv" or "attention"
     "device": "cpu",
     "seed": 0,
-    "head": 9,
+    "head": 10,
+    "num_hr_attn_blocks": 1,
+    "hr_attn_num_channels": 8,
+    "hr_attn_block_size": 16,
+    "decoder_cubochoric_resolution": 1,
+    "decoder_num_starts": 3,
+    "decoder_steps": 2,
+    "decoder_lr": 0.05,
+    "decoder_method": "cubochoric",
     "print_full_tensors": True,
     "make_spatial_plots": True,
-    "show_plots": True,
-    "plot_dir": "tmp/sr_conv_trace_plots",
+    "show_plots": False,
+    "plot_dir": "tmp/iso_embedding_sr_attn_trace_plots",
     "plot_max_channels": 14,
-    # Leave empty to use repo default:
-    #   <repo>/symmetry_groups/local_iso_lookup_O_res1_irreps.npy
-    "lookup_path": "",
-    "lookup_resolution": 1,
 }
 
 
-def _load_sr_conv_module(repo_root: Path):
-    mod_path = repo_root / "models" / "SR_conv.py"
-    spec = importlib.util.spec_from_file_location("repo_sr_conv", mod_path)
+def _load_model_module(repo_root: Path):
+    mod_path = repo_root / "models" / "SR_double_conv_SRattn.py"
+    spec = importlib.util.spec_from_file_location("repo_sr_double_conv_attn", mod_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Could not load module spec from {mod_path}")
     module = importlib.util.module_from_spec(spec)
@@ -73,16 +84,13 @@ def _print_tensor(name: str, x: torch.Tensor, head: int = 8) -> None:
         f" mean={float(t.mean().item()): .6e}"
         f" std={float(t.std(unbiased=False).item()): .6e}"
     )
-
     if t.ndim == 1:
         vec = t[: min(head, t.shape[0])].cpu().tolist()
         print(f"  values[:{len(vec)}]={vec}")
         return
-
-    if t.ndim >= 2:
-        flat = t.reshape(-1, t.shape[-1])
-        vec = flat[0, : min(head, flat.shape[-1])].cpu().tolist()
-        print(f"  first_row[:{len(vec)}]={vec}")
+    flat = t.reshape(-1, t.shape[-1])
+    vec = flat[0, : min(head, flat.shape[-1])].cpu().tolist()
+    print(f"  first_row[:{len(vec)}]={vec}")
 
 
 def _print_tensor_full(name: str, x: torch.Tensor) -> None:
@@ -99,10 +107,10 @@ def _reshape_grid(features: torch.Tensor, shape: tuple[int, int]) -> torch.Tenso
     h, w = shape
     if features.ndim != 2:
         raise ValueError(f"Expected 2D tensor (N, C), got shape={tuple(features.shape)}")
-    n, c = features.shape
+    n, _ = features.shape
     if n != h * w:
         raise ValueError(f"Expected N={h*w} for shape={shape}, got N={n}")
-    return features.detach().cpu().reshape(h, w, c)
+    return features.detach().cpu().reshape(h, w, -1)
 
 
 def _norm01(x: torch.Tensor) -> torch.Tensor:
@@ -117,7 +125,7 @@ def _save_spatial_plots(
     features: torch.Tensor,
     shape: tuple[int, int],
     out_dir: Path,
-    max_channels: int = 14,
+    max_channels: int,
 ) -> None:
     grid = _reshape_grid(features, shape)
     h, w, c = grid.shape
@@ -132,8 +140,7 @@ def _save_spatial_plots(
     ax.set_ylabel("H")
     fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
     fig.tight_layout()
-    norm_path = out_dir / f"{safe_name}_norm.png"
-    fig.savefig(norm_path, dpi=180)
+    fig.savefig(out_dir / f"{safe_name}_norm.png", dpi=180)
     plt.close(fig)
 
     if c >= 3:
@@ -149,8 +156,7 @@ def _save_spatial_plots(
     ax.set_xlabel("W")
     ax.set_ylabel("H")
     fig.tight_layout()
-    rgb_path = out_dir / f"{safe_name}_rgb.png"
-    fig.savefig(rgb_path, dpi=180)
+    fig.savefig(out_dir / f"{safe_name}_rgb.png", dpi=180)
     plt.close(fig)
 
     n_ch = min(int(c), int(max_channels))
@@ -171,18 +177,60 @@ def _save_spatial_plots(
             ax.axis("off")
     fig.suptitle(f"{name}: channel maps (first {n_ch}/{c})", y=1.01)
     fig.tight_layout()
-    ch_path = out_dir / f"{safe_name}_channels.png"
-    fig.savefig(ch_path, dpi=160, bbox_inches="tight")
+    fig.savefig(out_dir / f"{safe_name}_channels.png", dpi=160, bbox_inches="tight")
     plt.close(fig)
 
 
+def _apply_attention_stepwise(model, feat: torch.Tensor, hr_shape: tuple[int, int]):
+    hr_h, hr_w = hr_shape
+    batched = feat.dim() == 3
+    if not batched:
+        feat = feat.unsqueeze(0)
+
+    bsz, n, c = feat.shape
+    if n != hr_h * hr_w:
+        raise ValueError(f"Expected N={hr_h*hr_w}, got {n}")
+
+    block_h = min(model.hr_attn_block_size, hr_h)
+    block_w = min(model.hr_attn_block_size, hr_w)
+    pad_h = (-hr_h) % block_h
+    pad_w = (-hr_w) % block_w
+    hr_h_pad, hr_w_pad = hr_h + pad_h, hr_w + pad_w
+
+    feat_work = feat
+    if pad_h > 0 or pad_w > 0:
+        feat_2d = feat_work.reshape(bsz, hr_h, hr_w, c).permute(0, 3, 1, 2)
+        feat_2d = F.pad(feat_2d, (0, pad_w, 0, pad_h), mode="reflect")
+        feat_work = feat_2d.permute(0, 2, 3, 1).reshape(bsz, hr_h_pad * hr_w_pad, c)
+
+    def _unpad(x: torch.Tensor) -> torch.Tensor:
+        if pad_h == 0 and pad_w == 0:
+            return x
+        return x.reshape(bsz, hr_h_pad, hr_w_pad, c)[:, :hr_h, :hr_w, :].reshape(bsz, hr_h * hr_w, c)
+
+    sh_block = model._get_hr_sh_block(block_h, block_w, feat_work.device, feat_work.dtype)
+
+    stage_outputs = []
+    for idx, block in enumerate(model.attention_blocks):
+        delta = block(feat_work, sh_block, hr_h_pad, hr_w_pad, block_h, block_w)
+        feat_work = feat_work + delta
+        cur = _unpad(feat_work)
+        if not batched:
+            cur = cur.squeeze(0)
+        stage_outputs.append((f"attention_block_{idx}_output", cur))
+
+    feat_final = _unpad(feat_work)
+    if not batched:
+        feat_final = feat_final.squeeze(0)
+    return feat_final, stage_outputs
+
+
 def main() -> None:
+    crystal = str(CONFIG["crystal"])
+    d6_convention = str(CONFIG["d6_convention"])
     lr_h = int(CONFIG["lr_h"])
     lr_w = int(CONFIG["lr_w"])
     upsample_factor = int(CONFIG["upsample_factor"])
-    upsampler = str(CONFIG["upsampler"])
-    if upsampler not in {"conv", "attention"}:
-        raise ValueError(f"CONFIG['upsampler'] must be 'conv' or 'attention', got: {upsampler}")
     device_str = str(CONFIG["device"])
     seed = int(CONFIG["seed"])
     head = int(CONFIG["head"])
@@ -191,100 +239,102 @@ def main() -> None:
     show_plots = bool(CONFIG["show_plots"])
     plot_max_channels = int(CONFIG["plot_max_channels"])
     plot_dir_cfg = str(CONFIG["plot_dir"])
-    lookup_resolution = int(CONFIG["lookup_resolution"])
-    lookup_path_cfg = str(CONFIG["lookup_path"])
 
     repo_root = Path(__file__).resolve().parents[1]
-    module = _load_sr_conv_module(repo_root)
-
-    lookup_path = (
-        Path(lookup_path_cfg).expanduser().resolve()
-        if lookup_path_cfg.strip()
-        else (repo_root / "symmetry_groups" / "local_iso_lookup_O_res1_irreps.npy").resolve()
-    )
-    if not lookup_path.exists():
-        raise FileNotFoundError(f"Lookup table not found: {lookup_path}")
+    module = _load_model_module(repo_root)
 
     device = torch.device(device_str)
     lr_shape = (lr_h, lr_w)
     n_lr = lr_h * lr_w
     plot_dir = (repo_root / plot_dir_cfg).resolve()
 
-    model = module.FCCAutoEncoderSR(
+    model = module.IsoEmbeddingSRAttn(
+        crystal=crystal,
+        d6_convention=d6_convention,
         device=device,
         upsample_factor=upsample_factor,
-        upsampler=upsampler,
-        decoder_backend="lookup",
-        decoder_config={
-            "decoder_lookup_resolution": lookup_resolution,
-            "decoder_lookup_npy_path": str(lookup_path),
-        },
+        num_hr_attn_blocks=int(CONFIG["num_hr_attn_blocks"]),
+        hr_attn_num_channels=int(CONFIG["hr_attn_num_channels"]),
+        hr_attn_block_size=int(CONFIG["hr_attn_block_size"]),
+        decoder_cubochoric_resolution=int(CONFIG["decoder_cubochoric_resolution"]),
+        decoder_num_starts=int(CONFIG["decoder_num_starts"]),
+        decoder_steps=int(CONFIG["decoder_steps"]),
+        decoder_lr=float(CONFIG["decoder_lr"]),
+        decoder_method=str(CONFIG["decoder_method"]),
     ).eval()
 
-    print("Model Irreps")
-    print(f"  irreps_a1   : {model.irreps_a1}")
-    print(f"  irreps_full : {model.irreps_full}")
-    print(f"  lift_layer  : {model.lift_layer.irreps_in} -> {model.lift_layer.irreps_out}")
+    print("Model")
+    print(f"  class         : {model.__class__.__name__}")
+    print(f"  crystal       : {crystal}")
+    print(f"  irreps_a1     : {model.irreps_a1}")
+    print(f"  irreps_full   : {model.irreps_full}")
+    print(f"  has_lift_layer: {hasattr(model, 'lift_layer')}")
     print(
-        "  first conv tp:"
-        f" {model.conv_layer.irreps_in} x {model.conv_layer.irreps_in}"
-        f" -> {model.conv_layer.irreps_out}"
+        "  conv_lr1 tp   :"
+        f" {model.conv_lr1.tp.irreps_in1} x {model.conv_lr1.tp.irreps_in2} -> {model.conv_lr1.tp.irreps_out}"
     )
-    print(f"  upsample irreps: {model.upsample_conv.irreps_feat if hasattr(model.upsample_conv, 'irreps_feat') else model.upsample_conv.irreps_io}")
-    print(f"  conv_hr tp     : {model.conv_hr.irreps_in} x {model.conv_hr.irreps_in} -> {model.conv_hr.irreps_out}")
+    print(
+        "  conv_lr2 tp   :"
+        f" {model.conv_lr2.tp.irreps_in1} x {model.conv_lr2.tp.irreps_in2} -> {model.conv_lr2.tp.irreps_out}"
+    )
+    print(
+        "  upsample tp   :"
+        f" {model.upsample_conv.tp.irreps_in1} x {model.upsample_conv.tp.irreps_in2} -> {model.upsample_conv.tp.irreps_out}"
+    )
+    print(
+        "  conv_hr1 tp   :"
+        f" {model.conv_hr1.tp.irreps_in1} x {model.conv_hr1.tp.irreps_in2} -> {model.conv_hr1.tp.irreps_out}"
+    )
+    print(f"  final_proj    : {model.final_proj.irreps_in} -> {model.final_proj.irreps_out}")
 
     lr_quats = _random_unit_quats(n_lr, device=device, seed=seed)
 
     with torch.no_grad():
-        lr_quats = model._normalize_quaternions(lr_quats)
-        feat_a1 = model.encode_a1(lr_quats)
-        feat_full_target = model.encode_full_target(lr_quats)
-        feat_lifted = model.lift_to_full(feat_a1)
-        feat_lr = model.conv_layer(feat_a1, lr_shape)
-        feat_up, hr_shape = model.upsample_conv(feat_lr, lr_shape)
-        feat_hr = model.conv_hr(feat_up, hr_shape)
-        q_dec_raw = model.decoder(feat_hr)
-        q_dec_fz = model.reduce_to_fz(q_dec_raw)
-        q_forward = model.forward_sr(lr_quats, lr_shape=lr_shape, normalize_input=False)
+        feat_a1_lr = model.encode_a1(lr_quats)
+        feat_lr1 = model.conv_lr1(feat_a1_lr, lr_shape)
+        feat_lr2 = model.conv_lr2(feat_lr1, lr_shape)
+        feat_up, hr_shape = model.upsample_conv(feat_lr2, lr_shape)
+        feat_hr1 = model.conv_hr1(feat_up, hr_shape)
+        feat_attn, attn_stage_outputs = _apply_attention_stepwise(model, feat_hr1, hr_shape)
+        feat_a1_hr = model.final_proj(feat_attn)
 
-    print(f"\nShapes: LR={lr_shape}, HR={hr_shape}, n_lr={n_lr}, n_hr={hr_shape[0] * hr_shape[1]}")
-    _print_tensor("input_quats_lr", lr_quats, head=head)
-    _print_tensor("encode_a1", feat_a1, head=head)
-    _print_tensor("encode_full_target", feat_full_target, head=head)
-    _print_tensor("lift_layer_output", feat_lifted, head=head)
-    _print_tensor("conv_layer_lr_output (a1 -> full)", feat_lr, head=head)
-    _print_tensor("upsample_output", feat_up, head=head)
-    _print_tensor("conv_hr_output", feat_hr, head=head)
-    _print_tensor("decoder_raw_output", q_dec_raw, head=head)
-    _print_tensor("decoder_fz_output", q_dec_fz, head=head)
+    q_dec_raw = model.decoder(feat_a1_hr)
+    q_dec_fz = model.reduce_to_fz(q_dec_raw)
+    q_forward = model.forward_sr(lr_quats, lr_shape=lr_shape, normalize_input=False)
+
+    n_hr = hr_shape[0] * hr_shape[1]
+    print(f"\nShapes: LR={lr_shape}, HR={hr_shape}, n_lr={n_lr}, n_hr={n_hr}")
+
+    stages: list[tuple[str, torch.Tensor, tuple[int, int], int]] = [
+        ("input_quats_lr", lr_quats, lr_shape, 4),
+        ("encode_a1_lr", feat_a1_lr, lr_shape, plot_max_channels),
+        ("conv_lr1_output", feat_lr1, lr_shape, plot_max_channels),
+        ("conv_lr2_output", feat_lr2, lr_shape, plot_max_channels),
+        ("upsample_output", feat_up, hr_shape, plot_max_channels),
+        ("conv_hr1_output", feat_hr1, hr_shape, plot_max_channels),
+    ]
+    for name, tensor in attn_stage_outputs:
+        stages.append((name, tensor, hr_shape, plot_max_channels))
+    stages.extend(
+        [
+            ("attention_output", feat_attn, hr_shape, plot_max_channels),
+            ("final_proj_output_a1", feat_a1_hr, hr_shape, plot_max_channels),
+            ("decoder_raw_output", q_dec_raw, hr_shape, 4),
+            ("decoder_fz_output", q_dec_fz, hr_shape, 4),
+            ("forward_sr_output", q_forward, hr_shape, 4),
+        ]
+    )
+
+    for name, tensor, _, _ in stages:
+        _print_tensor(name, tensor, head=head)
 
     if print_full_tensors:
-        _print_tensor_full("input_quats_lr", lr_quats)
-        _print_tensor_full("encode_a1", feat_a1)
-        _print_tensor_full("encode_full_target", feat_full_target)
-        _print_tensor_full("lift_layer_output", feat_lifted)
-        _print_tensor_full("conv_layer_lr_output (a1 -> full)", feat_lr)
-        _print_tensor_full("upsample_output", feat_up)
-        _print_tensor_full("conv_hr_output", feat_hr)
-        _print_tensor_full("decoder_raw_output", q_dec_raw)
-        _print_tensor_full("decoder_fz_output", q_dec_fz)
+        for name, tensor, _, _ in stages:
+            _print_tensor_full(name, tensor)
 
     if make_spatial_plots:
-        _save_spatial_plots("input_quats_lr", lr_quats, lr_shape, plot_dir, max_channels=plot_max_channels)
-        _save_spatial_plots("encode_a1", feat_a1, lr_shape, plot_dir, max_channels=plot_max_channels)
-        _save_spatial_plots(
-            "encode_full_target", feat_full_target, lr_shape, plot_dir, max_channels=plot_max_channels
-        )
-        _save_spatial_plots(
-            "lift_layer_output", feat_lifted, lr_shape, plot_dir, max_channels=plot_max_channels
-        )
-        _save_spatial_plots(
-            "conv_layer_lr_output (a1 -> full)", feat_lr, lr_shape, plot_dir, max_channels=plot_max_channels
-        )
-        _save_spatial_plots("upsample_output", feat_up, hr_shape, plot_dir, max_channels=plot_max_channels)
-        _save_spatial_plots("conv_hr_output", feat_hr, hr_shape, plot_dir, max_channels=plot_max_channels)
-        _save_spatial_plots("decoder_raw_output", q_dec_raw, hr_shape, plot_dir, max_channels=4)
-        _save_spatial_plots("decoder_fz_output", q_dec_fz, hr_shape, plot_dir, max_channels=4)
+        for name, tensor, shape, max_ch in stages:
+            _save_spatial_plots(name, tensor, shape, plot_dir, max_channels=max_ch)
         print(f"\nSaved spatial plots to: {plot_dir}")
         if show_plots:
             plt.show()
@@ -294,119 +344,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    # main()
-
-    lr_h = int(CONFIG["lr_h"])
-    lr_w = int(CONFIG["lr_w"])
-    upsample_factor = int(CONFIG["upsample_factor"])
-    upsampler = str(CONFIG["upsampler"])
-    if upsampler not in {"conv", "attention"}:
-        raise ValueError(f"CONFIG['upsampler'] must be 'conv' or 'attention', got: {upsampler}")
-    device_str = str(CONFIG["device"])
-    seed = int(CONFIG["seed"])
-    head = int(CONFIG["head"])
-    print_full_tensors = bool(CONFIG["print_full_tensors"])
-    make_spatial_plots = bool(CONFIG["make_spatial_plots"])
-    show_plots = bool(CONFIG["show_plots"])
-    plot_max_channels = int(CONFIG["plot_max_channels"])
-    plot_dir_cfg = str(CONFIG["plot_dir"])
-    lookup_resolution = int(CONFIG["lookup_resolution"])
-    lookup_path_cfg = str(CONFIG["lookup_path"])
-
-    repo_root = Path(__file__).resolve().parents[1]
-    module = _load_sr_conv_module(repo_root)
-
-    lookup_path = (
-        Path(lookup_path_cfg).expanduser().resolve()
-        if lookup_path_cfg.strip()
-        else (repo_root / "symmetry_groups" / "local_iso_lookup_O_res1_irreps.npy").resolve()
-    )
-    if not lookup_path.exists():
-        raise FileNotFoundError(f"Lookup table not found: {lookup_path}")
-
-    device = torch.device(device_str)
-    lr_shape = (lr_h, lr_w)
-    n_lr = lr_h * lr_w
-    plot_dir = (repo_root / plot_dir_cfg).resolve()
-
-    model = module.FCCAutoEncoderSR(
-        device=device,
-        upsample_factor=upsample_factor,
-        upsampler=upsampler,
-        decoder_backend="lookup",
-        decoder_config={
-            "decoder_lookup_resolution": lookup_resolution,
-            "decoder_lookup_npy_path": str(lookup_path),
-        },
-    ).eval()
-
-    print("Model Irreps")
-    print(f"  irreps_a1   : {model.irreps_a1}")
-    print(f"  irreps_full : {model.irreps_full}")
-    print(f"  lift_layer  : {model.lift_layer.irreps_in} -> {model.lift_layer.irreps_out}")
-    print(
-        "  first conv tp:"
-        f" {model.conv_layer.irreps_in} x {model.conv_layer.irreps_in}"
-        f" -> {model.conv_layer.irreps_out}"
-    )
-    print(f"  upsample irreps: {model.upsample_conv.irreps_feat if hasattr(model.upsample_conv, 'irreps_feat') else model.upsample_conv.irreps_io}")
-    print(f"  conv_hr tp     : {model.conv_hr.irreps_in} x {model.conv_hr.irreps_in} -> {model.conv_hr.irreps_out}")
-
-    lr_quats = _random_unit_quats(n_lr, device=device, seed=seed)
-
-    with torch.no_grad():
-        lr_quats = model._normalize_quaternions(lr_quats)
-        feat_a1 = model.encode_a1(lr_quats)
-        feat_full_target = model.encode_full_target(lr_quats)
-        feat_lifted = model.lift_to_full(feat_a1)
-        feat_lr = model.conv_layer(feat_a1, lr_shape)
-        feat_up, hr_shape = model.upsample_conv(feat_lr, lr_shape)
-        feat_hr = model.conv_hr(feat_up, hr_shape)
-        q_dec_raw = model.decoder(feat_hr)
-        q_dec_fz = model.reduce_to_fz(q_dec_raw)
-        q_forward = model.forward_sr(lr_quats, lr_shape=lr_shape, normalize_input=False)
-
-    print(f"\nShapes: LR={lr_shape}, HR={hr_shape}, n_lr={n_lr}, n_hr={hr_shape[0] * hr_shape[1]}")
-    _print_tensor("input_quats_lr", lr_quats, head=head)
-    _print_tensor("encode_a1", feat_a1, head=head)
-    _print_tensor("encode_full_target", feat_full_target, head=head)
-    _print_tensor("lift_layer_output", feat_lifted, head=head)
-    _print_tensor("conv_layer_lr_output (a1 -> full)", feat_lr, head=head)
-    _print_tensor("upsample_output", feat_up, head=head)
-    _print_tensor("conv_hr_output", feat_hr, head=head)
-    _print_tensor("decoder_raw_output", q_dec_raw, head=head)
-    _print_tensor("decoder_fz_output", q_dec_fz, head=head)
-
-    if print_full_tensors:
-        _print_tensor_full("input_quats_lr", lr_quats)
-        _print_tensor_full("encode_a1", feat_a1)
-        _print_tensor_full("encode_full_target", feat_full_target)
-        _print_tensor_full("lift_layer_output", feat_lifted)
-        _print_tensor_full("conv_layer_lr_output (a1 -> full)", feat_lr)
-        _print_tensor_full("upsample_output", feat_up)
-        _print_tensor_full("conv_hr_output", feat_hr)
-        _print_tensor_full("decoder_raw_output", q_dec_raw)
-        _print_tensor_full("decoder_fz_output", q_dec_fz)
-
-    if make_spatial_plots:
-        _save_spatial_plots("input_quats_lr", lr_quats, lr_shape, plot_dir, max_channels=plot_max_channels)
-        _save_spatial_plots("encode_a1", feat_a1, lr_shape, plot_dir, max_channels=plot_max_channels)
-        _save_spatial_plots(
-            "encode_full_target", feat_full_target, lr_shape, plot_dir, max_channels=plot_max_channels
-        )
-        _save_spatial_plots(
-            "lift_layer_output", feat_lifted, lr_shape, plot_dir, max_channels=plot_max_channels
-        )
-        _save_spatial_plots(
-            "conv_layer_lr_output (a1 -> full)", feat_lr, lr_shape, plot_dir, max_channels=plot_max_channels
-        )
-        _save_spatial_plots("upsample_output", feat_up, hr_shape, plot_dir, max_channels=plot_max_channels)
-        _save_spatial_plots("conv_hr_output", feat_hr, hr_shape, plot_dir, max_channels=plot_max_channels)
-        _save_spatial_plots("decoder_raw_output", q_dec_raw, hr_shape, plot_dir, max_channels=4)
-        _save_spatial_plots("decoder_fz_output", q_dec_fz, hr_shape, plot_dir, max_channels=4)
-        print(f"\nSaved spatial plots to: {plot_dir}")
-        if show_plots:
-            plt.show()
-
-    diff = (q_dec_fz - q_forward).abs().max().item()
-    print(f"\nConsistency check: max|reduce_to_fz(decoder_out) - forward_sr| = {diff:.6e}")
+    main()
