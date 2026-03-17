@@ -10,10 +10,7 @@ Key requirements addressed:
 
 from __future__ import annotations
 
-import importlib.util
 import math
-from pathlib import Path
-from typing import Any
 
 import torch
 import torch.nn as nn
@@ -21,35 +18,12 @@ import torch.nn.functional as F
 from e3nn import o3
 from e3nn.o3 import FullyConnectedTensorProduct, Irreps, Linear as IrrepsLinear
 
-try:
-    from models.local_iso_embedding import (
-        build_fcc_syms_mtex,
-        build_hcp_syms_mtex,
-        build_local_iso_fcc_embedding,
-        build_local_iso_hcp_embedding,
-    )
-except Exception:
-    try:
-        from local_iso_embedding import (  # type: ignore
-            build_fcc_syms_mtex,
-            build_hcp_syms_mtex,
-            build_local_iso_fcc_embedding,
-            build_local_iso_hcp_embedding,
-        )
-    except Exception:
-        _local_iso_path = Path(__file__).resolve().parent / "local_iso_embedding.py"
-        _spec = importlib.util.spec_from_file_location(
-            "_repo_local_iso_embedding",
-            _local_iso_path,
-        )
-        if _spec is None or _spec.loader is None:
-            raise ImportError(f"Could not load local iso embedding module: {_local_iso_path}")
-        _mod = importlib.util.module_from_spec(_spec)
-        _spec.loader.exec_module(_mod)
-        build_fcc_syms_mtex = _mod.build_fcc_syms_mtex
-        build_hcp_syms_mtex = _mod.build_hcp_syms_mtex
-        build_local_iso_fcc_embedding = _mod.build_local_iso_fcc_embedding
-        build_local_iso_hcp_embedding = _mod.build_local_iso_hcp_embedding
+from models.local_iso_embedding import (
+    build_fcc_syms_mtex,
+    build_hcp_syms_mtex,
+    build_local_iso_fcc_embedding,
+    build_local_iso_hcp_embedding,
+)
 
 
 def _normalize_quaternions(quats: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
@@ -271,6 +245,63 @@ class CubochoricOptimizingLocalIsoDecoder(nn.Module):
             batch_idx = torch.arange(B, device=feat_target.device)
             q_best = q[batch_idx, best_k]
         return _normalize_quaternions(q_best)
+
+
+class LearnableA1QuaternionDecoder(nn.Module):
+    """Learnable MLP decoder from a1 features to passive unit quaternions."""
+
+    def __init__(
+        self,
+        input_dim: int,
+        hidden_dim: int = 256,
+        num_layers: int = 3,
+        dropout: float = 0.0,
+    ):
+        super().__init__()
+        self.input_dim = int(input_dim)
+        self.hidden_dim = int(hidden_dim)
+        self.num_layers = int(num_layers)
+        self.dropout = float(dropout)
+
+        if self.input_dim <= 0:
+            raise ValueError(f"input_dim must be > 0, got {self.input_dim}")
+        if self.num_layers < 1:
+            raise ValueError(f"num_layers must be >= 1, got {self.num_layers}")
+
+        layers: list[nn.Module] = []
+        in_dim = self.input_dim
+        if self.num_layers == 1:
+            layers.append(nn.Linear(in_dim, 4))
+        else:
+            for _ in range(self.num_layers - 1):
+                layers.append(nn.Linear(in_dim, self.hidden_dim))
+                layers.append(nn.GELU())
+                if self.dropout > 0.0:
+                    layers.append(nn.Dropout(self.dropout))
+                in_dim = self.hidden_dim
+            layers.append(nn.Linear(in_dim, 4))
+        self.net = nn.Sequential(*layers)
+
+        # Start near identity quaternions.
+        last_linear = None
+        for mod in reversed(self.net):
+            if isinstance(mod, nn.Linear):
+                last_linear = mod
+                break
+        if last_linear is not None:
+            with torch.no_grad():
+                last_linear.bias.zero_()
+                last_linear.bias[0] = 1.0
+
+    def forward(self, features: torch.Tensor) -> torch.Tensor:
+        if features.dim() != 2:
+            raise ValueError(f"Expected features of shape (N,C), got {tuple(features.shape)}")
+        if int(features.shape[-1]) != self.input_dim:
+            raise ValueError(
+                f"Expected feature dim {self.input_dim}, got {int(features.shape[-1])}"
+            )
+        q = self.net(features)
+        return _normalize_quaternions(q)
 
 
 class EquivariantSpatialConv(nn.Module):
@@ -542,6 +573,10 @@ class IsoEmbeddingSRAttn(nn.Module):
         decoder_steps: int = 25,
         decoder_lr: float = 0.05,
         decoder_method: str = "cubochoric",
+        decoder_backend: str = "optimizing",
+        decoder_learnable_hidden_dim: int = 256,
+        decoder_learnable_num_layers: int = 3,
+        decoder_learnable_dropout: float = 0.0,
     ):
         super().__init__()
         if device is None:
@@ -563,15 +598,28 @@ class IsoEmbeddingSRAttn(nn.Module):
         self.upsample_factor = int(upsample_factor)
         self.hr_attn_block_size = int(hr_attn_block_size)
 
-        self.decoder = CubochoricOptimizingLocalIsoDecoder(
-            encoder=self.encoder,
-            cubochoric_resolution=int(decoder_cubochoric_resolution),
-            method=str(decoder_method),
-            num_starts=int(decoder_num_starts),
-            steps=int(decoder_steps),
-            lr=float(decoder_lr),
-            target_irreps="a1",
-        )
+        self.decoder_backend = str(decoder_backend).lower()
+        if self.decoder_backend == "optimizing":
+            self.decoder = CubochoricOptimizingLocalIsoDecoder(
+                encoder=self.encoder,
+                cubochoric_resolution=int(decoder_cubochoric_resolution),
+                method=str(decoder_method),
+                num_starts=int(decoder_num_starts),
+                steps=int(decoder_steps),
+                lr=float(decoder_lr),
+                target_irreps="a1",
+            )
+        elif self.decoder_backend == "learnable":
+            self.decoder = LearnableA1QuaternionDecoder(
+                input_dim=self.feature_dim_a1,
+                hidden_dim=int(decoder_learnable_hidden_dim),
+                num_layers=int(decoder_learnable_num_layers),
+                dropout=float(decoder_learnable_dropout),
+            )
+        else:
+            raise ValueError(
+                f"decoder_backend must be 'optimizing' or 'learnable', got {decoder_backend}"
+            )
 
         # Requested architecture:
         # LR conv1 k=3: a1 -> full
@@ -658,6 +706,12 @@ class IsoEmbeddingSRAttn(nn.Module):
         return q_fz
 
     def decode(self, features_a1: torch.Tensor) -> torch.Tensor:
+        batched = features_a1.dim() == 3
+        if batched:
+            bsz, n, c = features_a1.shape
+            q = self.decoder(features_a1.reshape(bsz * n, c))
+            q = self.reduce_to_fz(q).reshape(bsz, n, 4)
+            return q
         q = self.decoder(features_a1)
         return self.reduce_to_fz(q)
 
@@ -827,5 +881,6 @@ __all__ = [
     "EquivariantSpatialConv",
     "EquivariantTransposeConv",
     "IsoEmbeddingSRAttn",
+    "LearnableA1QuaternionDecoder",
     "LocalIsoCrystalEncoder",
 ]

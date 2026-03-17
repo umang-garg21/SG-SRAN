@@ -1,0 +1,47 @@
+{
+  "dataset_root": "/data/warren/materials/EBSD/IN718_FZ_2D_SR_x4",
+  "epochs": 30,
+  "batch_size": 8,
+  "lr": 0.0003,
+  "scale": 4,
+  "n_feats": 32,
+  "kernel_size": 3,
+  "symmetry_group": "O",
+  "loss": "simple_symmetry_rotational",
+  "amp": false,
+  "clip": 1.0,
+  "vis_every": 2,
+  "num_workers": 0,
+  "preload": true,
+  "preload_torch": true,
+  "pin_memory": true,
+  "seed": 42,
+  "scheduler": {
+    "type": "cosine",
+    "warmup_epochs": 3,
+    "min_lr": 1e-06
+  },
+  "optimizer": {
+    "type": "AdamW",
+    "weight_decay": 0.0001
+  },
+  "save_every": 5,
+  "model": {
+    "type": "fcc_autoencoder_learnable_decoder",
+    "dropout": 0.0
+  },
+  "logging": {
+    "tensorboard": true,
+    "save_best_only": true,
+    "val_freq": 1
+  },
+  "smoke_test": true,
+  "decoder_num_layers": 3,
+  "decoder_hidden_dim": 256,
+  "decoder_dropout": 0.0,
+  "symmetry": "O",
+  "symmetry_group_path": "symmetry_groups/O_group.npy",
+  "checkpoints_dir": "/home/warren/projects/Reynolds-QSR/experiments/IN718/LAE_02/checkpoints",
+  "sym_np_path": "/home/warren/projects/Reynolds-QSR/symmetry_groups/O_group.npy",
+  "sym_inv_np_path": "/home/warren/projects/Reynolds-QSR/symmetry_groups/O_group_inv.npy"
+}

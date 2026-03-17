@@ -7,26 +7,14 @@ Contact:     wzamudio@ucsb.edu
 Description: Data loading utilities for quaternion super-resolution using the quaternion_dataset object.
 """
 
-import os
-import re
-import glob
-import json
-import torch
-import numpy as np
-from typing import List, Tuple, Optional
-from torch.utils.data import Dataset
-from concurrent.futures import ThreadPoolExecutor
-from utils.quat_ops import to_spatial_quat
-
-import torch
 import random
 import numpy as np
+import torch
 from torch.utils.data import DataLoader
 from typing import Optional
 
 # Import your optimized QuaternionDataset
 from training.quaternion_dataset import QuaternionDataset
-from training.invariant_feature_adapter import InvariantFeatureAdapterDataset
 
 
 # ============================================================
@@ -62,12 +50,6 @@ def build_dataloader(
     rank: int = 0,
     world_size: int = 1,
     seed: int = 42,  # Seed parameter for reproducibility
-    invariant_adapter_enabled: bool = False,
-    invariant_adapter_method: str = "hybrid",
-    invariant_adapter_beta: float = 64.0,
-    invariant_adapter_apply_to: str = "lr",
-    invariant_adapter_channel_first: bool = True,
-    invariant_adapter_cache: bool = False,
 ) -> DataLoader:
     """
     Build a DataLoader for quaternion SR datasets.
@@ -104,19 +86,6 @@ def build_dataloader(
         Total number of processes for DDP
     seed : int
         Random seed for reproducibility (default: 42)
-    invariant_adapter_enabled : bool
-        If True, wrap dataset with Bunge-invariant feature adapter.
-    invariant_adapter_method : str
-        Feature method: fz_logmap | soft_orbit | hybrid.
-    invariant_adapter_beta : float
-        Soft-orbit temperature factor for invariant adapter.
-    invariant_adapter_apply_to : str
-        Which side(s) to encode: lr | hr | both.
-    invariant_adapter_channel_first : bool
-        If True, encoded features are returned as (C,H,W).
-    invariant_adapter_cache : bool
-        Cache encoded items in wrapper dataset.
-
     Returns
     -------
     DataLoader
@@ -129,16 +98,6 @@ def build_dataloader(
         pin_memory=pin_memory,
         take_first=take_first,
     )
-
-    if invariant_adapter_enabled:
-        ds = InvariantFeatureAdapterDataset(
-            ds,
-            method=invariant_adapter_method,
-            beta=float(invariant_adapter_beta),
-            apply_to=invariant_adapter_apply_to,
-            channel_first=bool(invariant_adapter_channel_first),
-            cache_features=bool(invariant_adapter_cache),
-        )
 
     # Generator for deterministic shuffling
     g = torch.Generator()

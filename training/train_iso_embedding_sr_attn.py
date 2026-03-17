@@ -9,7 +9,6 @@ and optimizes model.feature_loss_sr(...) directly.
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 import os
 import sys
@@ -26,6 +25,7 @@ from training.data_loading import build_dataloader
 from training.optimizer_utils import build_optimizer
 from training.schedulers import build_scheduler
 from training.seed_utils import get_seed_from_config, set_seed
+from models.SR_double_conv_SRattn import IsoEmbeddingSRAttn
 from utils.symmetry_utils import resolve_symmetry
 
 
@@ -77,31 +77,6 @@ def _get_take_first(cfg, split: str):
 
 def _unwrap_model(model: torch.nn.Module) -> torch.nn.Module:
     return model.module if hasattr(model, "module") else model
-
-
-def _load_iso_embedding_sr_attn_class():
-    """Load IsoEmbeddingSRAttn robustly without depending on package import state."""
-    try:
-        from models.SR_double_conv_SRattn import IsoEmbeddingSRAttn as cls  # type: ignore
-
-        return cls
-    except Exception:
-        pass
-
-    try:
-        from SR_double_conv_SRattn import IsoEmbeddingSRAttn as cls  # type: ignore
-
-        return cls
-    except Exception:
-        pass
-
-    module_path = Path(__file__).resolve().parents[1] / "models" / "SR_double_conv_SRattn.py"
-    spec = importlib.util.spec_from_file_location("repo_sr_double_conv_srattn", module_path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"Could not load module spec from {module_path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module.IsoEmbeddingSRAttn
 
 
 def _save_history(history_path: Path, history: dict) -> None:
@@ -323,18 +298,9 @@ def main() -> None:
             shuffle=(split == "train"),
             take_first=_get_take_first(cfg, split),
             seed=seed,
-            invariant_adapter_enabled=bool(getattr(cfg, "invariant_adapter_enabled", False)),
-            invariant_adapter_method=str(getattr(cfg, "invariant_adapter_method", "hybrid")),
-            invariant_adapter_beta=float(getattr(cfg, "invariant_adapter_beta", 64.0)),
-            invariant_adapter_apply_to=str(getattr(cfg, "invariant_adapter_apply_to", "lr")),
-            invariant_adapter_channel_first=bool(
-                getattr(cfg, "invariant_adapter_channel_first", True)
-            ),
-            invariant_adapter_cache=bool(getattr(cfg, "invariant_adapter_cache", False)),
         )
 
-    model_cls = _load_iso_embedding_sr_attn_class()
-    model = model_cls(
+    model = IsoEmbeddingSRAttn(
         crystal=str(getattr(cfg, "crystal", "fcc")),
         d6_convention=str(getattr(cfg, "d6_convention", "z_axis")),
         device=device,
@@ -348,6 +314,16 @@ def main() -> None:
         decoder_steps=int(getattr(cfg, "decoder_steps", 1)),
         decoder_lr=float(getattr(cfg, "decoder_lr", 0.05)),
         decoder_method=str(getattr(cfg, "decoder_method", "cubochoric")),
+        decoder_backend=str(getattr(cfg, "decoder_backend", "optimizing")),
+        decoder_learnable_hidden_dim=int(
+            getattr(cfg, "decoder_learnable_hidden_dim", 256)
+        ),
+        decoder_learnable_num_layers=int(
+            getattr(cfg, "decoder_learnable_num_layers", 3)
+        ),
+        decoder_learnable_dropout=float(
+            getattr(cfg, "decoder_learnable_dropout", 0.0)
+        ),
     ).to(device)
 
     optimizer = build_optimizer(model, cfg)

@@ -1,160 +1,290 @@
-# Q-RBSA (Quaternion Residual Block Self Attention Network)
-High-Resolution 3D EBSD Map Generation Using An Efficient Quaternion Transformer Network
+# Reynolds-QSR: IsoEmbeddingSRAttn-Centered Repository
 
-[Devendra K. Jangid](https://sites.google.com/view/dkj910), [Neal R. Brodnik](https://scholar.google.com/citations?user=3dAoFJkAAAAJ&hl=en), [McLean P. Echlin](https://scholar.google.com/citations?user=fxN2OsUAAAAJ&hl=en), [Chandrakanth Gudavalli](https://scholar.google.com/citations?user=TyzK9okAAAAJ&hl=en), [Connor Levenson](https://www.linkedin.com/in/connor11son), [Tresa M. Pollock](https://materials.ucsb.edu/people/faculty/tresa-pollock), [Samantha H. Daly](https://scholar.google.com/citations?user=3whYx4UAAAAJ&hl=en), [B.S. Manjunath](https://scholar.google.com/citations?user=wRYM4qgAAAAJ&hl=en)
+This repository is focused on one end-to-end workflow:
+- Train `IsoEmbeddingSRAttn` for quaternion super-resolution.
+- Run inference from LR quaternion maps to SR quaternion maps.
+- Visualize LR/SR/HR with IPF maps and layer-wise debug traces.
 
-[Paper](https://arxiv.org/abs/2303.10722)
+All legacy code, experiments, and generated artifacts are preserved under `archive/`.
 
-<hr />
+## Core Files
 
-> **Abstract:** *Gathering 3D material microstructural information is time-consuming, expensive, and energy-intensive. Acquisition of 3D data has been accelerated by developments in serial sectioning instrument capabilities; however, for crystallographic information, the electron backscatter diffraction (EBSD) imaging modality remains rate limiting. We propose a physics-based efficient deep learning framework to reduce the time and cost of collecting 3D EBSD maps. Our framework uses a quaternion residual block self-attention network (QRBSA) to generate high-resolution 3D EBSD maps from sparsely sectioned EBSD maps. In QRBSA, quaternion-valued convolution effectively learns local relations in orientation space, while self-attention in the quaternion domain captures long-range correlations. We apply our framework to 3D data collected from commercially relevant titanium alloys, showing both qualitatively and quantitatively that our method can predict missing samples (EBSD information between sparsely sectioned mapping points) as compared to high-resolution ground truth 3D EBSD maps.*
-<hr />
+- `models/SR_double_conv_SRattn.py`
+- `models/local_iso_embedding.py`
+- `training/train_iso_embedding_sr_attn.py`
+- `inference/infer_iso_embedding_sr_attn.py`
+- `scripts/train_iso_embedding_sr_attn.sh`
+- `scripts/infer_iso_embedding_sr_attn.sh`
+- `scripts/trace_sr_conv_layers.py`
+- `experiments/IN718/iso_embedding_sr_attn_01/config.json`
+- `experiments/IN718/iso_embedding_sr_attn_01/config_smoke.json`
 
+## Install
 
-<img src = "images/3D_EBSD_framework.jpg">
-
-## BisQue Inference Module
-We have provided inference model on [BisQue](https://bisque2.ece.ucsb.edu/client_service/). Users would need to [create an account](https://docs.google.com/forms/d/e/1FAIpQLSfUCwOdl8Gd1KErPXbLWSPvF74ApT7M142sYQVdwluDUJXMAg/viewform) on BisQue to use QRBSA inference module. Below are the guidelines with images to use module on BisQue.  
-
-**Step 1**: Upload Input 3D EBSD File. This file has information about EBSD orientation in Quaternion domain (numpy array). A test sample is provided on BisQue with name Ti64_3D_LR.npy. 
-      
-**Step 2**: Click on Run. The module takes around 3 minutes for a file size (30 X 142 X 270) on CPU. We will work on optimization of code to reduce inference time.
-      
-**Step 3**: QRBSA module will generate three files: 
-      
-* Output Arr: High-Resolution 3D EBSD orientation in quaternion domain (numpy array)
-            
-* Output File: High-Resolution 3D EBSD file in dream 3d format. Users can click on file and go to (DataContianers/ImageDataContainer/CellData/IPFColor) to visualize in 3D as shown in image below
-            
-* Input LR FIle: Low-Resolution 3D EBSD File in dream3D format. For visualization,  Users can click on file and go to (DataContianers/ImageDataContainer/CellData/IPFColor)
-
-### Module Page
-<img src = "images/QRBSA_module.png">
-
-### The Expected Output (Hight Resolution Generated 3D EBSD File)
-
-<img src = "images/3DEBSDSR.jpeg">
-
-### The Input (Sparsely Sectioned 3D EBSD File)
-
-<img src = "images/3DEBSDLR.jpeg">
-
-## **Please use following steps if you want to train network**
-
-
-### System Requirements
-      Ubuntu 22.04.2 LTS
-      All other required dependencies are in requirement.txt 
-      
- 
-### Installation
-Step 1: Clone repo  
-
-      git clone "https://github.com/UCSB-VRL/Q-RBSA.git"
-      
-Step 2: Create Virtual environment
-
-      virtualenv -p /usr/bin/python3.10 qrbsa_venv(name of virtual environment)
-
-Step 3: Activate Virtual environment
-
-      source qrbsa_venv/bin/activate
-      
-Step 4: Download Dependencies
-
-      pip install -r requirements.txt
-      
-Step 5: Install gradual warmup scheduler. Go to `pytorch-gradual-warmup-lr` folder and run:
-
-       python setup.py install
-       
-
-### Training 
-Run
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 ```
-./train.sh
+
+## Test
+
+```bash
+pytest
 ```
-<table>
-      <tr>
-          <th align="center">Loss</th>
-          <th align="center">dist_type</th>
-           <th align="center">syms_req</th>  
-      </tr>
-       <tr>
-          <td align="center">L1</td>
-          <td align="center">L1</td>
-          <td align="center">False</td>  
-      </tr>
-       <tr>
-          <td align="center">L1 with symmetry</td>
-          <td align="center">L1</td>
-          <td align="center">True</td>  
-      </tr>
-        <tr>
-          <td align="center">Rotational distance approximation with symmetry</td>
-          <td align="center">rot_dist_approx</td>
-          <td align="center">True</td>  
-      </tr>
-<table>
 
+The active test suite is scoped to `tests/` via `pytest.ini` and ignores `archive/`.
 
-Define the following parameters to train network
-   
-* ```--input_dir```: "Directory Path to Datasets"
-* ```--hr_data_dir```: "Path to High Resolution EBSD Maps relative to input_dir"
-* ```--val_lr_data_dir```: "Path to Low Resolution EBSD Val Datasets"
-* ```--val_hr_data_dir```: "Path to High Resolution EBSD Val Datasets"
-* ```--model```: "Choose one of network architectures from edsr, rfdn, san, han"
-* ```--save```: "Folder name to save weights, loss curves and logs"
-   
-Important parameters in argparser.py 
-   
-* ```--syms_req```: "It tells whether you want to use symmetry or not during Loss calculation"
-* ```--patch_size```: "Max Size of Patch During Training"
-* ```--act```: "Activation Function in Network"
-* ```--save_model_freq```: "How frequently do you want to save models"
+## Train
 
-## Evaluation
-      
-You do not need to use following steps if you are using Bisque infrastructure for inference. 
-
-      
-Download trained weights for QRBSA network [here](https://drive.google.com/drive/folders/12ILcyCBJENrYvBxDcCwQAVNzSpofFN8q)
-
-Put it in ```./experiment/saved_weights/{name_of_file}/model/{name_of_file}.pt```
- 
-### For example 
-      
-If you use qrbsa 1D with rotational distance approximation loss:
+```bash
+./scripts/train_iso_embedding_sr_attn.sh experiments/IN718/iso_embedding_sr_attn_01 --config config.json
 ```
-./experiment/saved_weights/edsr_l1_ti64/model/edsr_l1_ti64.pt
-```      
 
-```--model```: qrbsa_1d
-      
-```--save```: 'qrbsa_1d_rotdist'
-      
-```--model_to_load```: 'model_best'
-      
-```--dist_type```: 'rot_dist_approx'
-      
-```--test_only```    
-Run
+Smoke run:
+
+```bash
+./scripts/train_iso_embedding_sr_attn.sh experiments/IN718/iso_embedding_sr_attn_01 --config config_smoke.json
 ```
-./test.sh
+
+To use the learnable decoder, set in config:
+
+```json
+"decoder_backend": "learnable",
+"decoder_learnable_hidden_dim": 256,
+"decoder_learnable_num_layers": 3,
+"decoder_learnable_dropout": 0.0
 ```
-The generated results will be saved at ```experiments/saved_weights/qrbsa_1d_rotdist/results/Test_model_best``` in npy format. It will also generate images (.png) for each quaternion channel.
 
-## Visualization
-The model will generate superresolved EBSD map in ```npy``` format. To convert into IPF maps from npy files, please see [IPF Mapping](https://github.com/dkjangid910ucsb/Q-RBSA/tree/main/IPF_mapping)
-      
-      
- 
-## Results
-<img src = "images/qual_results.jpg">
+## Inference
 
-## Datasets
-Material datasets will be available by request at discretion of authors. 
+```bash
+./scripts/infer_iso_embedding_sr_attn.sh experiments/IN718/iso_embedding_sr_attn_01 \
+  --checkpoint best_model.pt \
+  --split Test
+```
 
-## Acknowledgements
-This code is built on [Q-CNN](https://github.com/Orkis-Research/Pytorch-Quaternion-Neural-Networks), [Restormer](https://github.com/swz30/Restormer), [HAN](https://github.com/wwlCape/HAN), and [EDSR](https://github.com/sanghyun-son/EDSR-PyTorch). We thank the authors for sharing their codes. 
+Inference outputs are written to:
+- `experiments/.../inference/<split>/sr_quaternions/*.npy`
+- `experiments/.../inference/<split>/ipf/*.png`
+- `experiments/.../inference/<split>/summary.json`
+
+## Layer-Wise Debug and Irrep Channel Analysis
+
+Edit `CONFIG` in `scripts/trace_sr_conv_layers.py`, then run:
+
+```bash
+python scripts/trace_sr_conv_layers.py
+```
+
+This produces:
+- Full tensor stats and optional full tensor dumps.
+- Spatial channel plots.
+- Per-irrep block channel plots after each SR stage.
+
+## Architecture Diagram
+
+Generated diagram:
+
+![IsoEmbeddingSRAttn Architecture](assets/iso_embedding_sr_attn_architecture.png)
+
+Regenerate it with:
+
+```bash
+python scripts/make_iso_embedding_sr_attn_architecture.py
+```
+
+## Full LaTeX Model and Process Description
+
+```latex
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsfonts,bm}
+\usepackage{booktabs}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+
+\title{IsoEmbeddingSRAttn: Model and Training/Inference Process}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Problem Setup}
+Given low-resolution quaternion orientations
+\[
+\mathbf{Q}_{\mathrm{LR}} \in \mathbb{R}^{B\times 4\times H\times W},
+\]
+predict high-resolution orientations
+\[
+\widehat{\mathbf{Q}}_{\mathrm{SR}} \in \mathbb{R}^{B\times 4\times (rH)\times (rW)}.
+\]
+Quaternions are scalar-first (\(w,x,y,z\)) and normalized to unit norm.
+
+\section{Local-Iso Embedding Interface}
+A crystal-aware local-isometric encoder provides two feature spaces:
+\[
+E_{a1}: \mathbb{S}^3 \to \mathbb{R}^{d_{a1}}, 
+\qquad
+E_{\mathrm{full}}: \mathbb{S}^3 \to \mathbb{R}^{d_{\mathrm{full}}}.
+\]
+These correspond to irreps:
+\[
+\mathcal{I}_{a1}=\texttt{irreps\_a1},\qquad
+\mathcal{I}_{\mathrm{full}}=\texttt{irreps\_full}.
+\]
+Top-level crystal switch:
+\[
+\texttt{crystal} \in \{\texttt{fcc},\texttt{hcp}\}
+\]
+selects \(O\) (FCC) or \(D6\) (HCP) symmetry and matching embedding/symmetry operators.
+
+\section{SR Backbone (No Lift Layer, No HR Conv2)}
+Let \(\mathbf{z}_{\mathrm{LR}}=E_{a1}(\mathbf{q}_{\mathrm{LR}})\) (flattened spatially to \(N=HW\) points).  
+The SR feature pipeline is:
+\begin{align}
+\mathbf{f}_1 &= \mathrm{Conv}_{\mathrm{LR1}}^{k=3}(\mathbf{z}_{\mathrm{LR}}),\\
+\mathbf{f}_2 &= \mathrm{Conv}_{\mathrm{LR2}}^{k=9}(\mathbf{f}_1),\\
+(\mathbf{f}_3,\;H_r,W_r) &= \mathrm{UpConv}^{k=3,r}(\mathbf{f}_2),\\
+\mathbf{f}_4 &= \mathrm{Conv}_{\mathrm{HR1}}^{k=3}(\mathbf{f}_3),\\
+\mathbf{f}_5 &= \mathrm{AttentionStack}(\mathbf{f}_4),\\
+\widehat{\mathbf{z}}_{\mathrm{HR}}^{a1} &= P_{\mathrm{full}\to a1}(\mathbf{f}_5).
+\end{align}
+
+\subsection{Layer Irrep Contracts}
+\begin{center}
+\begin{tabular}{@{}lllll@{}}
+\toprule
+Stage & Kernel & Irreps In1 & Irreps In2 & Irreps Out \\
+\midrule
+LR Conv1 & \(3\) & \(\mathcal{I}_{a1}\) & \(\mathcal{I}_{a1}\) & \(\mathcal{I}_{\mathrm{full}}\) \\
+LR Conv2 & \(9\) & \(\mathcal{I}_{\mathrm{full}}\) & \(\mathcal{I}_{\mathrm{full}}\) & \(\mathcal{I}_{\mathrm{full}}\) \\
+EquivariantTransposeConv & \(3\) & \(\mathcal{I}_{\mathrm{full}}\) & \(\mathcal{I}_{\mathrm{full}}\) & \(\mathcal{I}_{\mathrm{full}}\) \\
+HR Conv1 & \(3\) & \(\mathcal{I}_{\mathrm{full}}\) & \(\mathcal{I}_{\mathrm{full}}\) & \(\mathcal{I}_{\mathrm{full}}\) \\
+AttentionBlock \(\times M\) & block-local & \(\mathcal{I}_{\mathrm{full}}\) & \(\mathcal{I}_{\mathrm{full}}\) & \(\mathcal{I}_{\mathrm{full}}\) \\
+Final Projection & linear & \(\mathcal{I}_{\mathrm{full}}\) & -- & \(\mathcal{I}_{a1}\) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{EquivariantSpatialConv}
+For each spatial position \(i\), with neighborhood \(\mathcal{N}_k(i)\):
+\begin{align}
+\mathbf{c}_i &= \sum_{j\in\mathcal{N}_k(i)} w_{ij}\mathbf{x}_j,\qquad \sum_j w_{ij}=1,\\
+\mathbf{y}_i &= \mathrm{TP}(\mathbf{x}_i,\mathbf{c}_i)+\mathbf{r}_i.
+\end{align}
+\(\mathrm{TP}\) is \texttt{FullyConnectedTensorProduct} with specified irreps.  
+For LR Conv1, residual is disabled; for full\(\to\)full layers residual is additive identity.
+
+\subsection{EquivariantTransposeConv}
+Depthwise transposed convolution upsamples by factor \(r\), initialized with bilinear kernel, then applies tensor-product mixing with local context:
+\[
+\mathbf{u}=\mathrm{DepthwiseConvTranspose}(\mathbf{x}),\quad
+\mathbf{y}_i=\mathrm{TP}(\mathbf{u}_i,\mathbf{c}_i)+\mathbf{r}_i.
+\]
+
+\subsection{Block-Local Equivariant Attention}
+Within each \(b_h\times b_w\) block (\(N_b=b_hb_w\)):
+\begin{align}
+s_{ij} &= \exp(\lambda)\,\langle \bar{\mathbf{x}}_i,\bar{\mathbf{x}}_j\rangle
++ \beta(\mathbf{p}_i)+\beta(\mathbf{p}_j),\\
+\alpha_{ij} &= \mathrm{softmax}_j(s_{ij}),\\
+\mathbf{h}_i &= L_{\mathrm{in}}(\mathbf{x}_i),\\
+\mathbf{v}_i &= \mathrm{TP}_{\mathrm{val}}(\mathbf{h}_i,\mathbf{sh}_i), \quad
+\mathbf{sh}_i\in \mathrm{Irreps}(1\times 0e + 1\times 2e),\\
+\mathbf{c}_i &= \sum_j \alpha_{ij}\mathbf{v}_j,\\
+\Delta \mathbf{x}_i &= L_{\mathrm{out}}\!\Big(\mathrm{TP}_{\mathrm{out}}(\mathbf{h}_i,\mathbf{c}_i)\Big),\\
+\mathbf{x}_i &\leftarrow \mathbf{x}_i+\Delta \mathbf{x}_i.
+\end{align}
+\(L_{\mathrm{out}}\) is zero-initialized at start.
+
+\section{Decoder: Cubochoric-Sampled Feature Optimization}
+Decoder target irreps are \(a1\) (final output feature space).
+
+\subsection{Seed Table}
+Sample FZ quaternions \(\{\mathbf{q}_t\}_{t=1}^T\) (cubochoric), precompute:
+\[
+\mathbf{z}_t = E_{a1}(\mathbf{q}_t).
+\]
+
+\subsection{Nearest-Seed + Refinement}
+For target feature \(\mathbf{z}\), choose top-\(K\) nearest seeds by squared distance
+\[
+d_t=\|\mathbf{z}-\mathbf{z}_t\|_2^2.
+\]
+Initialize \(\mathbf{u}_k^{(0)}=\mathbf{q}_{t_k}\), optimize:
+\[
+\min_{\{\mathbf{u}_k\}_{k=1}^K}
+\frac{1}{K}\sum_{k=1}^K
+\left\|
+E_{a1}\!\left(\mathrm{norm}(\mathbf{u}_k)\right)-\mathbf{z}
+\right\|_2^2
+\]
+with Adam for fixed steps, then select best \(k^\star\).
+
+\subsection{Fundamental-Zone Reduction}
+Given symmetry operators \(\{s_g\}\),
+\[
+\mathbf{q}^{(g)}=\mathrm{norm}(s_g^{-1}\otimes \mathbf{q}),\qquad
+g^\star=\arg\max_g |w^{(g)}|,
+\]
+output \(\mathbf{q}_{\mathrm{FZ}}=\mathbf{q}^{(g^\star)}\).
+
+\section{Training Objective}
+Training is feature-supervision in \(a1\) space:
+\begin{align}
+\mathbf{z}_{\mathrm{LR}} &= E_{a1}(\mathbf{Q}_{\mathrm{LR}}),\\
+\mathbf{z}_{\mathrm{HR}} &= E_{a1}(\mathbf{Q}_{\mathrm{HR}}),\\
+\widehat{\mathbf{z}}_{\mathrm{HR}} &= F_{\mathrm{SR}}(\mathbf{z}_{\mathrm{LR}}),\\
+\mathcal{L}_{\mathrm{SR}} &= \frac{1}{BN_{\mathrm{HR}}}
+\sum_{b,n}
+\left\|
+\widehat{\mathbf{z}}_{\mathrm{HR},b,n}
+-
+\mathbf{z}_{\mathrm{HR},b,n}
+\right\|_2^2.
+\end{align}
+\(E_{a1}\) targets are computed without gradient flow (detached).
+
+\section{Inference}
+\[
+\widehat{\mathbf{Q}}_{\mathrm{SR}}=
+\mathrm{Decode}_{a1}\!\left(
+P_{\mathrm{full}\to a1}\!\left(
+\mathrm{Attention}\!\left(
+\mathrm{Conv}_{\mathrm{HR1}}\!\left(
+\mathrm{UpConv}\!\left(
+\mathrm{Conv}_{\mathrm{LR2}}\!\left(
+\mathrm{Conv}_{\mathrm{LR1}}\!\left(
+E_{a1}(\mathbf{Q}_{\mathrm{LR}})
+\right)\right)\right)\right)\right)\right)\right).
+\]
+
+\begin{algorithm}[H]
+\caption{One Training Iteration}
+\begin{algorithmic}[1]
+\State Input batch: \(\mathbf{Q}_{\mathrm{LR}},\mathbf{Q}_{\mathrm{HR}}\)
+\State Normalize quaternions
+\State \(\mathbf{z}_{\mathrm{LR}}\gets E_{a1}(\mathbf{Q}_{\mathrm{LR}})\) (detach)
+\State \(\mathbf{z}_{\mathrm{HR}}\gets E_{a1}(\mathbf{Q}_{\mathrm{HR}})\) (detach)
+\State \(\widehat{\mathbf{z}}_{\mathrm{HR}}\gets F_{\mathrm{SR}}(\mathbf{z}_{\mathrm{LR}})\)
+\State \(\mathcal{L}\gets \mathrm{MSE}(\widehat{\mathbf{z}}_{\mathrm{HR}},\mathbf{z}_{\mathrm{HR}})\)
+\State Backpropagate \(\mathcal{L}\), gradient-clip, optimizer step
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[H]
+\caption{Inference (LR \(\to\) SR Quaternion Map)}
+\begin{algorithmic}[1]
+\State Input \(\mathbf{Q}_{\mathrm{LR}}\), shape \((H,W)\)
+\State \(\mathbf{z}_{\mathrm{LR}}\gets E_{a1}(\mathbf{Q}_{\mathrm{LR}})\)
+\State \(\widehat{\mathbf{z}}_{\mathrm{HR}}\gets F_{\mathrm{SR}}(\mathbf{z}_{\mathrm{LR}})\)
+\State \(\widehat{\mathbf{Q}}_{\mathrm{raw}}\gets \mathrm{Decoder}_{a1}(\widehat{\mathbf{z}}_{\mathrm{HR}})\)
+\State \(\widehat{\mathbf{Q}}_{\mathrm{SR}}\gets \mathrm{ReduceToFZ}(\widehat{\mathbf{Q}}_{\mathrm{raw}})\)
+\State Return \(\widehat{\mathbf{Q}}_{\mathrm{SR}}\)
+\end{algorithmic}
+\end{algorithm}
+
+\end{document}
+```
