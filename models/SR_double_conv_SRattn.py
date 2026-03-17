@@ -3,7 +3,6 @@ Standalone local-iso SR model with double LR conv and HR attention.
 
 Key requirements addressed:
 - Single model class: `IsoEmbeddingSRAttn`
-- No `FCCAutoEncoderSR(FCCAutoEncoder)` inheritance pattern
 - Uses local-iso embedding encoder
 - Uses cubochoric-sampled optimizing decoder (feature-space optimization)
 - Crystal family selected at top level (`crystal='fcc'` or `crystal='hcp'`)
