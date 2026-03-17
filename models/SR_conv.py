@@ -201,21 +201,29 @@ class EquivariantSpatialConv(nn.Module):
 	def __init__(
 		self,
 		kernel_size: int = 3,
-		irreps_io: Irreps | str = "1x4e + 1x6e",
+		irreps_in: Irreps | str = "1x4e + 1x6e",
+		irreps_out: Irreps | str | None = None,
+		use_residual: bool = True,
 	):
 		super().__init__()
 		self.kernel_size = kernel_size
 		self.padding = kernel_size // 2
 
-		self.irreps_in = Irreps(irreps_io)
-		self.total_dim = int(self.irreps_in.dim)
+		self.irreps_in = Irreps(irreps_in)
+		self.irreps_out = Irreps(irreps_out) if irreps_out is not None else self.irreps_in
+		self.in_dim = int(self.irreps_in.dim)
+		self.out_dim = int(self.irreps_out.dim)
+		self.use_residual = bool(use_residual)
 
 		self.tp = FullyConnectedTensorProduct(
 			self.irreps_in,
 			self.irreps_in,
-			self.irreps_in,
+			self.irreps_out,
 			shared_weights=True,
 		)
+		self.residual_proj: o3.Linear | None = None
+		if self.use_residual and (self.irreps_in != self.irreps_out):
+			self.residual_proj = o3.Linear(self.irreps_in, self.irreps_out)
 		# Learnable 3×3 spatial kernel for neighbour aggregation
 		self.spatial_weights = nn.Parameter(
 			torch.ones(kernel_size, kernel_size) / (kernel_size * kernel_size)
@@ -233,8 +241,8 @@ class EquivariantSpatialConv(nn.Module):
 		B = features.shape[0]
 		N = features.shape[1]
 		C = features.shape[-1]
-		if C != self.total_dim:
-			raise ValueError(f"Expected feature dim {self.total_dim}, got {C}.")
+		if C != self.in_dim:
+			raise ValueError(f"Expected feature dim {self.in_dim}, got {C}.")
 		if N != H * W:
 			raise ValueError(f"Expected N={H*W} from img_shape, got N={N}.")
 
@@ -251,8 +259,13 @@ class EquivariantSpatialConv(nn.Module):
 		neighbour_flat = neighbour_feats.permute(0, 2, 3, 1).reshape(B * H * W, C)
 		features_flat = features.reshape(B * H * W, C)
 
-		out = self.tp(features_flat, neighbour_flat) + features_flat
-		out = out.reshape(B, H * W, C)
+		out = self.tp(features_flat, neighbour_flat)
+		if self.use_residual:
+			if self.residual_proj is None:
+				out = out + features_flat
+			else:
+				out = out + self.residual_proj(features_flat)
+		out = out.reshape(B, H * W, self.out_dim)
 		if not batched:
 			out = out.squeeze(0)
 		return out
@@ -664,7 +677,9 @@ class FCCAutoEncoder(nn.Module):
 
 		self.conv_layer = EquivariantSpatialConv(
 			kernel_size=3,
-			irreps_io=self.feature_irreps,
+			irreps_in=self.irreps_a1,
+			irreps_out=self.irreps_full,
+			use_residual=False,
 		)
 
 		backend = str(decoder_backend).lower()
@@ -747,8 +762,7 @@ class FCCAutoEncoder(nn.Module):
 		return self.lift_layer(features_a1)
 
 	def encode(self, quats: torch.Tensor) -> torch.Tensor:
-		features_a1 = self.encode_a1(quats)
-		return self.lift_to_full(features_a1)
+		return self.encode_a1(quats)
 
 	def feature_loss(
 		self,
@@ -762,8 +776,7 @@ class FCCAutoEncoder(nn.Module):
 		with torch.no_grad():
 			feat_a1 = self.encode_a1(quats).detach()
 			feat_tgt = self.encode_full_target(quats).detach()
-		feat_seed = self.lift_to_full(feat_a1)
-		feat_out = self.conv_layer(feat_seed, img_shape)
+		feat_out = self.conv_layer(feat_a1, img_shape)
 		return F.mse_loss(feat_out, feat_tgt)
 	
 	def decode(self, features: torch.Tensor) -> torch.Tensor:
@@ -811,9 +824,11 @@ class FCCAutoEncoder(nn.Module):
 			)
 		if normalize_input:
 			quats = self._normalize_quaternions(quats)
-		features = self.encode(quats)
+		features_a1 = self.encode(quats)
 		if img_shape is not None:
-			features = self.conv_layer(features, img_shape)
+			features = self.conv_layer(features_a1, img_shape)
+		else:
+			features = self.lift_to_full(features_a1)
 		return self.decode(features)
 	
 	@staticmethod
@@ -900,22 +915,12 @@ class FCCAutoEncoder(nn.Module):
 		return payload
 
 
-class FCCAutoEncoderSR(FCCAutoEncoder):
+class FCCAutoEncoderSR(nn.Module):
 	"""
-	FCC super-resolution autoencoder.
+	FCC super-resolution autoencoder (standalone, no inheritance).
 
-	Extends FCCAutoEncoder with an upsample stage and a second conv layer so
-	that the full pipeline operates at HR resolution:
-
-	  LR quats → encode → conv_lr → upsample → conv_hr → decode
-
-	Training objective (feature-space, fully differentiable):
-	  MSE(feat_hr_model, feat_hr_enc)
-	where `feat_hr_enc` is the local-iso irreps feature vector of the
-	ground-truth HR quaternions (encoder frozen via no_grad).
-
-	The encoder and decoder are both non-differentiable / frozen during
-	training.  Only conv_lr, upsample_conv, and conv_hr are trained.
+	Pipeline:
+	  LR quats → encode_a1 → conv_layer(a1→full) → upsample → conv_hr → decode
 	"""
 
 	def __init__(
@@ -925,18 +930,62 @@ class FCCAutoEncoderSR(FCCAutoEncoder):
 		upsample_residual: bool = False,
 		upsampler: str = "conv",
 		decoder_backend: str = "lookup",
-		decoder_config: dict | None = None,
-		**decoder_kwargs,
+		decoder_config: dict[str, Any] | None = None,
+		**decoder_kwargs: Any,
 	):
-		# Builds physics, encoder, conv_layer (→ used as conv_lr), decoder
-		super().__init__(
-			device=device,
-			decoder_backend=decoder_backend,
-			decoder_config=decoder_config,
-			**decoder_kwargs,
+		super().__init__()
+		if device is None:
+			device = "cuda:0" if torch.cuda.is_available() else "cpu"
+		self.device = torch.device(device)
+
+		self.physics = FCCPhysics(str(self.device))
+		dcfg = dict(decoder_config or {})
+		dcfg.update(decoder_kwargs)
+
+		def dget(key: str, default: Any) -> Any:
+			return dcfg.get(key, default)
+
+		self.encoder = LocalIsoFCCEncoder(
+			device=self.device,
 		)
+		self.irreps_a1 = self.encoder.irreps_a1
+		self.irreps_full = self.encoder.irreps_full
+		self.feature_dim_a1 = int(self.encoder.out_dim_a1)
+		self.feature_dim = int(self.encoder.out_dim_full)
+
+		# First e3nn layer requested: irreps_a1 -> irreps_full.
+		self.lift_layer = o3.Linear(self.irreps_a1, self.irreps_full)
+		self.feature_irreps = self.irreps_full
+
+		self.conv_layer = EquivariantSpatialConv(
+			kernel_size=3,
+			irreps_in=self.irreps_a1,
+			irreps_out=self.irreps_full,
+			use_residual=False,
+		)
+
+		backend = str(decoder_backend).lower()
+		self.decoder_backend = backend
+		if backend in {"lookup", "fast_lookup", "local_iso_lookup", "cubochoric_lookup"}:
+			self.decoder = FastLookupLocalIsoFCCDecoder(
+				device=self.device,
+				lookup_resolution=int(dget("decoder_lookup_resolution", 1)),
+				table_chunk_size=int(dget("decoder_lookup_chunk_size", 8192)),
+				lookup_npy_path=dget("decoder_lookup_npy_path", None),
+			)
+			table_dim = int(self.decoder.table_feat.shape[-1])
+			if table_dim != self.feature_dim:
+				raise ValueError(
+					f"Lookup feature dim ({table_dim}) does not match irreps_full dim "
+					f"({self.feature_dim})."
+				)
+		else:
+			raise ValueError(
+				"local-iso autoencoder supports lookup decoder backends only "
+				"('lookup', 'fast_lookup', 'local_iso_lookup')."
+			)
+
 		self.upsample_factor = int(upsample_factor)
-		# self.conv_layer inherited from FCCAutoEncoder serves as the LR conv
 		upsampler_type = str(upsampler).lower()
 		if upsampler_type == "attention":
 			self.upsample_conv = EquivariantAttentionUpsample(
@@ -951,8 +1000,192 @@ class FCCAutoEncoderSR(FCCAutoEncoder):
 			)
 		self.conv_hr = EquivariantSpatialConv(
 			kernel_size=3,
-			irreps_io=self.feature_irreps,
+			irreps_in=self.feature_irreps,
+			irreps_out=self.feature_irreps,
 		)
+
+	@staticmethod
+	def _normalize_quaternions(quats: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
+		norm = torch.norm(quats, dim=-1, keepdim=True).clamp_min(eps)
+		return quats / norm
+
+	def _load_learnable_decoder_checkpoint(self, ckpt_path: str, strict: bool = True) -> None:
+		path = Path(ckpt_path).expanduser().resolve()
+		if not path.exists():
+			raise FileNotFoundError(f"Learnable decoder checkpoint not found: {path}")
+
+		try:
+			blob = torch.load(str(path), map_location=self.device, weights_only=True)
+		except TypeError:
+			blob = torch.load(str(path), map_location=self.device)
+
+		if isinstance(blob, dict) and "decoder_state_dict" in blob:
+			state_dict = blob["decoder_state_dict"]
+		elif isinstance(blob, dict):
+			state_dict = blob
+		else:
+			raise ValueError(f"Unsupported learnable decoder checkpoint format: {path}")
+
+		load_result = self.decoder.load_state_dict(state_dict, strict=bool(strict))
+		if hasattr(load_result, "missing_keys") and len(load_result.missing_keys) > 0:
+			print(
+				"[FCCAutoEncoderSR] learnable decoder missing keys: "
+				f"{load_result.missing_keys[:8]}"
+			)
+		if hasattr(load_result, "unexpected_keys") and len(load_result.unexpected_keys) > 0:
+			print(
+				"[FCCAutoEncoderSR] learnable decoder unexpected keys: "
+				f"{load_result.unexpected_keys[:8]}"
+			)
+
+	@staticmethod
+	def quat_mul(q1: torch.Tensor, q2: torch.Tensor) -> torch.Tensor:
+		w1, x1, y1, z1 = q1[:, 0], q1[:, 1], q1[:, 2], q1[:, 3]
+		w2, x2, y2, z2 = q2[:, 0], q2[:, 1], q2[:, 2], q2[:, 3]
+		return torch.stack(
+			[
+				w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
+				w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+				w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
+				w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
+			],
+			dim=1,
+		)
+
+	def encode_a1(self, quats: torch.Tensor) -> torch.Tensor:
+		return self.encoder.forward_a1(quats)
+
+	def encode_full_target(self, quats: torch.Tensor) -> torch.Tensor:
+		return self.encoder.forward_full(quats)
+
+	def lift_to_full(self, features_a1: torch.Tensor) -> torch.Tensor:
+		return self.lift_layer(features_a1)
+
+	def encode(self, quats: torch.Tensor) -> torch.Tensor:
+		return self.encode_a1(quats)
+
+	def feature_loss(
+		self,
+		quats: torch.Tensor,
+		img_shape: tuple[int, int],
+		normalize_input: bool = True,
+	) -> torch.Tensor:
+		quats = quats.to(self.device)
+		if normalize_input:
+			quats = self._normalize_quaternions(quats)
+		with torch.no_grad():
+			feat_a1 = self.encode_a1(quats).detach()
+			feat_tgt = self.encode_full_target(quats).detach()
+		feat_out = self.conv_layer(feat_a1, img_shape)
+		return F.mse_loss(feat_out, feat_tgt)
+
+	def decode(self, features: torch.Tensor) -> torch.Tensor:
+		q_bunge = self.decoder(features)
+		return self.reduce_to_fz(q_bunge)
+
+	def reduce_to_fz(
+		self,
+		quats: torch.Tensor,
+		return_op_map: bool = False,
+	) -> tuple[torch.Tensor, torch.Tensor] | torch.Tensor:
+		quats = self._normalize_quaternions(quats)
+		batch_size = quats.shape[0]
+
+		q_expanded = quats.unsqueeze(1).expand(-1, 24, -1)
+		syms = self.physics.fcc_syms_inv.unsqueeze(0).expand(batch_size, -1, -1)
+
+		q_flat = q_expanded.reshape(-1, 4)
+		s_flat = syms.reshape(-1, 4)
+		# Bunge convention: s⁻¹ ⊗ q  (left orbit under crystal symmetry)
+		# fcc_syms_inv already stores the inverse symmetries, so use directly
+		fam = self.quat_mul(s_flat, q_flat).view(batch_size, 24, 4)
+		fam = self._normalize_quaternions(fam.reshape(-1, 4)).view(batch_size, 24, 4)
+
+		w_abs = fam[..., 0].abs()
+		best_idx = torch.argmax(w_abs, dim=1)
+		batch_idx = torch.arange(batch_size, device=quats.device)
+		q_fz = fam[batch_idx, best_idx]
+		q_fz = torch.where(q_fz[:, :1] < 0, -q_fz, q_fz)
+		q_fz = self._normalize_quaternions(q_fz)
+		if return_op_map:
+			return q_fz, best_idx
+		return q_fz
+
+	@staticmethod
+	def _sample_fz_quaternions(
+		resolution: int = 1,
+		method: str = "cubochoric",
+		device: torch.device | None = None,
+	) -> torch.Tensor:
+		try:
+			import numpy as np
+			from orix.quaternion import symmetry
+			from orix.sampling import get_sample_fundamental
+		except Exception as exc:
+			raise ImportError(
+				"FZ sampling requires `orix` and `numpy` to be installed."
+			) from exc
+
+		rot = get_sample_fundamental(
+			int(resolution),
+			point_group=symmetry.Oh,
+			method=str(method),
+		)
+
+		raw = np.asarray(getattr(rot, "data", rot), dtype=np.float32)
+		if raw.ndim != 2:
+			raw = raw.reshape(-1, 4)
+		if raw.shape[-1] != 4 and raw.shape[0] == 4:
+			raw = raw.T
+		if raw.shape[-1] != 4:
+			raise ValueError(f"Unexpected sampled quaternion shape: {tuple(raw.shape)}")
+
+		q = torch.as_tensor(raw, dtype=torch.float32)
+		q = q / q.norm(dim=-1, keepdim=True).clamp_min(1e-12)
+		q = torch.where(q[..., :1] < 0, -q, q)
+		if device is not None:
+			q = q.to(device)
+		return q
+
+	@torch.no_grad()
+	def export_fz_encoding_table(
+		self,
+		csv_path: str,
+		resolution: int = 3,
+		sampling_method: str = "cubochoric",
+		include_decode: bool = True,
+		binary_path: str | None = None,
+		decode_chunk_size: int = 4096,
+	) -> dict[str, Any]:
+		"""
+		Export FZ quaternion samples and their encoded/decoded representations.
+		"""
+		quats = self._sample_fz_quaternions(
+			resolution=resolution,
+			method=sampling_method,
+			device=self.device,
+		)
+		quats = self._normalize_quaternions(quats)
+		features_a1 = self.encode_a1(quats)
+		features_full = self.encode_full_target(quats)
+		features_lifted = self.lift_to_full(features_a1)
+
+		payload: dict[str, Any] = {
+			"quats": quats.detach().cpu(),
+			"features_a1": features_a1.detach().cpu(),
+			"features_full": features_full.detach().cpu(),
+			"features_lifted": features_lifted.detach().cpu(),
+			"resolution": int(resolution),
+			"sampling_method": str(sampling_method),
+			"num_rows": int(quats.shape[0]),
+		}
+
+		if binary_path is not None:
+			bin_file = Path(binary_path)
+			bin_file.parent.mkdir(parents=True, exist_ok=True)
+			torch.save(payload, str(bin_file))
+
+		return payload
 
 	def feature_loss_sr(
 		self,
@@ -982,17 +1215,17 @@ class FCCAutoEncoderSR(FCCAutoEncoder):
 		with torch.no_grad():
 			feat_lr_a1_flat = self.encode_a1(lr_flat).detach()
 			feat_hr_tgt_flat = self.encode_full_target(hr_flat).detach()
-		feat_lr_seed_flat = self.lift_to_full(feat_lr_a1_flat)
-		feat_dim = int(feat_lr_seed_flat.shape[-1])
+		feat_lr_dim = int(feat_lr_a1_flat.shape[-1])
+		feat_hr_dim = int(feat_hr_tgt_flat.shape[-1])
 
 		if batched:
-			feat_lr = feat_lr_seed_flat.reshape(B, -1, feat_dim)
-			feat_hr_tgt = feat_hr_tgt_flat.reshape(B, -1, feat_dim)
+			feat_lr_a1 = feat_lr_a1_flat.reshape(B, -1, feat_lr_dim)
+			feat_hr_tgt = feat_hr_tgt_flat.reshape(B, -1, feat_hr_dim)
 		else:
-			feat_lr = feat_lr_seed_flat
+			feat_lr_a1 = feat_lr_a1_flat
 			feat_hr_tgt = feat_hr_tgt_flat
 
-		feat_conv = self.conv_layer(feat_lr, lr_shape)
+		feat_conv = self.conv_layer(feat_lr_a1, lr_shape)
 		feat_up, hr_shape = self.upsample_conv(feat_conv, lr_shape)
 		feat_hr = self.conv_hr(feat_up, hr_shape)
 
@@ -1016,8 +1249,8 @@ class FCCAutoEncoderSR(FCCAutoEncoder):
 		lr_quats = lr_quats.to(self.device)
 		if normalize_input:
 			lr_quats = self._normalize_quaternions(lr_quats)
-		feat_lr = self.encode(lr_quats)
-		feat_conv = self.conv_layer(feat_lr, lr_shape)
+		feat_lr_a1 = self.encode(lr_quats)
+		feat_conv = self.conv_layer(feat_lr_a1, lr_shape)
 		feat_up, hr_shape = self.upsample_conv(feat_conv, lr_shape)
 		feat_hr = self.conv_hr(feat_up, hr_shape)
 		return self.decode(feat_hr)
@@ -1028,8 +1261,20 @@ class FCCAutoEncoderSR(FCCAutoEncoder):
 		img_shape: tuple[int, int] | None = None,
 		normalize_input: bool = True,
 	) -> torch.Tensor:
-		"""Forward pass. When img_shape is given treats quats as LR and runs
-		the full SR pipeline; otherwise falls back to the base autoencoder."""
+		"""
+		When img_shape is given treat inputs as LR and run SR pipeline.
+		When img_shape is None run the base autoencoder path (lift + decode).
+		"""
 		if img_shape is not None:
 			return self.forward_sr(quats, lr_shape=img_shape, normalize_input=normalize_input)
-		return super().forward(quats, img_shape=None, normalize_input=normalize_input)
+
+		quats = quats.to(self.device)
+		if quats.dim() != 2 or quats.shape[-1] != 4:
+			raise ValueError(
+				f"FCCAutoEncoderSR expects (N,4), got {tuple(quats.shape)}"
+			)
+		if normalize_input:
+			quats = self._normalize_quaternions(quats)
+		features_a1 = self.encode(quats)
+		features = self.lift_to_full(features_a1)
+		return self.decode(features)
