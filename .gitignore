@@ -236,5 +236,15 @@ checkpoint_*/*.npy
 # model artifacts
 *.npy
 *.npy
+*.onnx
+*.safetensors
+*.bin
+*.model
+*.weights
 
 out/tmp_hcp_export.csv
+
+# Generated figures and diagnostics
+*.png
+diagnostics/
+outputs/
