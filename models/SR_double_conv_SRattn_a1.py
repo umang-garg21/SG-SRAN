@@ -656,114 +656,110 @@ class EquivariantTransposeConv(nn.Module):
 
 
 class AttentionBlock(nn.Module):
-	"""Single block-local equivariant self-attention block in LR feature space.
+    """Block-local equivariant self-attention for a configurable feature irreps."""
 
-	Identical architecture to LRSelfAttentionBlock (SR_global_attn.py) but
-	attention is restricted to non-overlapping spatial blocks of the LR grid
-	instead of the full grid.  All blocks share weights; only the block-relative
-	position SH changes.
-	"""
+    def __init__(
+        self,
+        irreps_feat: Irreps | str = "1x4e + 1x6e",
+        num_channels: int = 8,
+        tp_out_chunk_size: int | None = None,
+    ):
+        super().__init__()
+        del tp_out_chunk_size  # Kept for config compatibility.
 
-	def __init__(self, num_channels: int = 8):
-		super().__init__()
-		C = int(num_channels)
+        c = int(num_channels)
+        self.irreps_feat = Irreps(irreps_feat)
+        self.irreps_h = Irreps([(int(mul) * c, ir) for mul, ir in self.irreps_feat])
 
-		self.irreps_feat = Irreps("1x4e + 1x6e")
-		self.irreps_h    = Irreps(f"{C}x4e + {C}x6e")
+        # Global attention temperature.
+        self.log_s = nn.Parameter(torch.tensor(0.0))
 
-		# Learnable log-scale per irrep-l (init: 1/√d_l → scores ∈ [-1, 1])
-		self.log_s4 = nn.Parameter(torch.tensor(math.log(1.0 / math.sqrt(9.0))))
-		self.log_s6 = nn.Parameter(torch.tensor(math.log(1.0 / math.sqrt(13.0))))
+        # Pairwise position bias: d_ij = ||pos_i - pos_j|| -> scalar add to score(i,j).
+        self.pos_bias = nn.Linear(1, 1, bias=True)
+        nn.init.zeros_(self.pos_bias.weight)
+        nn.init.zeros_(self.pos_bias.bias)
 
-		# Pairwise position bias: d_ij = ||pos_i - pos_j|| → scalar added to score(i,j)
-		self.pos_bias = nn.Linear(1, 1, bias=True)
-		nn.init.zeros_(self.pos_bias.weight)
-		nn.init.zeros_(self.pos_bias.bias)
+        # Channel expansion and equivariant hidden mixing.
+        self.lin_in = IrrepsLinear(self.irreps_feat, self.irreps_h)
+        self.tp_out = FullyConnectedTensorProduct(
+            self.irreps_h, self.irreps_h, self.irreps_h, shared_weights=True
+        )
 
-		# Channel expansion: 1x4e+1x6e → Cx4e+Cx6e
-		self.lin_in = IrrepsLinear(self.irreps_feat, self.irreps_h)
+        # Zero-init so block starts as near-identity residual.
+        self.lin_out = IrrepsLinear(self.irreps_h, self.irreps_feat)
+        with torch.no_grad():
+            self.lin_out.weight.data.zero_()
 
-		# Output mix in hidden space: h ⊗ ctx → h  (8·C³ weights)
-		self.tp_out = FullyConnectedTensorProduct(
-			self.irreps_h, self.irreps_h, self.irreps_h, shared_weights=True,
-		)
+    def forward(
+        self,
+        feat: torch.Tensor,
+        d_block: torch.Tensor,
+        H: int,
+        W: int,
+        block_h: int,
+        block_w: int,
+    ) -> torch.Tensor:
+        """
+        Args:
+            feat: (B, H*W, C_feat) features for padded spatial grid.
+            d_block: (Nb, Nb) pairwise L2 distances within one block.
+            H, W: padded spatial dimensions, multiples of block_h and block_w.
+            block_h, block_w: block size in pixels.
+        Returns:
+            (B, H*W, C_feat) attention residual delta.
+        """
+        B, _, C_feat = feat.shape
+        num_bh = H // block_h
+        num_bw = W // block_w
+        Nb = block_h * block_w
+        Bb = B * num_bh * num_bw
+        dtype = feat.dtype
 
-		# Channel contraction + zero-init → block returns zero delta at epoch 0
-		self.lin_out = IrrepsLinear(self.irreps_h, self.irreps_feat)
-		with torch.no_grad():
-			self.lin_out.weight.data.zero_()
+        # Partition: (B, H*W, C_feat) -> (Bb, Nb, C_feat)
+        feat_blocks = (
+            feat.reshape(B, num_bh, block_h, num_bw, block_w, C_feat)
+            .permute(0, 1, 3, 2, 4, 5)
+            .reshape(Bb, Nb, C_feat)
+        )
 
-	def forward(
-		self,
-		feat:    torch.Tensor,
-		d_block: torch.Tensor,
-		H:       int,
-		W:       int,
-		block_h: int,
-		block_w: int,
-	) -> torch.Tensor:
-		"""
-		Args:
-		    feat:    (B, H*W, 22)              LR features (H, W already padded).
-		    d_block: (block_h*block_w, block_h*block_w)  pairwise L2 distances within the block.
-		    H, W:    (padded) LR spatial dims. Must be multiples of block_h, block_w.
-		    block_h, block_w: block size in pixels.
-		Returns:
-		    (B, H*W, 22)  attention delta.
-		"""
-		B, N, C22 = feat.shape
-		num_bh = H // block_h
-		num_bw = W // block_w
-		Nb     = block_h * block_w
-		Bb     = B * num_bh * num_bw
-		dtype  = feat.dtype
+        # O(3)-invariant dot-product attention.
+        f_n = F.normalize(feat_blocks, dim=-1)
+        scores = torch.exp(self.log_s) * torch.bmm(f_n, f_n.transpose(-2, -1))
 
-		# Partition: (B, H*W, 22) → (Bb, Nb, 22)
-		feat_blocks = (
-			feat.reshape(B, num_bh, block_h, num_bw, block_w, C22)
-			    .permute(0, 1, 3, 2, 4, 5)          # (B, num_bh, num_bw, block_h, block_w, C22)
-			    .reshape(Bb, Nb, C22)
-		)
+        pb = self.pos_bias(d_block.unsqueeze(-1)).squeeze(-1)
+        scores = scores + pb.unsqueeze(0)
 
-		# ── O(3)-invariant attention scores (block-local) ─────────────────────
-		s4 = torch.exp(self.log_s4)
-		s6 = torch.exp(self.log_s6)
+        attn = torch.softmax(scores.float(), dim=-1).to(dtype)
 
-		f4_n = F.normalize(feat_blocks[..., :9],  dim=-1)   # (Bb, Nb, 9)
-		f6_n = F.normalize(feat_blocks[..., 9:],  dim=-1)   # (Bb, Nb, 13)
-		scores = (s4 * torch.bmm(f4_n, f4_n.transpose(-2, -1))
-		          + s6 * torch.bmm(f6_n, f6_n.transpose(-2, -1)))  # (Bb, Nb, Nb)
+        feat_flat = feat_blocks.reshape(Bb * Nb, C_feat)
+        h = self.lin_in(feat_flat).reshape(Bb, Nb, -1)
+        ctx = torch.bmm(attn, h)
+        h_out = self.tp_out(h.reshape(Bb * Nb, -1), ctx.reshape(Bb * Nb, -1)).reshape(Bb, Nb, -1)
+        delta_blocks = self.lin_out(h_out.reshape(Bb * Nb, -1)).reshape(Bb, Nb, C_feat)
 
-		# Pairwise position bias: f(d_ij) added directly to score(i,j)
-		pb     = self.pos_bias(d_block.unsqueeze(-1)).squeeze(-1)  # (Nb, Nb)
-		scores = scores + pb.unsqueeze(0)                          # (Bb, Nb, Nb)
+        # Reassemble: (Bb, Nb, C_feat) -> (B, H*W, C_feat)
+        delta = (
+            delta_blocks.reshape(B, num_bh, num_bw, block_h, block_w, C_feat)
+            .permute(0, 1, 3, 2, 4, 5)
+            .reshape(B, H * W, C_feat)
+        )
+        return delta
 
-		# Float32 softmax for numerical stability under AMP
-		attn = torch.softmax(scores.float(), dim=-1).to(dtype)   # (Bb, Nb, Nb)
+class IrrepsIdentity(nn.Module):
+    """Identity map with irreps metadata for diagnostics/trace scripts."""
 
-		# ── Equivariant value / output mix ────────────────────────────────────
-		feat_flat = feat_blocks.reshape(Bb * Nb, C22)
+    def __init__(self, irreps: Irreps | str):
+        super().__init__()
+        self.irreps_in = Irreps(irreps)
+        self.irreps_out = self.irreps_in
 
-		h      = self.lin_in(feat_flat).reshape(Bb, Nb, -1)
-		ctx    = torch.bmm(attn, h)                                                  # (Bb, Nb, Ch22)
-		h_out  = self.tp_out(h.reshape(Bb * Nb, -1), ctx.reshape(Bb * Nb, -1)).reshape(Bb, Nb, -1)
-
-		delta_blocks = self.lin_out(h_out.reshape(Bb * Nb, -1)).reshape(Bb, Nb, C22)
-
-		# Reassemble: (Bb, Nb, 22) → (B, H*W, 22)
-		delta = (
-			delta_blocks.reshape(B, num_bh, num_bw, block_h, block_w, C22)
-			             .permute(0, 1, 3, 2, 4, 5)   # (B, num_bh, block_h, num_bw, block_w, C22)
-			             .reshape(B, H * W, C22)
-		)
-		return delta
-
-
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x
 
 
 class IsoEmbeddingSRAttn(nn.Module):
     """
-    Standalone local-iso SR model with double LR conv + HR attention.
+    Standalone local-iso SR model with an A1-only feature pipeline.
 
     Crystal family is selected at top-level with `crystal`:
     - `fcc` (group O)
@@ -773,6 +769,9 @@ class IsoEmbeddingSRAttn(nn.Module):
     - disable LR conv1 (`use_lr_conv1=False`)
     - disable LR conv2 (`use_lr_conv2=False`)
     - disable attention (`use_attention=False`)
+
+    In this variant, all SR stages run in `irreps_a1` and there is
+    no terminal projection layer.
     """
 
     _SH_IRREPS = Irreps("1x0e + 1x2e")
@@ -815,7 +814,7 @@ class IsoEmbeddingSRAttn(nn.Module):
         self.irreps_a1 = self.encoder.irreps_a1
         self.irreps_full = self.encoder.irreps_full
         self.feature_dim_a1 = int(self.encoder.out_dim_a1)
-        self.feature_dim = int(self.encoder.out_dim_full)
+        self.feature_dim = self.feature_dim_a1
         self.output_irreps = self.irreps_a1
         self.output_dim = self.feature_dim_a1
         self.upsample_factor = int(upsample_factor)
@@ -842,44 +841,40 @@ class IsoEmbeddingSRAttn(nn.Module):
             table_cache_dir=decoder_table_cache_dir,
         )
 
-        # Used only when LR conv1 is disabled to map a1 -> full.
-        self.a1_to_full_proj = o3.Linear(self.irreps_a1, self.irreps_full)
-
-        # Requested architecture:
-        # LR conv1 k=3: a1 -> full
+        # A1-only SR architecture:
+        # LR conv1 k=3: a1 -> a1
         self.conv_lr1 = EquivariantSpatialConv(
             kernel_size=3,
             irreps_in=self.irreps_a1,
-            irreps_out=self.irreps_full,
-            # Keep a projected skip to avoid early feature collapse (a1 -> full).
+            irreps_out=self.irreps_a1,
             use_residual=True,
         )
-        # LR conv2 k=9: full -> full
+        # LR conv2 k=9: a1 -> a1
         self.conv_lr2 = EquivariantSpatialConv(
             kernel_size=9,
-            irreps_in=self.irreps_full,
-            irreps_out=self.irreps_full,
+            irreps_in=self.irreps_a1,
+            irreps_out=self.irreps_a1,
         )
-        # Upsample k=3: full -> full
+        # Upsample k=3: a1 -> a1
         self.upsample_conv = EquivariantTransposeConv(
             kernel_size=3,
             upsample_factor=self.upsample_factor,
             use_residual=bool(upsample_residual),
-            irreps_in=self.irreps_full,
-            irreps_out=self.irreps_full,
+            irreps_in=self.irreps_a1,
+            irreps_out=self.irreps_a1,
         )
-        # HR conv1: full -> full
+        # HR conv1: a1 -> a1
         self.conv_hr1 = EquivariantSpatialConv(
             kernel_size=3,
-            irreps_in=self.irreps_full,
-            irreps_out=self.irreps_full,
+            irreps_in=self.irreps_a1,
+            irreps_out=self.irreps_a1,
         )
         # Attention block(s)
         if self.use_attention:
             self.attention_blocks = nn.ModuleList(
                 [
                     AttentionBlock(
-                        self.irreps_full,
+                        self.irreps_a1,
                         num_channels=int(hr_attn_num_channels),
                         tp_out_chunk_size=hr_attn_tp_out_chunk_size,
                     )
@@ -888,8 +883,8 @@ class IsoEmbeddingSRAttn(nn.Module):
             )
         else:
             self.attention_blocks = nn.ModuleList([])
-        # Final projection: full -> a1 (irreps output).
-        self.final_proj = o3.Linear(self.irreps_full, self.irreps_a1)
+        # No terminal projection in the A1-only pipeline.
+        self.final_proj = IrrepsIdentity(self.irreps_a1)
 
         self._cached_hr_block_shape: tuple[int, int] | None = None
         self._cached_hr_sh_block: torch.Tensor | None = None
@@ -966,16 +961,8 @@ class IsoEmbeddingSRAttn(nn.Module):
         ys = torch.linspace(-1.0, 1.0, block_h, device=device)
         xs = torch.linspace(-1.0, 1.0, block_w, device=device)
         grid_y, grid_x = torch.meshgrid(ys, xs, indexing="ij")
-        dirs = torch.stack(
-            [
-                grid_x.reshape(-1),
-                grid_y.reshape(-1),
-                torch.zeros(block_h * block_w, device=device),
-            ],
-            dim=-1,
-        )
-        dirs = dirs / dirs.norm(dim=-1, keepdim=True).clamp_min(1e-8)
-        sh = o3.spherical_harmonics(self._SH_IRREPS, dirs, normalize=False)
+        coords = torch.stack([grid_x.reshape(-1), grid_y.reshape(-1)], dim=-1)
+        sh = torch.cdist(coords, coords, p=2)
         self._cached_hr_block_shape = (block_h, block_w)
         self._cached_hr_sh_block = sh
         return sh.to(dtype)
@@ -1026,7 +1013,7 @@ class IsoEmbeddingSRAttn(nn.Module):
             feat = feat.squeeze(0)
         return feat
 
-    def _apply_pointwise_linear(self, layer: o3.Linear, features: torch.Tensor) -> torch.Tensor:
+    def _apply_pointwise_linear(self, layer: nn.Module, features: torch.Tensor) -> torch.Tensor:
         batched = features.dim() == 3
         if not batched:
             return layer(features)
@@ -1042,22 +1029,14 @@ class IsoEmbeddingSRAttn(nn.Module):
         if self.use_lr_conv1:
             feat = self.conv_lr1(feat_lr_a1, lr_shape)
         else:
-            feat = self._apply_pointwise_linear(self.a1_to_full_proj, feat_lr_a1)
+            feat = feat_lr_a1
 
         if self.use_lr_conv2:
             feat = self.conv_lr2(feat, lr_shape)
 
         feat, hr_shape = self.upsample_conv(feat, lr_shape)
         feat = self.conv_hr1(feat, hr_shape)
-        feat_full = self._apply_attention(feat, hr_shape)
-
-        batched = feat_full.dim() == 3
-        if not batched:
-            feat_full = feat_full.unsqueeze(0)
-        B, N, C = feat_full.shape
-        feat_a1 = self.final_proj(feat_full.reshape(B * N, C)).reshape(B, N, self.feature_dim_a1)
-        if not batched:
-            feat_a1 = feat_a1.squeeze(0)
+        feat_a1 = self._apply_attention(feat, hr_shape)
         return feat_a1, hr_shape
 
     def feature_loss_sr(
@@ -1137,6 +1116,7 @@ __all__ = [
     "CubochoricOptimizingLocalIsoDecoder",
     "EquivariantSpatialConv",
     "EquivariantTransposeConv",
+    "IrrepsIdentity",
     "IsoEmbeddingSRAttn",
     "LearnableA1QuaternionDecoder",
     "LocalIsoCrystalEncoder",

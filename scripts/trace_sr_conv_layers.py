@@ -42,6 +42,9 @@ CONFIG = {
     "lr_h": 2,
     "lr_w": 2,
     "upsample_factor": 2,
+    "use_lr_conv1": False,
+    "use_lr_conv2": False,
+    "use_attention": False,
     "device": "cpu",
     "seed": 0,
     "head": 10,
@@ -339,6 +342,9 @@ def main() -> None:
         d6_convention=d6_convention,
         device=device,
         upsample_factor=upsample_factor,
+        use_lr_conv1=bool(CONFIG["use_lr_conv1"]),
+        use_lr_conv2=bool(CONFIG["use_lr_conv2"]),
+        use_attention=bool(CONFIG["use_attention"]),
         num_hr_attn_blocks=int(CONFIG["num_hr_attn_blocks"]),
         hr_attn_num_channels=int(CONFIG["hr_attn_num_channels"]),
         hr_attn_block_size=int(CONFIG["hr_attn_block_size"]),
@@ -355,6 +361,9 @@ def main() -> None:
     print(f"  crystal       : {crystal}")
     print(f"  irreps_a1     : {model.irreps_a1}")
     print(f"  irreps_full   : {model.irreps_full}")
+    print(f"  use_lr_conv1  : {model.use_lr_conv1}")
+    print(f"  use_lr_conv2  : {model.use_lr_conv2}")
+    print(f"  use_attention : {model.use_attention}")
     print(f"  has_lift_layer: {hasattr(model, 'lift_layer')}")
     print(
         "  conv_lr1 tp   :"
@@ -378,11 +387,30 @@ def main() -> None:
 
     with torch.no_grad():
         feat_a1_lr = model.encode_a1(lr_quats)
-        feat_lr1 = model.conv_lr1(feat_a1_lr, lr_shape)
-        feat_lr2 = model.conv_lr2(feat_lr1, lr_shape)
+
+        if model.use_lr_conv1:
+            feat_lr1 = model.conv_lr1(feat_a1_lr, lr_shape)
+            stage_lr1_name = "conv_lr1_output"
+        else:
+            feat_lr1 = model._apply_pointwise_linear(model.a1_to_full_proj, feat_a1_lr)
+            stage_lr1_name = "conv_lr1_bypass_proj_output"
+
+        if model.use_lr_conv2:
+            feat_lr2 = model.conv_lr2(feat_lr1, lr_shape)
+            stage_lr2_name = "conv_lr2_output"
+        else:
+            feat_lr2 = feat_lr1
+            stage_lr2_name = "conv_lr2_bypass_identity_output"
+
         feat_up, hr_shape = model.upsample_conv(feat_lr2, lr_shape)
         feat_hr1 = model.conv_hr1(feat_up, hr_shape)
-        feat_attn, attn_stage_outputs = _apply_attention_stepwise(model, feat_hr1, hr_shape)
+
+        if model.use_attention and len(model.attention_blocks) > 0:
+            feat_attn, attn_stage_outputs = _apply_attention_stepwise(model, feat_hr1, hr_shape)
+        else:
+            feat_attn = feat_hr1
+            attn_stage_outputs = [("attention_bypass_identity_output", feat_attn)]
+
         feat_a1_hr = model.final_proj(feat_attn)
 
     q_dec_raw = model.decoder(feat_a1_hr)
@@ -395,8 +423,8 @@ def main() -> None:
     stages: list[tuple[str, torch.Tensor, tuple[int, int], int, object | None]] = [
         ("input_quats_lr", lr_quats, lr_shape, 4, None),
         ("encode_a1_lr", feat_a1_lr, lr_shape, plot_max_channels, model.irreps_a1),
-        ("conv_lr1_output", feat_lr1, lr_shape, plot_max_channels, model.irreps_full),
-        ("conv_lr2_output", feat_lr2, lr_shape, plot_max_channels, model.irreps_full),
+        (stage_lr1_name, feat_lr1, lr_shape, plot_max_channels, model.irreps_full),
+        (stage_lr2_name, feat_lr2, lr_shape, plot_max_channels, model.irreps_full),
         ("upsample_output", feat_up, hr_shape, plot_max_channels, model.irreps_full),
         ("conv_hr1_output", feat_hr1, hr_shape, plot_max_channels, model.irreps_full),
     ]
