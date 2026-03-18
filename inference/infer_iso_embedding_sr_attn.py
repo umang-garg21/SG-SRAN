@@ -136,15 +136,6 @@ def _load_model_from_checkpoint(
             cfg, "decoder_table_cache_dir", "out/decoder_lookup_tables"
         ),
         decoder_backend=str(getattr(cfg, "decoder_backend", "optimizing")),
-        decoder_learnable_hidden_dim=int(
-            getattr(cfg, "decoder_learnable_hidden_dim", 256)
-        ),
-        decoder_learnable_num_layers=int(
-            getattr(cfg, "decoder_learnable_num_layers", 3)
-        ),
-        decoder_learnable_dropout=float(
-            getattr(cfg, "decoder_learnable_dropout", 0.0)
-        ),
     ).to(device)
 
     ckpt = torch.load(checkpoint_path, map_location=device)

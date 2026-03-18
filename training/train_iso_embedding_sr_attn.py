@@ -345,6 +345,19 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     cfg.device = str(device)
     print(f"Using device: {device}")
+    if device.type == "cuda":
+        free_bytes, total_bytes = torch.cuda.mem_get_info(device=device)
+        free_gb = float(free_bytes) / (1024**3)
+        total_gb = float(total_bytes) / (1024**3)
+        print(f"CUDA free memory at startup: {free_gb:.2f} / {total_gb:.2f} GB")
+        min_free_cuda_gb = float(getattr(cfg, "min_free_cuda_gb", 0.0))
+        if min_free_cuda_gb > 0.0 and free_gb < min_free_cuda_gb:
+            raise RuntimeError(
+                f"Insufficient free CUDA memory at startup: {free_gb:.2f} GB < "
+                f"min_free_cuda_gb={min_free_cuda_gb:.2f} GB. "
+                "Another GPU process is likely active. "
+                "Run `nvidia-smi` and kill the listed PID(s), then retry."
+            )
     amp_dtype_str = str(getattr(cfg, "amp_dtype", "bf16")).lower()
     if amp_dtype_str in ("bf16", "bfloat16"):
         amp_dtype = torch.bfloat16
@@ -397,15 +410,6 @@ def main() -> None:
             cfg, "decoder_table_cache_dir", "out/decoder_lookup_tables"
         ),
         decoder_backend=str(getattr(cfg, "decoder_backend", "optimizing")),
-        decoder_learnable_hidden_dim=int(
-            getattr(cfg, "decoder_learnable_hidden_dim", 256)
-        ),
-        decoder_learnable_num_layers=int(
-            getattr(cfg, "decoder_learnable_num_layers", 3)
-        ),
-        decoder_learnable_dropout=float(
-            getattr(cfg, "decoder_learnable_dropout", 0.0)
-        ),
     ).to(device)
 
     optimizer = build_optimizer(model, cfg)

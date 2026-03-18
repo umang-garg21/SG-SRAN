@@ -50,6 +50,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "preload": False,
     "preload_torch": False,
     "pin_memory": True,
+    "min_free_cuda_gb": 0.0,
     "seed": 42,
     "smoke_test": False,
     "smoke_take_first": 8,

@@ -1,5 +1,5 @@
 {
-  "dataset_root": "/data/warren/materials/materials_data_mount/datasets/Ti64_DIC_Mclean_QSR_x4",
+  "dataset_root": "/data/warren/materials/EBSD/Ti64_DIC_Mclean_QSR_x4",
   "epochs": 2,
   "batch_size": 2,
   "num_workers": 0,

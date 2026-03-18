@@ -280,9 +280,6 @@ def main() -> None:
             decoder_max_table_rows=CONFIG.get("decoder_max_table_rows"),
             decoder_table_cache_dir=CONFIG.get("decoder_table_cache_dir"),
             decoder_backend=str(CONFIG["decoder_backend"]),
-            decoder_learnable_hidden_dim=int(CONFIG["decoder_learnable_hidden_dim"]),
-            decoder_learnable_num_layers=int(CONFIG["decoder_learnable_num_layers"]),
-            decoder_learnable_dropout=float(CONFIG["decoder_learnable_dropout"]),
         ).eval()
 
         print("\n" + "=" * 96)

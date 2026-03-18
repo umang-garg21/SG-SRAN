@@ -348,9 +348,6 @@ def main() -> None:
         decoder_lr=float(CONFIG["decoder_lr"]),
         decoder_method=str(CONFIG["decoder_method"]),
         decoder_backend=str(CONFIG["decoder_backend"]),
-        decoder_learnable_hidden_dim=int(CONFIG["decoder_learnable_hidden_dim"]),
-        decoder_learnable_num_layers=int(CONFIG["decoder_learnable_num_layers"]),
-        decoder_learnable_dropout=float(CONFIG["decoder_learnable_dropout"]),
     ).eval()
 
     print("Model")

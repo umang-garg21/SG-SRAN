@@ -1,10 +1,10 @@
 {
   "dataset_root": "/data/warren/materials/EBSD/Ti64_DIC_Mclean_QSR_x4",
   "epochs": 50,
-  "batch_size": 1,
+  "batch_size": 4,
   "num_workers": 0,
-  "memory_debug_every": 10,
-  "cuda_empty_cache_every": 10,
+  "memory_debug_every": 0,
+  "cuda_empty_cache_every": 20,
   "pin_memory": true,
   "min_free_cuda_gb": 4.0,
   "preload": true,

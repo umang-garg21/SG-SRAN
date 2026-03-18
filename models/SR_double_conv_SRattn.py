@@ -679,9 +679,6 @@ class IsoEmbeddingSRAttn(nn.Module):
         decoder_max_table_rows: int | None = None,
         decoder_table_cache_dir: str | Path | None = "out/decoder_lookup_tables",
         decoder_backend: str = "optimizing",
-        decoder_learnable_hidden_dim: int = 256,
-        decoder_learnable_num_layers: int = 3,
-        decoder_learnable_dropout: float = 0.0,
     ):
         super().__init__()
         if device is None:
