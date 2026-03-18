@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import warnings
 from pathlib import Path
 
 import torch
@@ -152,6 +153,8 @@ class CubochoricOptimizingLocalIsoDecoder(nn.Module):
         target_irreps: str = "a1",
         max_table_rows: int | None = None,
         table_encode_chunk_size: int = 256,
+        seed_search_query_chunk_size: int = 1024,
+        seed_search_table_chunk_size: int = 8192,
         table_cache_dir: str | Path | None = "out/decoder_lookup_tables",
     ):
         super().__init__()
@@ -164,6 +167,8 @@ class CubochoricOptimizingLocalIsoDecoder(nn.Module):
         self.target_irreps = str(target_irreps).lower()
         self.max_table_rows = max_table_rows
         self.table_encode_chunk_size = max(1, int(table_encode_chunk_size))
+        self.seed_search_query_chunk_size = max(1, int(seed_search_query_chunk_size))
+        self.seed_search_table_chunk_size = max(1, int(seed_search_table_chunk_size))
         self.table_cache_dir = (
             Path(table_cache_dir).expanduser().resolve()
             if table_cache_dir is not None
@@ -176,6 +181,11 @@ class CubochoricOptimizingLocalIsoDecoder(nn.Module):
             )
         if self.target_irreps not in {"a1", "full"}:
             raise ValueError(f"target_irreps must be 'a1' or 'full', got {target_irreps}")
+        if self.max_table_rows is not None:
+            warnings.warn(
+                "decoder_max_table_rows is set, so the decoder is not using the full lookup table.",
+                stacklevel=2,
+            )
 
         self.target_dim = int(
             self.encoder.out_dim_a1 if self.target_irreps == "a1" else self.encoder.out_dim_full
@@ -280,10 +290,47 @@ class CubochoricOptimizingLocalIsoDecoder(nn.Module):
 
     def _nearest_seed_indices(self, feat_target: torch.Tensor) -> torch.Tensor:
         k = min(self.num_starts, int(self.table_feat.shape[0]))
-        qn = (feat_target * feat_target).sum(dim=-1, keepdim=True)
-        dist = qn + self.table_feat_norm.unsqueeze(0) - 2.0 * (feat_target @ self.table_feat.T)
-        _, idx = torch.topk(dist, k=k, largest=False, dim=1)
-        return idx
+        n = int(feat_target.shape[0])
+        t = int(self.table_feat.shape[0])
+        q_chunk = int(self.seed_search_query_chunk_size)
+        t_chunk = int(self.seed_search_table_chunk_size)
+        out_idx: list[torch.Tensor] = []
+
+        for q_start in range(0, n, q_chunk):
+            q_end = min(q_start + q_chunk, n)
+            q = feat_target[q_start:q_end]
+            qb = int(q.shape[0])
+            qn = (q * q).sum(dim=-1, keepdim=True)
+            best_dist = torch.full((qb, k), float("inf"), device=q.device, dtype=q.dtype)
+            best_idx = torch.zeros((qb, k), device=q.device, dtype=torch.long)
+
+            for t_start in range(0, t, t_chunk):
+                t_end = min(t_start + t_chunk, t)
+                tf = self.table_feat[t_start:t_end]
+                tfn = self.table_feat_norm[t_start:t_end]
+                dist = qn + tfn.unsqueeze(0) - 2.0 * (q @ tf.T)
+
+                cand_k = min(k, int(dist.shape[1]))
+                d_chunk, i_chunk = torch.topk(dist, k=cand_k, largest=False, dim=1)
+                i_chunk = i_chunk + int(t_start)
+
+                if cand_k < k:
+                    pad_d = torch.full(
+                        (qb, k - cand_k), float("inf"), device=q.device, dtype=q.dtype
+                    )
+                    pad_i = torch.zeros((qb, k - cand_k), device=q.device, dtype=torch.long)
+                    d_chunk = torch.cat([d_chunk, pad_d], dim=1)
+                    i_chunk = torch.cat([i_chunk, pad_i], dim=1)
+
+                merged_d = torch.cat([best_dist, d_chunk], dim=1)
+                merged_i = torch.cat([best_idx, i_chunk], dim=1)
+                keep = torch.topk(merged_d, k=k, largest=False, dim=1).indices
+                best_dist = torch.gather(merged_d, 1, keep)
+                best_idx = torch.gather(merged_i, 1, keep)
+
+            out_idx.append(best_idx)
+
+        return torch.cat(out_idx, dim=0)
 
     def _encode_target_features(self, quats_passive: torch.Tensor) -> torch.Tensor:
         if self.target_irreps == "a1":

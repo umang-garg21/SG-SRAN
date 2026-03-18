@@ -61,8 +61,8 @@ CONFIG = {
     "decoder_learnable_hidden_dim": 256,
     "decoder_learnable_num_layers": 3,
     "decoder_learnable_dropout": 0.0,
-    # Memory safety for FCC real-data traces with optimizing decoder.
-    "decoder_max_table_rows": 512,
+    # Use full decoder lookup table for highest-fidelity traces.
+    "decoder_max_table_rows": None,
     "decoder_table_cache_dir": "out/decoder_lookup_tables",
     "out_root": "outputs/iso_embedding_sr_attn_trace_real_data_both",
     "datasets": [

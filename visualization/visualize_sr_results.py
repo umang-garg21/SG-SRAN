@@ -371,7 +371,7 @@ def render_input_output_side_by_side(
     include_key: bool = True,
     overwrite: bool = False,
     format_input: bool = True,
-    align_output_to_input: bool = True,
+    align_output_to_input: bool = False,
     dpi: int = 300,
 ):
     """
@@ -396,7 +396,7 @@ def render_input_output_side_by_side(
         If False, skip rendering if file exists.
     format_input : bool, default=True
         If True, canonicalize quaternions.
-    align_output_to_input : bool, default=True
+    align_output_to_input : bool, default=False
         If True, symmetry-match output to input before IPF rendering to avoid
         branch/palette shifts due to equivalent cubic orientations.
     dpi : int, default=300

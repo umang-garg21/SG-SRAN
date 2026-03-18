@@ -694,6 +694,7 @@ def format_quaternions(
             return_op_map=False,
             eps=eps,
         )
+        q_out = q_fz
 
     # 5. Final layout
     if to_quat_first:

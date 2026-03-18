@@ -63,8 +63,8 @@ CONFIG = {
     "decoder_steps": 0,
     "decoder_lr": 0.05,
     "decoder_method": "cubochoric",
-    # Helps avoid OOM for FCC 64x64 -> 256x256 diagnostics with optimizing decoder.
-    "decoder_max_table_rows": 512,
+    # Use full decoder lookup table for highest-fidelity diagnostics.
+    "decoder_max_table_rows": None,
     "datasets": [
         {
             "name": "hcp_ti64",

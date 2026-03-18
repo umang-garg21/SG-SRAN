@@ -215,7 +215,10 @@ def main() -> None:
                 hr_hwc = _to_hwc_quat_single(hr)
                 hr_h, hr_w = int(hr_hwc.shape[0]), int(hr_hwc.shape[1])
 
-                sr_flat = model.forward_sr(lr_flat, lr_shape=lr_shape, normalize_input=True)
+                # Optimizing decoder performs an internal gradient-based solve.
+                # Keep no_grad for the outer loop, but enable grad for decode.
+                with torch.enable_grad():
+                    sr_flat = model.forward_sr(lr_flat, lr_shape=lr_shape, normalize_input=True)
                 if int(sr_flat.shape[0]) != int(hr_h * hr_w):
                     raise ValueError(
                         f"SR size mismatch: got N={int(sr_flat.shape[0])}, expected {int(hr_h * hr_w)}"

@@ -28,7 +28,7 @@
   "decoder_steps": 1,
   "decoder_lr": 0.05,
   "decoder_method": "cubochoric",
-  "decoder_max_table_rows": 2048,
+  "decoder_max_table_rows": null,
   "decoder_table_cache_dir": "out/decoder_lookup_tables",
   "decoder_backend": "optimizing",
   "decoder_learnable_hidden_dim": 256,
