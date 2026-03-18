@@ -171,6 +171,9 @@ def _trace_one_sample(
         feat_hr1 = model.conv_hr1(feat_up, hr_shape)
         feat_attn, attn_stage_outputs = _apply_attention_stepwise(model, feat_hr1, hr_shape)
         feat_a1_hr = model.final_proj(feat_attn)
+
+    # Optimizing decoder performs internal gradient-based refinement.
+    with torch.enable_grad():
         q_dec_raw = model.decoder(feat_a1_hr)
         q_dec_fz = model.reduce_to_fz(q_dec_raw)
         q_forward = model.forward_sr(lr_quats, lr_shape=lr_shape, normalize_input=False)
