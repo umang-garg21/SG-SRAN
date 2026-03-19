@@ -223,29 +223,54 @@ def _apply_attention_stepwise(model, feat: torch.Tensor, hr_shape: tuple[int, in
 def _run_stages(model, q_lr: torch.Tensor, lr_shape: tuple[int, int]):
     with torch.no_grad():
         feat_a1_lr = model.encode_a1(q_lr)
-        feat_lr1 = model.conv_lr1(feat_a1_lr, lr_shape)
-        feat_lr2 = model.conv_lr2(feat_lr1, lr_shape)
+
+        if bool(getattr(model, "use_lr_conv1", True)):
+            feat_lr1 = model.conv_lr1(feat_a1_lr, lr_shape)
+            stage_lr1_name = "conv_lr1_output"
+        else:
+            feat_lr1 = feat_a1_lr
+            stage_lr1_name = "conv_lr1_bypass_identity_output"
+
+        if bool(getattr(model, "use_lr_conv2", True)):
+            feat_lr2 = model.conv_lr2(feat_lr1, lr_shape)
+            stage_lr2_name = "conv_lr2_output"
+        else:
+            feat_lr2 = feat_lr1
+            stage_lr2_name = "conv_lr2_bypass_identity_output"
+
         feat_up, hr_shape = model.upsample_conv(feat_lr2, lr_shape)
         feat_hr1 = model.conv_hr1(feat_up, hr_shape)
-        feat_attn, attn_stage_outputs = _apply_attention_stepwise(model, feat_hr1, hr_shape)
+
+        if bool(getattr(model, "use_attention", True)) and len(model.attention_blocks) > 0:
+            feat_attn, attn_stage_outputs = _apply_attention_stepwise(model, feat_hr1, hr_shape)
+        else:
+            feat_attn = feat_hr1
+            attn_stage_outputs = [("attention_bypass_identity_output", feat_attn)]
+
         feat_a1_hr = model.final_proj(feat_attn)
         q_dec_raw = model.decoder(feat_a1_hr)
         q_dec_fz = model.reduce_to_fz(q_dec_raw)
         q_forward = model.forward_sr(q_lr, lr_shape=lr_shape, normalize_input=False)
 
+    ir_lr1 = getattr(model.conv_lr1, "irreps_out", model.irreps_a1)
+    ir_lr2 = getattr(model.conv_lr2, "irreps_out", ir_lr1)
+    ir_up = getattr(model.upsample_conv, "irreps_out", ir_lr2)
+    ir_hr1 = getattr(model.conv_hr1, "irreps_out", ir_up)
+    ir_attn = ir_hr1
+
     stages = [
         {"name": "input_quats_lr", "tensor": q_lr, "kind": "quat", "irreps": None},
         {"name": "encode_a1_lr", "tensor": feat_a1_lr, "kind": "feature", "irreps": model.irreps_a1},
-        {"name": "conv_lr1_output", "tensor": feat_lr1, "kind": "feature", "irreps": model.irreps_full},
-        {"name": "conv_lr2_output", "tensor": feat_lr2, "kind": "feature", "irreps": model.irreps_full},
-        {"name": "upsample_output", "tensor": feat_up, "kind": "feature", "irreps": model.irreps_full},
-        {"name": "conv_hr1_output", "tensor": feat_hr1, "kind": "feature", "irreps": model.irreps_full},
+        {"name": stage_lr1_name, "tensor": feat_lr1, "kind": "feature", "irreps": ir_lr1},
+        {"name": stage_lr2_name, "tensor": feat_lr2, "kind": "feature", "irreps": ir_lr2},
+        {"name": "upsample_output", "tensor": feat_up, "kind": "feature", "irreps": ir_up},
+        {"name": "conv_hr1_output", "tensor": feat_hr1, "kind": "feature", "irreps": ir_hr1},
     ]
     for nm, t in attn_stage_outputs:
-        stages.append({"name": nm, "tensor": t, "kind": "feature", "irreps": model.irreps_full})
+        stages.append({"name": nm, "tensor": t, "kind": "feature", "irreps": ir_attn})
     stages.extend(
         [
-            {"name": "attention_output", "tensor": feat_attn, "kind": "feature", "irreps": model.irreps_full},
+            {"name": "attention_output", "tensor": feat_attn, "kind": "feature", "irreps": ir_attn},
             {"name": "final_proj_output_a1", "tensor": feat_a1_hr, "kind": "feature", "irreps": model.irreps_a1},
             {"name": "decoder_raw_output", "tensor": q_dec_raw, "kind": "quat", "irreps": None},
             {"name": "decoder_fz_output", "tensor": q_dec_fz, "kind": "quat", "irreps": None},
@@ -458,4 +483,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

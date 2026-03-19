@@ -115,9 +115,8 @@ class LocalIsoCrystalEncoder(nn.Module):
         self.out_dim_a1 = int(self.irreps_a1.dim)
         self.out_dim_full = int(self.irreps_full.dim)
 
-        sym = _normalize_quaternions(sym)
         self.register_buffer("sym_ops", sym, persistent=False)
-        self.register_buffer("sym_ops_inv", _normalize_quaternions(_quat_conjugate(sym)), persistent=False)
+        self.register_buffer("sym_ops_inv", _quat_conjugate(sym), persistent=False)
 
     def _to_embedding_device(self, quats_passive: torch.Tensor) -> torch.Tensor:
         return quats_passive.to(
@@ -439,7 +438,7 @@ class EquivariantSpatialConv(nn.Module):
         kernel_size: int = 3,
         irreps_in: Irreps | str = "1x4e",
         irreps_out: Irreps | str | None = None,
-        use_residual: bool = True,
+        use_residual: bool = False,
     ):
         super().__init__()
         self.kernel_size = int(kernel_size)
@@ -523,7 +522,7 @@ class EquivariantTransposeConv(nn.Module):
         self,
         kernel_size: int = 3,
         upsample_factor: int = 4,
-        use_residual: bool = False,
+        use_residual: bool = True,
         irreps_in: Irreps | str = "1x4e",
         irreps_out: Irreps | str | None = None,
     ):
@@ -1044,7 +1043,7 @@ class IsoEmbeddingSRAttn(nn.Module):
         lr_quats: torch.Tensor,
         hr_quats: torch.Tensor,
         lr_shape: tuple[int, int],
-        normalize_input: bool = True,
+        normalize_input: bool = False,
     ) -> torch.Tensor:
         lr_quats = lr_quats.to(self.device)
         hr_quats = hr_quats.to(self.device)

@@ -656,107 +656,87 @@ class EquivariantTransposeConv(nn.Module):
 
 
 class AttentionBlock(nn.Module):
-	"""Single block-local equivariant self-attention block in LR feature space.
+    """Block-local equivariant self-attention with legacy checkpoint-compatible keys."""
 
-	Identical architecture to LRSelfAttentionBlock (SR_global_attn.py) but
-	attention is restricted to non-overlapping spatial blocks of the LR grid
-	instead of the full grid.  All blocks share weights; only the block-relative
-	position SH changes.
-	"""
+    def __init__(
+        self,
+        irreps_feat: Irreps | str = "1x4e + 1x6e",
+        num_channels: int = 8,
+        tp_out_chunk_size: int | None = None,
+    ):
+        super().__init__()
+        del tp_out_chunk_size  # Kept for config compatibility.
 
-	def __init__(self, num_channels: int = 8):
-		super().__init__()
-		C = int(num_channels)
+        c = int(num_channels)
+        self.irreps_feat = Irreps(irreps_feat)
+        self.irreps_h = Irreps([(int(mul) * c, ir) for mul, ir in self.irreps_feat])
+        self.sh_irreps = Irreps("1x0e + 1x2e")
 
-		self.irreps_feat = Irreps("1x4e + 1x6e")
-		self.irreps_h    = Irreps(f"{C}x4e + {C}x6e")
+        # Legacy scalar temperature key used by existing checkpoints.
+        self.log_scale = nn.Parameter(torch.tensor(0.0))
 
-		# Learnable log-scale per irrep-l (init: 1/√d_l → scores ∈ [-1, 1])
-		self.log_s4 = nn.Parameter(torch.tensor(math.log(1.0 / math.sqrt(9.0))))
-		self.log_s6 = nn.Parameter(torch.tensor(math.log(1.0 / math.sqrt(13.0))))
+        # SH(block-relative position) -> scalar bias; produces pairwise bias via pb_i + pb_j.
+        self.pos_bias = nn.Linear(6, 1, bias=True)
+        nn.init.zeros_(self.pos_bias.weight)
+        nn.init.zeros_(self.pos_bias.bias)
 
-		# Pairwise position bias: d_ij = ||pos_i - pos_j|| → scalar added to score(i,j)
-		self.pos_bias = nn.Linear(1, 1, bias=True)
-		nn.init.zeros_(self.pos_bias.weight)
-		nn.init.zeros_(self.pos_bias.bias)
+        self.lin_in = IrrepsLinear(self.irreps_feat, self.irreps_h)
+        self.tp_val = FullyConnectedTensorProduct(
+            self.irreps_h, self.sh_irreps, self.irreps_h, shared_weights=True
+        )
+        self.tp_out = FullyConnectedTensorProduct(
+            self.irreps_h, self.irreps_h, self.irreps_h, shared_weights=True
+        )
+        self.lin_out = IrrepsLinear(self.irreps_h, self.irreps_feat)
+        with torch.no_grad():
+            self.lin_out.weight.data.zero_()
 
-		# Channel expansion: 1x4e+1x6e → Cx4e+Cx6e
-		self.lin_in = IrrepsLinear(self.irreps_feat, self.irreps_h)
+    def forward(
+        self,
+        feat: torch.Tensor,
+        sh_block: torch.Tensor,
+        H: int,
+        W: int,
+        block_h: int,
+        block_w: int,
+    ) -> torch.Tensor:
+        B, _, c_feat = feat.shape
+        num_bh = H // block_h
+        num_bw = W // block_w
+        nb = block_h * block_w
+        bb = B * num_bh * num_bw
+        dtype = feat.dtype
 
-		# Output mix in hidden space: h ⊗ ctx → h  (8·C³ weights)
-		self.tp_out = FullyConnectedTensorProduct(
-			self.irreps_h, self.irreps_h, self.irreps_h, shared_weights=True,
-		)
+        feat_blocks = (
+            feat.reshape(B, num_bh, block_h, num_bw, block_w, c_feat)
+            .permute(0, 1, 3, 2, 4, 5)
+            .reshape(bb, nb, c_feat)
+        )
 
-		# Channel contraction + zero-init → block returns zero delta at epoch 0
-		self.lin_out = IrrepsLinear(self.irreps_h, self.irreps_feat)
-		with torch.no_grad():
-			self.lin_out.weight.data.zero_()
+        # O(3)-invariant score from normalized feature dot products.
+        feat_n = F.normalize(feat_blocks, dim=-1)
+        scores = torch.bmm(feat_n, feat_n.transpose(-2, -1))
+        scores = torch.exp(self.log_scale).to(dtype) * scores
 
-	def forward(
-		self,
-		feat:    torch.Tensor,
-		d_block: torch.Tensor,
-		H:       int,
-		W:       int,
-		block_h: int,
-		block_w: int,
-	) -> torch.Tensor:
-		"""
-		Args:
-		    feat:    (B, H*W, 22)              LR features (H, W already padded).
-		    d_block: (block_h*block_w, block_h*block_w)  pairwise L2 distances within the block.
-		    H, W:    (padded) LR spatial dims. Must be multiples of block_h, block_w.
-		    block_h, block_w: block size in pixels.
-		Returns:
-		    (B, H*W, 22)  attention delta.
-		"""
-		B, N, C22 = feat.shape
-		num_bh = H // block_h
-		num_bw = W // block_w
-		Nb     = block_h * block_w
-		Bb     = B * num_bh * num_bw
-		dtype  = feat.dtype
+        pb = self.pos_bias(sh_block)  # (Nb, 1)
+        scores = scores + (pb + pb.T).unsqueeze(0)
+        attn = torch.softmax(scores.float(), dim=-1).to(dtype)
 
-		# Partition: (B, H*W, 22) → (Bb, Nb, 22)
-		feat_blocks = (
-			feat.reshape(B, num_bh, block_h, num_bw, block_w, C22)
-			    .permute(0, 1, 3, 2, 4, 5)          # (B, num_bh, num_bw, block_h, block_w, C22)
-			    .reshape(Bb, Nb, C22)
-		)
+        feat_flat = feat_blocks.reshape(bb * nb, c_feat)
+        sh_flat = sh_block.unsqueeze(0).expand(bb, nb, -1).reshape(bb * nb, -1)
 
-		# ── O(3)-invariant attention scores (block-local) ─────────────────────
-		s4 = torch.exp(self.log_s4)
-		s6 = torch.exp(self.log_s6)
+        h = self.lin_in(feat_flat).reshape(bb, nb, -1)
+        vals = self.tp_val(h.reshape(bb * nb, -1), sh_flat).reshape(bb, nb, -1)
+        ctx = torch.bmm(attn, vals)
+        h_out = self.tp_out(h.reshape(bb * nb, -1), ctx.reshape(bb * nb, -1)).reshape(bb, nb, -1)
+        delta_blocks = self.lin_out(h_out.reshape(bb * nb, -1)).reshape(bb, nb, c_feat)
 
-		f4_n = F.normalize(feat_blocks[..., :9],  dim=-1)   # (Bb, Nb, 9)
-		f6_n = F.normalize(feat_blocks[..., 9:],  dim=-1)   # (Bb, Nb, 13)
-		scores = (s4 * torch.bmm(f4_n, f4_n.transpose(-2, -1))
-		          + s6 * torch.bmm(f6_n, f6_n.transpose(-2, -1)))  # (Bb, Nb, Nb)
-
-		# Pairwise position bias: f(d_ij) added directly to score(i,j)
-		pb     = self.pos_bias(d_block.unsqueeze(-1)).squeeze(-1)  # (Nb, Nb)
-		scores = scores + pb.unsqueeze(0)                          # (Bb, Nb, Nb)
-
-		# Float32 softmax for numerical stability under AMP
-		attn = torch.softmax(scores.float(), dim=-1).to(dtype)   # (Bb, Nb, Nb)
-
-		# ── Equivariant value / output mix ────────────────────────────────────
-		feat_flat = feat_blocks.reshape(Bb * Nb, C22)
-
-		h      = self.lin_in(feat_flat).reshape(Bb, Nb, -1)
-		ctx    = torch.bmm(attn, h)                                                  # (Bb, Nb, Ch22)
-		h_out  = self.tp_out(h.reshape(Bb * Nb, -1), ctx.reshape(Bb * Nb, -1)).reshape(Bb, Nb, -1)
-
-		delta_blocks = self.lin_out(h_out.reshape(Bb * Nb, -1)).reshape(Bb, Nb, C22)
-
-		# Reassemble: (Bb, Nb, 22) → (B, H*W, 22)
-		delta = (
-			delta_blocks.reshape(B, num_bh, num_bw, block_h, block_w, C22)
-			             .permute(0, 1, 3, 2, 4, 5)   # (B, num_bh, block_h, num_bw, block_w, C22)
-			             .reshape(B, H * W, C22)
-		)
-		return delta
+        delta = (
+            delta_blocks.reshape(B, num_bh, num_bw, block_h, block_w, c_feat)
+            .permute(0, 1, 3, 2, 4, 5)
+            .reshape(B, H * W, c_feat)
+        )
+        return delta
 
 
 

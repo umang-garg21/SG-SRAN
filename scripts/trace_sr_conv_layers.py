@@ -14,7 +14,7 @@ This script prints tensor statistics (and optionally full tensors) for each stag
 10) FZ-reduced output
 11) forward_sr output (consistency check)
 
-It also saves spatial color plots for each stage.
+It also saves channel-only spatial plots for each stage.
 No argparse: edit CONFIG directly.
 """
 
@@ -64,10 +64,11 @@ CONFIG = {
     "make_spatial_plots": True,
     "make_irrep_channel_plots": True,
     "show_plots": False,
+    "make_first3_rgb_plots": False,
     "plot_dir": "outputs/iso_embedding_sr_attn_trace_plots",
     "plot_max_channels": 14,
     "irrep_plot_dir": "outputs/iso_embedding_sr_attn_trace_plots/irrep_blocks",
-    "irrep_plot_max_channels_per_block": 9,
+    "irrep_plot_max_channels_per_block": None,
 }
 
 
@@ -131,38 +132,29 @@ def _save_spatial_plots(
     shape: tuple[int, int],
     out_dir: Path,
     max_channels: int,
+    save_first3_rgb: bool = False,
 ) -> None:
     grid = _reshape_grid(features, shape)
-    h, w, c = grid.shape
+    _, _, c = grid.shape
     out_dir.mkdir(parents=True, exist_ok=True)
     safe_name = name.replace(" ", "_").replace("(", "").replace(")", "").replace("->", "_to_")
 
-    norm_map = torch.linalg.norm(grid, dim=-1)
-    fig, ax = plt.subplots(figsize=(5, 4))
-    im = ax.imshow(norm_map.numpy(), cmap="viridis", interpolation="nearest")
-    ax.set_title(f"{name}: channel L2 norm ({h}x{w})")
-    ax.set_xlabel("W")
-    ax.set_ylabel("H")
-    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-    fig.tight_layout()
-    fig.savefig(out_dir / f"{safe_name}_norm.png", dpi=180)
-    plt.close(fig)
-
-    if c >= 3:
-        rgb = grid[..., :3]
-    elif c == 2:
-        rgb = torch.stack([grid[..., 0], grid[..., 1], torch.zeros_like(grid[..., 0])], dim=-1)
-    else:
-        rgb = torch.stack([grid[..., 0], grid[..., 0], grid[..., 0]], dim=-1)
-    rgb = _norm01(rgb)
-    fig, ax = plt.subplots(figsize=(5, 4))
-    ax.imshow(rgb.numpy(), interpolation="nearest")
-    ax.set_title(f"{name}: first-3ch RGB ({h}x{w})")
-    ax.set_xlabel("W")
-    ax.set_ylabel("H")
-    fig.tight_layout()
-    fig.savefig(out_dir / f"{safe_name}_rgb.png", dpi=180)
-    plt.close(fig)
+    if save_first3_rgb:
+        if c >= 3:
+            rgb = grid[..., :3]
+        elif c == 2:
+            rgb = torch.stack([grid[..., 0], grid[..., 1], torch.zeros_like(grid[..., 0])], dim=-1)
+        else:
+            rgb = torch.stack([grid[..., 0], grid[..., 0], grid[..., 0]], dim=-1)
+        rgb = _norm01(rgb)
+        fig, ax = plt.subplots(figsize=(5, 4))
+        ax.imshow(rgb.numpy(), interpolation="nearest")
+        ax.set_title(f"{name}: first-3ch RGB ({h}x{w})")
+        ax.set_xlabel("W")
+        ax.set_ylabel("H")
+        fig.tight_layout()
+        fig.savefig(out_dir / f"{safe_name}_rgb.png", dpi=180)
+        plt.close(fig)
 
     n_ch = min(int(c), int(max_channels))
     n_cols = 4
@@ -173,7 +165,7 @@ def _save_spatial_plots(
         ax = axes[idx]
         if idx < n_ch:
             chan = grid[..., idx]
-            im = ax.imshow(chan.numpy(), cmap="coolwarm", interpolation="nearest")
+            im = ax.imshow(chan.numpy(), cmap="viridis", interpolation="nearest")
             ax.set_title(f"ch {idx}")
             ax.set_xticks([])
             ax.set_yticks([])
@@ -208,7 +200,7 @@ def _save_irrep_block_plots(
     shape: tuple[int, int],
     out_dir: Path,
     irreps,
-    max_channels_per_block: int,
+    max_channels_per_block: int | None,
 ) -> None:
     """Save spatial maps split by irrep block for debugging."""
     grid = _reshape_grid(features, shape)
@@ -235,18 +227,12 @@ def _save_irrep_block_plots(
             f"dim={block_dim} mean={float(block.mean().item()): .3e} std={float(block.std(unbiased=False).item()): .3e}"
         )
 
-        norm_map = torch.linalg.norm(block, dim=-1)
-        fig, ax = plt.subplots(figsize=(5, 4))
-        im = ax.imshow(norm_map.numpy(), cmap="magma", interpolation="nearest")
-        ax.set_title(f"{name}: {block_name} norm")
-        ax.set_xlabel("W")
-        ax.set_ylabel("H")
-        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-        fig.tight_layout()
-        fig.savefig(out_dir / f"{safe_name}__{block_name}__norm.png", dpi=180)
-        plt.close(fig)
-
-        n_ch = min(block_dim, int(max_channels_per_block))
+        if max_channels_per_block is None:
+            n_ch = block_dim
+        else:
+            max_ch_i = int(max_channels_per_block)
+            n_ch = block_dim if max_ch_i <= 0 else min(block_dim, max_ch_i)
+        print(f"    plotting_channels={n_ch}/{block_dim}")
         n_cols = 4
         n_rows = (n_ch + n_cols - 1) // n_cols
         fig, axes = plt.subplots(n_rows, n_cols, figsize=(4.0 * n_cols, 3.2 * n_rows))
@@ -255,7 +241,7 @@ def _save_irrep_block_plots(
             ax = axes[idx]
             if idx < n_ch:
                 chan = block[..., idx]
-                im = ax.imshow(chan.numpy(), cmap="coolwarm", interpolation="nearest")
+                im = ax.imshow(chan.numpy(), cmap="viridis", interpolation="nearest")
                 ax.set_title(f"{block_name} ch{idx}")
                 ax.set_xticks([])
                 ax.set_yticks([])
@@ -323,12 +309,18 @@ def main() -> None:
     head = int(CONFIG["head"])
     print_full_tensors = bool(CONFIG["print_full_tensors"])
     make_spatial_plots = bool(CONFIG["make_spatial_plots"])
+    make_first3_rgb_plots = bool(CONFIG.get("make_first3_rgb_plots", False))
     make_irrep_channel_plots = bool(CONFIG["make_irrep_channel_plots"])
     show_plots = bool(CONFIG["show_plots"])
     plot_max_channels = int(CONFIG["plot_max_channels"])
     plot_dir_cfg = str(CONFIG["plot_dir"])
     irrep_plot_dir_cfg = str(CONFIG["irrep_plot_dir"])
-    irrep_plot_max_channels_per_block = int(CONFIG["irrep_plot_max_channels_per_block"])
+    irrep_plot_max_channels_per_block_cfg = CONFIG.get("irrep_plot_max_channels_per_block", None)
+    irrep_plot_max_channels_per_block = (
+        None
+        if irrep_plot_max_channels_per_block_cfg is None
+        else int(irrep_plot_max_channels_per_block_cfg)
+    )
 
     repo_root = Path(__file__).resolve().parents[1]
     device = torch.device(device_str)
@@ -448,11 +440,27 @@ def main() -> None:
             _print_tensor_full(name, tensor)
 
     if make_spatial_plots:
-        for name, tensor, shape, max_ch, _ in stages:
-            _save_spatial_plots(name, tensor, shape, plot_dir, max_channels=max_ch)
+        plot_dir.mkdir(parents=True, exist_ok=True)
+        for stale in list(plot_dir.glob("*_norm.png")) + list(plot_dir.glob("*_rgb.png")):
+            stale.unlink(missing_ok=True)
+        for name, tensor, shape, max_ch, irreps_spec in stages:
+            if irreps_spec is None:
+                # Skip quaternion-stage channel plots.
+                continue
+            _save_spatial_plots(
+                name,
+                tensor,
+                shape,
+                plot_dir,
+                max_channels=max_ch,
+                save_first3_rgb=make_first3_rgb_plots,
+            )
         print(f"\nSaved spatial plots to: {plot_dir}")
 
     if make_irrep_channel_plots:
+        irrep_plot_dir.mkdir(parents=True, exist_ok=True)
+        for stale in irrep_plot_dir.glob("*__norm.png"):
+            stale.unlink(missing_ok=True)
         for name, tensor, shape, _, irreps_spec in stages:
             if irreps_spec is None:
                 continue

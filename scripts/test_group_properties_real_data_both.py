@@ -28,7 +28,7 @@ for p in (REPO_ROOT, SCRIPT_DIR):
     if ps not in sys.path:
         sys.path.insert(0, ps)
 
-from models.SR_double_conv_SRattn import IsoEmbeddingSRAttn
+from models.SR_double_conv_SRattn_a1 import IsoEmbeddingSRAttn
 from debug_layer_group_properties import (  # type: ignore
     _best_feature_equivariance,
     _err_metrics,
@@ -50,10 +50,14 @@ CONFIG = {
     "sample_offset": 0,
     "tol_rel": 5e-3,
     "tol_rms": 2e-4,
-    "num_so3_trials": 2,
-    "num_sym_trials": 4,
+    "num_so3_trials": 1,
+    "num_sym_trials": 2,
+    "lr_crop_hw": [16, 16],
     "seed": 0,
     "upsample_factor": 4,
+    "use_lr_conv1": True,
+    "use_lr_conv2": True,
+    "use_attention": True,
     "num_hr_attn_blocks": 1,
     "hr_attn_num_channels": 8,
     "hr_attn_block_size": 16,
@@ -79,7 +83,7 @@ CONFIG = {
             "dataset_root": "/data/warren/materials/materials_data_mount/datasets/IN718_QSR_x4",
         },
     ],
-    "out_json": "scripts/diagnostics/layer_group_properties_real_data_both.json",
+    "out_json": "scripts/diagnostics/layer_group_properties_real_data_both_a1.json",
 }
 
 _NAME_RE = re.compile(
@@ -181,6 +185,9 @@ def _evaluate_dataset(dataset_cfg: dict, cfg: dict) -> dict:
         d6_convention=str(dataset_cfg.get("d6_convention", "z_axis")),
         device=device,
         upsample_factor=int(cfg["upsample_factor"]),
+        use_lr_conv1=bool(cfg.get("use_lr_conv1", True)),
+        use_lr_conv2=bool(cfg.get("use_lr_conv2", True)),
+        use_attention=bool(cfg.get("use_attention", True)),
         num_hr_attn_blocks=int(cfg["num_hr_attn_blocks"]),
         hr_attn_num_channels=int(cfg["hr_attn_num_channels"]),
         hr_attn_block_size=int(cfg["hr_attn_block_size"]),
@@ -210,6 +217,10 @@ def _evaluate_dataset(dataset_cfg: dict, cfg: dict) -> dict:
 
     for sample_i, (pair_key, lr_fp, hr_fp) in enumerate(selected):
         lr_arr = _ensure_hwc_quat(np.load(lr_fp))
+        crop_hw = cfg.get("lr_crop_hw", None)
+        if crop_hw is not None:
+            ch, cw = int(crop_hw[0]), int(crop_hw[1])
+            lr_arr = lr_arr[:ch, :cw, :]
         h, w, _ = lr_arr.shape
         q_base = torch.from_numpy(lr_arr.reshape(-1, 4)).to(device=device, dtype=torch.float32)
         lr_shape = (h, w)
