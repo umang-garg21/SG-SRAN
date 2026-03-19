@@ -1,5 +1,5 @@
 {
-  "dataset_root": "/data/warren/materials/EBSD/Ti64_DIC_Mclean_QSR_x4",
+  "dataset_root": "/data/home/umang/Materials/Materials_data_mount/datasets/Ti_Al_1pct_QSR_x4",
   "epochs": 50,
   "batch_size": 4,
   "num_workers": 0,
@@ -28,7 +28,7 @@
   "amp_dtype": "bf16",
   "decoder_cubochoric_resolution": 1,
   "decoder_num_starts": 2,
-  "decoder_steps": 0,
+  "decoder_steps": 1,
   "decoder_lr": 0.05,
   "decoder_method": "cubochoric",
   "decoder_max_table_rows": null,

@@ -1,5 +1,5 @@
 {
-  "dataset_root": "/data/warren/materials/EBSD/Ti64_DIC_Mclean_QSR_x4",
+  "dataset_root": "/data/home/umang/Materials/Materials_data_mount/datasets/Ti_Al_1pct_QSR_x4",
   "epochs": 50,
   "batch_size": 4,
   "num_workers": 0,
@@ -19,9 +19,6 @@
   "crystal": "hcp",
   "d6_convention": "z_axis",
   "upsample_residual": true,
-  "use_lr_conv1": false,
-  "use_lr_conv2": false,
-  "use_attention": false,
   "num_hr_attn_blocks": 1,
   "hr_attn_num_channels": 4,
   "hr_attn_block_size": 16,

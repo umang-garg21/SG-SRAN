@@ -9,6 +9,7 @@ and optimizes model.feature_loss_sr(...) directly.
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import os
 import sys
@@ -25,7 +26,6 @@ from training.data_loading import build_dataloader
 from training.optimizer_utils import build_optimizer
 from training.schedulers import build_scheduler
 from training.seed_utils import get_seed_from_config, set_seed
-from models.SR_double_conv_SRattn import IsoEmbeddingSRAttn
 from utils.symmetry_utils import resolve_symmetry
 
 
@@ -48,6 +48,12 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default=None,
         help="Optional CUDA_VISIBLE_DEVICES value, e.g. '0' or '0,1'",
+    )
+    parser.add_argument(
+        "--model_module",
+        type=str,
+        default="models.SR_double_conv_SRattn",
+        help="Dotted module path containing IsoEmbeddingSRAttn (default: models.SR_double_conv_SRattn)",
     )
     parser.add_argument(
         "--resume",
@@ -100,6 +106,39 @@ def _save_history(history_path: Path, history: dict) -> None:
     history_path.parent.mkdir(parents=True, exist_ok=True)
     with open(history_path, "w") as f:
         json.dump(history, f, indent=2)
+
+
+def _save_loss_plot(plot_path: Path, history: dict, exp_name: str) -> None:
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        train = history.get("train", [])
+        val   = history.get("val", [])
+        lr    = history.get("lr", [])
+        epochs = list(range(1, len(train) + 1))
+
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(9, 7), sharex=True)
+        fig.suptitle(exp_name, fontsize=11)
+
+        ax1.plot(epochs, train, label="train", linewidth=1.5)
+        ax1.plot(epochs, val,   label="val",   linewidth=1.5, linestyle="--")
+        ax1.set_ylabel("MSE Loss (feature space)")
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+
+        ax2.plot(epochs, lr[:len(epochs)], color="tab:orange", linewidth=1.5)
+        ax2.set_ylabel("Learning Rate")
+        ax2.set_xlabel("Epoch")
+        ax2.grid(True, alpha=0.3)
+
+        plt.tight_layout()
+        plot_path.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(plot_path, dpi=150)
+        plt.close(fig)
+    except Exception as exc:
+        print(f"[warning] Could not save loss plot: {exc}")
 
 
 def _save_checkpoint(
@@ -330,6 +369,7 @@ def _render_sr_hr_lr_ipf(
 
 def main() -> None:
     args = parse_args()
+    IsoEmbeddingSRAttn = importlib.import_module(args.model_module).IsoEmbeddingSRAttn
     exp_dir = Path(args.exp_dir)
     config_path = exp_dir / args.config
     run_config_path = exp_dir / "logs" / "run_config.json"
@@ -397,6 +437,9 @@ def main() -> None:
         upsample_residual=bool(getattr(cfg, "upsample_residual", True)),
         use_lr_conv1=bool(getattr(cfg, "use_lr_conv1", True)),
         use_lr_conv2=bool(getattr(cfg, "use_lr_conv2", True)),
+        use_residual_lr1=bool(getattr(cfg, "use_residual_lr1", False)),
+        use_residual_lr2=bool(getattr(cfg, "use_residual_lr2", False)),
+        use_residual_hr1=bool(getattr(cfg, "use_residual_hr1", False)),
         use_attention=bool(getattr(cfg, "use_attention", True)),
         num_hr_attn_blocks=int(getattr(cfg, "num_hr_attn_blocks", 1)),
         hr_attn_num_channels=int(getattr(cfg, "hr_attn_num_channels", 8)),
@@ -542,6 +585,11 @@ def main() -> None:
             )
 
         _save_history(history_path, history)
+        _save_loss_plot(
+            exp_dir / "visualizations" / "loss_curves.png",
+            history,
+            exp_name=exp_dir.name,
+        )
 
     final_viz_dir = exp_dir / "visualizations" / "final"
     _render_sr_hr_lr_ipf(

@@ -885,6 +885,9 @@ class IsoEmbeddingSRAttn(nn.Module):
         upsample_residual: bool = True,
         use_lr_conv1: bool = True,
         use_lr_conv2: bool = True,
+        use_residual_lr1: bool = False,
+        use_residual_lr2: bool = False,
+        use_residual_hr1: bool = False,
         use_attention: bool = True,
         num_hr_attn_blocks: int = 1,
         hr_attn_num_channels: int = 8,
@@ -947,13 +950,14 @@ class IsoEmbeddingSRAttn(nn.Module):
             kernel_size=3,
             irreps_in=self.irreps_a1,
             irreps_out=self.irreps_a1,
-            use_residual=True,
+            use_residual=bool(use_residual_lr1),
         )
         # LR conv2 k=9: a1 -> a1
         self.conv_lr2 = EquivariantSpatialConv(
             kernel_size=9,
             irreps_in=self.irreps_a1,
             irreps_out=self.irreps_a1,
+            use_residual=bool(use_residual_lr2),
         )
         # Upsample k=3: a1 -> a1
         self.upsample_conv = EquivariantTransposeConv(
@@ -968,6 +972,7 @@ class IsoEmbeddingSRAttn(nn.Module):
             kernel_size=3,
             irreps_in=self.irreps_a1,
             irreps_out=self.irreps_a1,
+            use_residual=bool(use_residual_hr1),
         )
         # Attention block(s)
         if self.use_attention:
