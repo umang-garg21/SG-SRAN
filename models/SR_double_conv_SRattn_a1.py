@@ -852,24 +852,6 @@ class AttentionBlock(nn.Module):
         )
         return delta
 
-
-class IrrepsIdentity(nn.Module):
-    """
-    Identity map with irreps metadata for diagnostics/trace scripts.
-    Useful for tracing feature shapes and irreps through the pipeline.
-    """
-
-    def __init__(self, irreps: Irreps | str):
-        super().__init__()
-        self.irreps_in = Irreps(irreps)
-        self.irreps_out = self.irreps_in
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return x
-
-
-
-
 class IsoEmbeddingSRAttn(nn.Module):
     """
     Local-iso SR model.
@@ -1001,8 +983,6 @@ class IsoEmbeddingSRAttn(nn.Module):
             )
         else:
             self.attention_blocks = nn.ModuleList([])
-        # No terminal projection in the A1-only pipeline.
-        self.final_proj = IrrepsIdentity(self.irreps_a1)
 
         self._cached_hr_block_shape: tuple[int, int] | None = None
         self._cached_hr_sh_block: torch.Tensor | None = None
@@ -1171,19 +1151,6 @@ class IsoEmbeddingSRAttn(nn.Module):
             feat = feat.squeeze(0)
         return feat
 
-
-    def _apply_pointwise_linear(self, layer: nn.Module, features: torch.Tensor) -> torch.Tensor:
-        """
-        Apply a pointwise linear layer to features, handling batched/unbatched input.
-        """
-        batched = features.dim() == 3
-        if not batched:
-            return layer(features)
-        B, N, C = features.shape
-        out = layer(features.reshape(B * N, C))
-        return out.reshape(B, N, -1)
-
-
     def _forward_sr_features(
         self,
         feat_lr_a1: torch.Tensor,
@@ -1259,7 +1226,7 @@ class IsoEmbeddingSRAttn(nn.Module):
         normalize_input: bool = True,
     ) -> torch.Tensor:
         """
-        Forward pass for SR: input LR quaternions, output HR quaternions.
+        Forward pass for SR: input LR quaternions, output SR quaternions.
         """
         lr_quats = lr_quats.to(self.device)
         if normalize_input:
@@ -1297,7 +1264,6 @@ __all__ = [
     "CubochoricOptimizingLocalIsoDecoder",
     "EquivariantSpatialConv",
     "EquivariantTransposeConv",
-    "IrrepsIdentity",
     "IsoEmbeddingSRAttn",
     "LearnableA1QuaternionDecoder",
     "LocalIsoCrystalEncoder",
