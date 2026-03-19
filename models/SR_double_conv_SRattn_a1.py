@@ -1,11 +1,24 @@
+
 """
-Standalone local-iso SR model with double LR conv and HR attention.
+SR_double_conv_SRattn_a1.py
+====================================
+Standalone local-iso SR model with double low-resolution (LR) convolution and high-resolution (HR) attention.
 
 Key requirements addressed:
 - Single model class: `IsoEmbeddingSRAttn`
-- Uses local-iso embedding encoder
+- Uses local-iso embedding encoder for crystal orientation representation
 - Uses cubochoric-sampled optimizing decoder (feature-space optimization)
 - Crystal family selected at top level (`crystal='fcc'` or `crystal='hcp'`)
+
+This file contains:
+- Quaternion normalization and manipulation utilities
+- LocalIsoCrystalEncoder: wraps local-iso embedding for FCC/HCP
+- CubochoricOptimizingLocalIsoDecoder: feature-to-quaternion decoder using optimization
+- LearnableA1QuaternionDecoder: MLP-based decoder (not used in main pipeline)
+- EquivariantSpatialConv: e3nn-based equivariant spatial convolution
+- EquivariantTransposeConv: e3nn-based equivariant upsampling
+- AttentionBlock: block-local equivariant self-attention
+- IsoEmbeddingSRAttn: the main model class
 """
 
 from __future__ import annotations
@@ -32,14 +45,33 @@ from models.local_iso_embedding import (
 )
 
 
+
 def _normalize_quaternions(quats: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
+    """
+    Normalize a batch of quaternions to unit norm, ensuring the scalar part is non-negative.
+    Args:
+        quats: (..., 4) tensor of quaternions
+        eps: minimum norm for numerical stability
+    Returns:
+        (..., 4) tensor of normalized quaternions
+    """
     norm = torch.norm(quats, dim=-1, keepdim=True).clamp_min(eps)
     q = quats / norm
+    # Ensure scalar part (w) is non-negative for unique representation
     return torch.where(q[..., :1] < 0.0, -q, q)
 
 
+
 def _quat_conjugate(quats: torch.Tensor) -> torch.Tensor:
+    """
+    Compute the conjugate of a batch of quaternions.
+    Args:
+        quats: (..., 4) tensor of quaternions
+    Returns:
+        (..., 4) tensor of conjugated quaternions
+    """
     return torch.cat([quats[..., :1], -quats[..., 1:]], dim=-1)
+
 
 
 def _sample_fz_quaternions_passive(
@@ -50,6 +82,18 @@ def _sample_fz_quaternions_passive(
     device: torch.device,
     max_rows: int | None = None,
 ) -> torch.Tensor:
+    """
+    Sample quaternions in the fundamental zone (FZ) for a given symmetry group.
+    Args:
+        group_name: 'O' (cubic) or 'D6' (hexagonal)
+        resolution: sampling resolution
+        method: sampling method (e.g., 'cubochoric')
+        dtype: output tensor dtype
+        device: output tensor device
+        max_rows: optional maximum number of quaternions to return
+    Returns:
+        (N, 4) tensor of unit quaternions
+    """
     from orix.quaternion import symmetry
     from orix.sampling import get_sample_fundamental
     import numpy as np
@@ -83,8 +127,13 @@ def _sample_fz_quaternions_passive(
     return q
 
 
+
 class LocalIsoCrystalEncoder(nn.Module):
-    """Local-iso encoder wrapper with crystal-family switch."""
+    """
+    Local-iso encoder wrapper with crystal-family switch.
+    Selects FCC or HCP embedding and symmetry operators based on `crystal` argument.
+    Provides methods to encode quaternions into irreducible representations (irreps).
+    """
 
     def __init__(
         self,
@@ -118,27 +167,43 @@ class LocalIsoCrystalEncoder(nn.Module):
         self.register_buffer("sym_ops", sym, persistent=False)
         self.register_buffer("sym_ops_inv", _quat_conjugate(sym), persistent=False)
 
+
     def _to_embedding_device(self, quats_passive: torch.Tensor) -> torch.Tensor:
+        """
+        Move input quaternions to the device/dtype of the embedding for correct computation.
+        """
         return quats_passive.to(
             device=self.embedding.group_mats.device,
             dtype=self.embedding.group_mats.dtype,
         )
 
+
     def forward_a1(self, quats_passive: torch.Tensor) -> torch.Tensor:
+        """
+        Encode quaternions to A1 irreps (lowest-order invariant features).
+        """
         q = self._to_embedding_device(quats_passive)
         return self.embedding.forward_irreps_passive(q, active_only=True)
 
+
     def forward_full(self, quats_passive: torch.Tensor) -> torch.Tensor:
+        """
+        Encode quaternions to full irreps (all invariant and equivariant features).
+        """
         q = self._to_embedding_device(quats_passive)
         return self.embedding.forward_irreps_passive(q, active_only=False)
 
 
+
+
 class CubochoricOptimizingLocalIsoDecoder(nn.Module):
     """
-    Decode local-iso irreps features (a1 or full) to passive quaternions.
+    Decoder that maps local-iso irreps features (A1 or full) to passive quaternions.
+    Uses a two-stage process:
+      1. Nearest-neighbor search in a cubochoric-sampled lookup table (fundamental zone)
+      2. Local optimization (Adam) to minimize feature-space MSE to the target features
 
-    Seeds are taken from cubochoric fundamental-zone samples and refined with Adam
-    to minimize feature-space MSE against target features.
+    This enables differentiable, symmetry-aware decoding from feature space to orientation.
     """
 
     def __init__(
@@ -218,6 +283,10 @@ class CubochoricOptimizingLocalIsoDecoder(nn.Module):
         self.register_buffer("table_feat_norm", table_feat_norm, persistent=False)
 
     def _cache_metadata(self) -> dict[str, object]:
+        """
+        Return a dictionary of metadata describing the current decoder configuration.
+        Used for cache key generation.
+        """
         return {
             "cache_version": 1,
             "group_name": str(self.encoder.group_name),
@@ -232,6 +301,9 @@ class CubochoricOptimizingLocalIsoDecoder(nn.Module):
         }
 
     def _cache_paths(self) -> tuple[Path, Path, Path] | None:
+        """
+        Return paths for cached quaternion/feature tables and metadata, or None if caching is disabled.
+        """
         if self.table_cache_dir is None:
             return None
         meta = self._cache_metadata()
@@ -247,6 +319,10 @@ class CubochoricOptimizingLocalIsoDecoder(nn.Module):
         return q_path, f_path, m_path
 
     def _try_load_cached_table(self) -> tuple[torch.Tensor, torch.Tensor] | None:
+        """
+        Attempt to load cached quaternion and feature tables from disk.
+        Returns None if not found or invalid.
+        """
         paths = self._cache_paths()
         if paths is None:
             return None
@@ -276,6 +352,9 @@ class CubochoricOptimizingLocalIsoDecoder(nn.Module):
         return table_quats, table_feat
 
     def _save_cached_table(self, table_quats: torch.Tensor, table_feat: torch.Tensor) -> None:
+        """
+        Save quaternion and feature tables to disk for future reuse.
+        """
         paths = self._cache_paths()
         if paths is None:
             return
@@ -288,6 +367,10 @@ class CubochoricOptimizingLocalIsoDecoder(nn.Module):
             json.dump(self._cache_metadata(), f, indent=2)
 
     def _nearest_seed_indices(self, feat_target: torch.Tensor) -> torch.Tensor:
+        """
+        For each target feature, find the indices of the k nearest seeds in the lookup table.
+        Uses chunked distance computation for memory efficiency.
+        """
         k = min(self.num_starts, int(self.table_feat.shape[0]))
         n = int(feat_target.shape[0])
         t = int(self.table_feat.shape[0])
@@ -332,11 +415,21 @@ class CubochoricOptimizingLocalIsoDecoder(nn.Module):
         return torch.cat(out_idx, dim=0)
 
     def _encode_target_features(self, quats_passive: torch.Tensor) -> torch.Tensor:
+        """
+        Encode quaternions to the target irreps (A1 or full) using the encoder.
+        """
         if self.target_irreps == "a1":
             return self.encoder.forward_a1(quats_passive)
         return self.encoder.forward_full(quats_passive)
 
     def forward(self, feat_target: torch.Tensor) -> torch.Tensor:
+        """
+        Decode features to quaternions by nearest-neighbor search and local optimization.
+        Args:
+            feat_target: (B, C) tensor of target features
+        Returns:
+            (B, 4) tensor of decoded unit quaternions
+        """
         # Decoder is an optimization module; do not backprop to upstream SR features.
         feat_target = feat_target.detach().to(self.table_feat.device, dtype=torch.float32)
         B, C = feat_target.shape
@@ -350,6 +443,7 @@ class CubochoricOptimizingLocalIsoDecoder(nn.Module):
         if self.steps == 0:
             return _normalize_quaternions(q0[:, 0, :])
 
+        # Local optimization (Adam) to refine quaternions
         k = q0.shape[1]
         u = nn.Parameter(q0.clone())
         opt = torch.optim.Adam([u], lr=self.lr)
@@ -375,8 +469,12 @@ class CubochoricOptimizingLocalIsoDecoder(nn.Module):
         return _normalize_quaternions(q_best)
 
 
+
 class LearnableA1QuaternionDecoder(nn.Module):
-    """Learnable MLP decoder from a1 features to passive unit quaternions."""
+    """
+    Learnable MLP decoder from A1 features to passive unit quaternions.
+    Not used in the main pipeline, but useful for ablation or comparison.
+    """
 
     def __init__(
         self,
@@ -433,6 +531,11 @@ class LearnableA1QuaternionDecoder(nn.Module):
 
 
 class EquivariantSpatialConv(nn.Module):
+    """
+    Equivariant spatial convolution for irrep-valued feature maps.
+    Uses e3nn's FullyConnectedTensorProduct for channel mixing.
+    Optionally includes a residual connection.
+    """
     def __init__(
         self,
         kernel_size: int = 3,
@@ -454,8 +557,7 @@ class EquivariantSpatialConv(nn.Module):
             self.irreps_in,
             self.irreps_in,
             self.irreps_out,
-            shared_weights=True, 
-            # TODO: Explain what shared_weights does and why we use it here (parameter efficiency, regularization, etc.
+            shared_weights=True,  # Share weights across all positions for parameter efficiency and regularization
         )
         self.residual_proj: o3.Linear | None = None
         if self.use_residual and (self.irreps_in != self.irreps_out):
@@ -481,7 +583,8 @@ class EquivariantSpatialConv(nn.Module):
             (self.padding, self.padding, self.padding, self.padding),
             mode="replicate",
         )
-        # TODO: Explain the unfolding operation and how it extracts local patches for convolution, make a diagram
+        # Unfolding extracts local spatial patches for convolution.
+        # Each patch is weighted and aggregated to form the neighborhood context.
         patches = feat_padded.unfold(2, self.kernel_size, 1).unfold(3, self.kernel_size, 1) # Shape: (B, C, H, W, k, k)
         w = self.spatial_weights.view(1, 1, 1, 1, self.kernel_size, self.kernel_size)
         neigh = (patches * w).sum(dim=(-1, -2))
@@ -504,18 +607,19 @@ class EquivariantSpatialConv(nn.Module):
         return out
 
 
+
 class EquivariantTransposeConv(nn.Module):
     """
     Equivariant upsampler for irrep-valued feature maps.
 
     Design:
-    1) Spatial upsample with depthwise transpose-conv.
-    2) Build local spatial context (weighted neighborhood average).
-    3) Mix (feature, context) via an e3nn tensor product.
+    1) Spatial upsample with depthwise transpose-conv (per irrep copy)
+    2) Build local spatial context (weighted neighborhood average)
+    3) Mix (feature, context) via an e3nn tensor product
 
     Important constraint:
-    transpose-conv kernels are tied across all m-channels inside each irrep
-    copy so the upsample operator does not treat m components differently.
+    Transpose-conv kernels are tied across all m-channels inside each irrep copy
+    so the upsample operator does not treat m components differently.
     """
 
     def __init__(
@@ -654,8 +758,12 @@ class EquivariantTransposeConv(nn.Module):
         return out, (Hr, Wr)
 
 
+
 class AttentionBlock(nn.Module):
-    """Block-local equivariant self-attention for a configurable feature irreps."""
+    """
+    Block-local equivariant self-attention for a configurable feature irreps.
+    Applies dot-product attention within spatial blocks, with O(3)-invariant scores.
+    """
 
     def __init__(
         self,
@@ -744,8 +852,12 @@ class AttentionBlock(nn.Module):
         )
         return delta
 
+
 class IrrepsIdentity(nn.Module):
-    """Identity map with irreps metadata for diagnostics/trace scripts."""
+    """
+    Identity map with irreps metadata for diagnostics/trace scripts.
+    Useful for tracing feature shapes and irreps through the pipeline.
+    """
 
     def __init__(self, irreps: Irreps | str):
         super().__init__()
@@ -756,21 +868,28 @@ class IrrepsIdentity(nn.Module):
         return x
 
 
+
+
 class IsoEmbeddingSRAttn(nn.Module):
     """
-    Standalone local-iso SR model with an A1-only feature pipeline.
+    Local-iso SR model.
 
-    Crystal family is selected at top-level with `crystal`:
-    - `fcc` (group O)
-    - `hcp` (group D6)
+    - Crystal family is selected at top-level with `crystal`:
+      - `fcc` (group O)
+      - `hcp` (group D6)
+    - Optional ablations:
+      - disable LR conv1 (`use_lr_conv1=False`)
+      - disable LR conv2 (`use_lr_conv2=False`)
+      - disable attention (`use_attention=False`)
+    - All SR stages run in `irreps_a1` and there is no terminal projection layer.
 
-    Optional ablations:
-    - disable LR conv1 (`use_lr_conv1=False`)
-    - disable LR conv2 (`use_lr_conv2=False`)
-    - disable attention (`use_attention=False`)
-
-    In this variant, all SR stages run in `irreps_a1` and there is
-    no terminal projection layer.
+    Main pipeline:
+      1. Encode LR quaternions to A1 features
+      2. Apply two LR equivariant convolutions (optional)
+      3. Upsample to HR grid
+      4. Apply HR equivariant convolution
+      5. Apply block-local equivariant attention (optional)
+      6. Decode HR features to quaternions using optimizing decoder
     """
 
     _SH_IRREPS = Irreps("1x0e + 1x2e")
@@ -890,6 +1009,13 @@ class IsoEmbeddingSRAttn(nn.Module):
 
     @staticmethod
     def quat_mul(q1: torch.Tensor, q2: torch.Tensor) -> torch.Tensor:
+        """
+        Hamilton product (multiplication) of two batches of quaternions.
+        Args:
+            q1, q2: (N, 4) tensors of quaternions
+        Returns:
+            (N, 4) tensor of quaternion products
+        """
         w1, x1, y1, z1 = q1[:, 0], q1[:, 1], q1[:, 2], q1[:, 3]
         w2, x2, y2, z2 = q2[:, 0], q2[:, 1], q2[:, 2], q2[:, 3]
         return torch.stack(
@@ -902,10 +1028,18 @@ class IsoEmbeddingSRAttn(nn.Module):
             dim=1,
         )
 
+
     def encode_a1(self, quats: torch.Tensor) -> torch.Tensor:
+        """
+        Encode quaternions to A1 irreps using the encoder.
+        """
         return self.encoder.forward_a1(quats)
 
+
     def encode_full_target(self, quats: torch.Tensor) -> torch.Tensor:
+        """
+        Encode quaternions to full irreps using the encoder.
+        """
         return self.encoder.forward_full(quats)
 
     def reduce_to_fz(
@@ -913,6 +1047,16 @@ class IsoEmbeddingSRAttn(nn.Module):
         quats: torch.Tensor,
         return_op_map: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor] | torch.Tensor:
+        """
+        Reduce quaternions to the fundamental zone (FZ) using symmetry operations.
+        For each input quaternion, applies all symmetry operators and selects the representative
+        with the largest absolute scalar part (w), ensuring unique mapping to FZ.
+        Args:
+            quats: (N, 4) tensor of quaternions
+            return_op_map: if True, also return the index of the symmetry op used
+        Returns:
+            (N, 4) tensor of FZ-reduced quaternions (and optionally op indices)
+        """
         quats = _normalize_quaternions(quats)
         batch_size = quats.shape[0]
 
@@ -932,7 +1076,12 @@ class IsoEmbeddingSRAttn(nn.Module):
             return q_fz, best_idx
         return q_fz
 
+
     def decode(self, features_a1: torch.Tensor) -> torch.Tensor:
+        """
+        Decode A1 features to quaternions using the decoder and reduce to FZ.
+        Handles both batched and unbatched input.
+        """
         batched = features_a1.dim() == 3
         if batched:
             bsz, n, c = features_a1.shape
@@ -942,6 +1091,7 @@ class IsoEmbeddingSRAttn(nn.Module):
         q = self.decoder(features_a1)
         return self.reduce_to_fz(q)
 
+
     @torch.no_grad()
     def _get_hr_sh_block(
         self,
@@ -950,6 +1100,10 @@ class IsoEmbeddingSRAttn(nn.Module):
         device: torch.device,
         dtype: torch.dtype,
     ) -> torch.Tensor:
+        """
+        Compute and cache the pairwise L2 distance matrix for a spatial block.
+        Used for position bias in attention blocks.
+        """
         if (
             self._cached_hr_block_shape == (block_h, block_w)
             and self._cached_hr_sh_block is not None
@@ -966,11 +1120,16 @@ class IsoEmbeddingSRAttn(nn.Module):
         self._cached_hr_sh_block = sh
         return sh.to(dtype)
 
+
     def _apply_attention(
         self,
         features: torch.Tensor,
         hr_shape: tuple[int, int],
     ) -> torch.Tensor:
+        """
+        Apply block-local equivariant attention to HR features.
+        Handles padding so that all blocks are full-sized.
+        """
         if not self.use_attention or len(self.attention_blocks) == 0:
             return features
 
@@ -1012,7 +1171,11 @@ class IsoEmbeddingSRAttn(nn.Module):
             feat = feat.squeeze(0)
         return feat
 
+
     def _apply_pointwise_linear(self, layer: nn.Module, features: torch.Tensor) -> torch.Tensor:
+        """
+        Apply a pointwise linear layer to features, handling batched/unbatched input.
+        """
         batched = features.dim() == 3
         if not batched:
             return layer(features)
@@ -1020,11 +1183,16 @@ class IsoEmbeddingSRAttn(nn.Module):
         out = layer(features.reshape(B * N, C))
         return out.reshape(B, N, -1)
 
+
     def _forward_sr_features(
         self,
         feat_lr_a1: torch.Tensor,
         lr_shape: tuple[int, int],
     ) -> tuple[torch.Tensor, tuple[int, int]]:
+        """
+        Main SR feature pipeline: LR convs, upsampling, HR conv, attention.
+        Returns HR features and HR shape.
+        """
         if self.use_lr_conv1:
             feat = self.conv_lr1(feat_lr_a1, lr_shape)
         else:
@@ -1038,6 +1206,7 @@ class IsoEmbeddingSRAttn(nn.Module):
         feat_a1 = self._apply_attention(feat, hr_shape)
         return feat_a1, hr_shape
 
+
     def feature_loss_sr(
         self,
         lr_quats: torch.Tensor,
@@ -1045,6 +1214,10 @@ class IsoEmbeddingSRAttn(nn.Module):
         lr_shape: tuple[int, int],
         normalize_input: bool = False,
     ) -> torch.Tensor:
+        """
+        Compute MSE loss between predicted and target HR features (A1 irreps).
+        Used for feature-space supervision.
+        """
         lr_quats = lr_quats.to(self.device)
         hr_quats = hr_quats.to(self.device)
 
@@ -1078,12 +1251,16 @@ class IsoEmbeddingSRAttn(nn.Module):
         feat_hr, _ = self._forward_sr_features(feat_lr_a1, lr_shape)
         return F.mse_loss(feat_hr, feat_hr_tgt)
 
+
     def forward_sr(
         self,
         lr_quats: torch.Tensor,
         lr_shape: tuple[int, int],
         normalize_input: bool = True,
     ) -> torch.Tensor:
+        """
+        Forward pass for SR: input LR quaternions, output HR quaternions.
+        """
         lr_quats = lr_quats.to(self.device)
         if normalize_input:
             lr_quats = _normalize_quaternions(lr_quats)
@@ -1091,12 +1268,17 @@ class IsoEmbeddingSRAttn(nn.Module):
         feat_hr_a1, _ = self._forward_sr_features(feat_lr_a1, lr_shape)
         return self.decode(feat_hr_a1)
 
+
     def forward(
         self,
         quats: torch.Tensor,
         img_shape: tuple[int, int] | None = None,
         normalize_input: bool = True,
     ) -> torch.Tensor:
+        """
+        Forward pass: input quaternions (optionally with image shape), output HR quaternions.
+        If img_shape is provided, runs SR pipeline; otherwise, decodes input features directly.
+        """
         quats = quats.to(self.device)
         if quats.dim() != 2 or quats.shape[-1] != 4:
             raise ValueError(f"IsoEmbeddingSRAttn expects (N,4), got {tuple(quats.shape)}")
