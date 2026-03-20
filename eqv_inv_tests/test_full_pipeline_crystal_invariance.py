@@ -1,26 +1,22 @@
 """
 test_full_pipeline_crystal_invariance.py
 ==========================================
-Validates end-to-end crystal-group invariance of the SR feature loss.
+Validates end-to-end crystal-group invariance of the SR feature loss
+under BOTH left- and right-actions of the crystal group.
 
-Mathematical property tested
-----------------------------
-For all s ∈ crystal group S (FCC=24, HCP=12):
+Mathematical properties tested
+------------------------------
+LEFT-action (s ⊗ q):
+    feature_loss_sr( s⊗q_lr, s⊗q_hr ) ≈ feature_loss_sr( q_lr, q_hr )
+    Reason: enc_a1 is left-invariant → features unchanged → loss unchanged.
 
-    feature_loss_sr( quat_mul(s, q_lr), quat_mul(s, q_hr), lr_shape )
-        ≈  feature_loss_sr( q_lr, q_hr, lr_shape )
+RIGHT-action (q ⊗ s):
+    feature_loss_sr( q_lr⊗s, q_hr⊗s ) ≈ feature_loss_sr( q_lr, q_hr )
+    Reason: enc_a1 is right-EQUIVARIANT (enc(q⊗s) = D(s)·enc(q)).
+            SR network is also equivariant → D(s) factors out.
+            D(s) is orthogonal → MSE preserved: ‖D(s)·a − D(s)·b‖ = ‖a − b‖.
 
-Uses LEFT-action (s ⊗ q), consistent with enc_a1 LEFT-invariance confirmed
-by test_encoder_crystal_invariance.py.
-
-This holds because:
-  1. enc_a1 is left-crystal-group invariant  →  same LR/HR features
-  2. D is orthogonal  →  MSE is preserved under equivariant feature rotation
-  3. The spatial layers are equivariant  →  SR features rotate consistently
-  4. The MSE between two equivariantly-rotated tensors equals the original MSE
-
-The test uses decoder_steps=0 to skip the expensive quaternion optimiser
-(the feature_loss_sr does not use the decoder).
+Both actions leave the scalar loss invariant, but for distinct reasons.
 
 Run:  python eqv_inv_tests/test_full_pipeline_crystal_invariance.py
 """
@@ -39,13 +35,13 @@ from _helpers import (
 from models.SR_double_conv_SRattn_a1 import IsoEmbeddingSRAttn, LocalIsoCrystalEncoder
 
 # ── config ────────────────────────────────────────────────────────────────────
-LR_H, LR_W  = 4, 4
-SCALE        = 4
+LR_H, LR_W = 4, 4
+SCALE       = 4
 N_QUATS_LR  = LR_H * LR_W
 N_QUATS_HR  = N_QUATS_LR * SCALE * SCALE
-TOL          = 1e-4
-DEVICE       = torch.device("cpu")
-SEED         = 42
+TOL         = 1e-4
+DEVICE      = torch.device("cpu")
+SEED        = 42
 
 
 def _build_model(crystal: str, device: torch.device) -> IsoEmbeddingSRAttn:
@@ -56,54 +52,45 @@ def _build_model(crystal: str, device: torch.device) -> IsoEmbeddingSRAttn:
         upsample_residual=True,
         use_lr_conv1=True,
         use_lr_conv2=True,
-        use_attention=False,            # skip attention for speed
+        use_attention=False,
         decoder_cubochoric_resolution=1,
-        decoder_steps=0,               # skip decoder optimisation
+        decoder_steps=0,
         decoder_table_cache_dir=None,
     ).eval()
 
 
-def _test_loss_crystal_invariance(
+def _test_loss_invariance(
     model: IsoEmbeddingSRAttn,
     q_lr: torch.Tensor,
     q_hr: torch.Tensor,
     sym_ops: torch.Tensor,
     lr_shape: tuple[int, int],
+    left: bool,
 ) -> tuple[float, float, list[float]]:
     """
-    For each s ∈ sym_ops: apply right-action to both LR and HR quaternions,
-    compute feature_loss_sr, compare to original loss.
+    Tests loss invariance under left (s⊗q) or right (q⊗s) crystal group action.
     Returns (mean_rel_err, max_rel_err, per_op_errors).
     """
     with torch.no_grad():
         loss_ref = float(
-            model.feature_loss_sr(q_lr, q_hr, lr_shape=lr_shape, normalize_input=True)
-            .item()
+            model.feature_loss_sr(q_lr, q_hr, lr_shape=lr_shape, normalize_input=True).item()
         )
 
     errors = []
-    n_ops = sym_ops.shape[0]
-
-    for i in range(n_ops):
+    for i in range(sym_ops.shape[0]):
         s = sym_ops[i].unsqueeze(0)
-
-        q_lr_sym = normalize_quaternions(
-            quat_mul(s.expand(q_lr.shape[0], -1), q_lr)   # left-action
-        )
-        q_hr_sym = normalize_quaternions(
-            quat_mul(s.expand(q_hr.shape[0], -1), q_hr)   # left-action
-        )
+        if left:
+            q_lr_sym = normalize_quaternions(quat_mul(s.expand(q_lr.shape[0], -1), q_lr))
+            q_hr_sym = normalize_quaternions(quat_mul(s.expand(q_hr.shape[0], -1), q_hr))
+        else:
+            q_lr_sym = normalize_quaternions(quat_mul(q_lr, s.expand(q_lr.shape[0], -1)))
+            q_hr_sym = normalize_quaternions(quat_mul(q_hr, s.expand(q_hr.shape[0], -1)))
 
         with torch.no_grad():
             loss_sym = float(
-                model.feature_loss_sr(
-                    q_lr_sym, q_hr_sym, lr_shape=lr_shape, normalize_input=True
-                ).item()
+                model.feature_loss_sr(q_lr_sym, q_hr_sym, lr_shape=lr_shape, normalize_input=True).item()
             )
-
-        # relative difference in scalar loss values
-        err = abs(loss_sym - loss_ref) / (abs(loss_ref) + 1e-12)
-        errors.append(err)
+        errors.append(abs(loss_sym - loss_ref) / (abs(loss_ref) + 1e-12))
 
     t = torch.tensor(errors)
     return float(t.mean()), float(t.max()), errors
@@ -124,23 +111,22 @@ def main() -> None:
         )
 
         model = _build_model(crystal, DEVICE)
+        q_lr  = rand_quaternions(N_QUATS_LR, SEED,       DEVICE)
+        q_hr  = rand_quaternions(N_QUATS_HR, SEED + 100, DEVICE)
 
-        torch.manual_seed(SEED)
-        q_lr = rand_quaternions(N_QUATS_LR, SEED,       DEVICE)
-        q_hr = rand_quaternions(N_QUATS_HR, SEED + 100, DEVICE)
-
-        mean_e, max_e, per_op = _test_loss_crystal_invariance(
-            model, q_lr, q_hr, sym_ops, lr_shape
-        )
-        ok = report(
-            f"{crystal.upper()} feature_loss_sr right-crystal-group invariance",
-            max_e, TOL,
-            extra=f"mean={mean_e:.2e}  ref_loss≠0  over {n_ops} ops",
-        )
-        all_results.append(ok)
-
-        if not ok:
-            print(f"    Per-op errors: {[f'{e:.2e}' for e in per_op]}")
+        for action, left in [("left  s⊗q  (enc invariant)",    True),
+                              ("right q⊗s  (enc equivariant)",  False)]:
+            mean_e, max_e, per_op = _test_loss_invariance(
+                model, q_lr, q_hr, sym_ops, lr_shape, left=left
+            )
+            ok = report(
+                f"{crystal.upper()} feature_loss_sr {action}",
+                max_e, TOL,
+                extra=f"mean={mean_e:.2e}  over {n_ops} ops",
+            )
+            all_results.append(ok)
+            if not ok:
+                print(f"    Per-op: {[f'{e:.2e}' for e in per_op]}")
 
     summary(all_results)
 

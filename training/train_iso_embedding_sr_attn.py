@@ -53,7 +53,13 @@ def parse_args() -> argparse.Namespace:
         "--model_module",
         type=str,
         default="models.SR_double_conv_SRattn",
-        help="Dotted module path containing IsoEmbeddingSRAttn (default: models.SR_double_conv_SRattn)",
+        help="Dotted module path containing the model class (default: models.SR_double_conv_SRattn)",
+    )
+    parser.add_argument(
+        "--model_class",
+        type=str,
+        default="IsoEmbeddingSRAttn",
+        help="Class name to instantiate from model_module (default: IsoEmbeddingSRAttn)",
     )
     parser.add_argument(
         "--resume",
@@ -369,11 +375,16 @@ def _render_sr_hr_lr_ipf(
 
 def main() -> None:
     args = parse_args()
-    IsoEmbeddingSRAttn = importlib.import_module(args.model_module).IsoEmbeddingSRAttn
     exp_dir = Path(args.exp_dir)
     config_path = exp_dir / args.config
     run_config_path = exp_dir / "logs" / "run_config.json"
     cfg = load_and_prepare_config(config_path, run_config_path)
+
+    model_cfg = getattr(cfg, "model", {}) or {}
+    model_module = model_cfg.get("model_module", args.model_module) if isinstance(model_cfg, dict) else getattr(model_cfg, "model_module", args.model_module)
+    model_class = model_cfg.get("model_class", args.model_class) if isinstance(model_cfg, dict) else getattr(model_cfg, "model_class", args.model_class)
+    IsoEmbeddingSRAttn = getattr(importlib.import_module(model_module), model_class)
+    print(f"Model: {model_module}.{model_class}")
 
     seed = int(get_seed_from_config(cfg))
     set_seed(seed)
@@ -429,6 +440,16 @@ def main() -> None:
             seed=seed,
         )
 
+    import inspect
+    _init_params = set(inspect.signature(IsoEmbeddingSRAttn.__init__).parameters)
+    _residual_kwargs = {}
+    if "use_residual_lr1" in _init_params:
+        _residual_kwargs["use_residual_lr1"] = bool(getattr(cfg, "use_residual_lr1", False))
+    if "use_residual_lr2" in _init_params:
+        _residual_kwargs["use_residual_lr2"] = bool(getattr(cfg, "use_residual_lr2", False))
+    if "use_residual_hr1" in _init_params:
+        _residual_kwargs["use_residual_hr1"] = bool(getattr(cfg, "use_residual_hr1", False))
+
     model = IsoEmbeddingSRAttn(
         crystal=str(getattr(cfg, "crystal", "fcc")),
         d6_convention=str(getattr(cfg, "d6_convention", "z_axis")),
@@ -437,9 +458,7 @@ def main() -> None:
         upsample_residual=bool(getattr(cfg, "upsample_residual", True)),
         use_lr_conv1=bool(getattr(cfg, "use_lr_conv1", True)),
         use_lr_conv2=bool(getattr(cfg, "use_lr_conv2", True)),
-        use_residual_lr1=bool(getattr(cfg, "use_residual_lr1", False)),
-        use_residual_lr2=bool(getattr(cfg, "use_residual_lr2", False)),
-        use_residual_hr1=bool(getattr(cfg, "use_residual_hr1", False)),
+        **_residual_kwargs,
         use_attention=bool(getattr(cfg, "use_attention", True)),
         num_hr_attn_blocks=int(getattr(cfg, "num_hr_attn_blocks", 1)),
         hr_attn_num_channels=int(getattr(cfg, "hr_attn_num_channels", 8)),

@@ -57,6 +57,8 @@
   },
   "smoke_test": false,
   "model": {
-    "type": "iso_embedding_sr_attn"
+    "type": "iso_embedding_sr_attn",
+    "model_module": "models.SR_double_conv_SRattn_a1",
+    "model_class": "IsoEmbeddingSRAttn"
   }
 }

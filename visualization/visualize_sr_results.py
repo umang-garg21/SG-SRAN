@@ -241,9 +241,9 @@ def render_sr_hr_lr_side_by_side(
     dpi: int = 300,
 ):
     """
-    Render SR (Super-Resolution), HR (High-Resolution), and LR (Low-Resolution)
+    Render LR (Low-Resolution), SR (Super-Resolution), and HR (High-Resolution)
     quaternion orientation maps in a 3-row layout:
-        SR (top), HR (middle), LR (bottom)
+        LR (top), SR (middle), HR (bottom)
 
     Parameters
     ----------

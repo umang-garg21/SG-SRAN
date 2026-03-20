@@ -19,12 +19,12 @@
   "crystal": "hcp",
   "d6_convention": "z_axis",
   "upsample_residual": true,
-  "use_lr_conv1": false,
+  "use_lr_conv1": true,
   "use_lr_conv2": false,
-  "use_residual_lr1": false,
+  "use_residual_lr1": true,
   "use_residual_lr2": false,
-  "use_residual_hr1": false,
-  "use_attention": false,
+  "use_residual_hr1": true,
+  "use_attention": true,
   "num_hr_attn_blocks": 0,
   "hr_attn_num_channels": 4,
   "hr_attn_block_size": 16,
@@ -59,6 +59,8 @@
   },
   "smoke_test": false,
   "model": {
-    "type": "iso_embedding_sr_attn"
+    "type": "iso_embedding_sr_attn",
+    "model_module": "models.SR_double_conv_SRattn_a1",
+    "model_class": "IsoEmbeddingSRAttn"
   }
 }

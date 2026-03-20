@@ -1,10 +1,10 @@
 {
   "dataset_root": "/data/home/umang/Materials/Materials_data_mount/datasets/Ti_Al_1pct_QSR_x4",
-  "epochs": 500,
-  "batch_size": 10,
-  "num_workers": 8,
+  "epochs": 50,
+  "batch_size": 4,
+  "num_workers": 0,
   "memory_debug_every": 0,
-  "cuda_empty_cache_every": 0,
+  "cuda_empty_cache_every": 20,
   "pin_memory": true,
   "min_free_cuda_gb": 4.0,
   "preload": true,
@@ -19,13 +19,7 @@
   "crystal": "hcp",
   "d6_convention": "z_axis",
   "upsample_residual": true,
-  "use_lr_conv1": true,
-  "use_lr_conv2": false,
-  "use_residual_lr1": true,
-  "use_residual_lr2": false,
-  "use_residual_hr1": false,
-  "use_attention": false,
-  "num_hr_attn_blocks": 0,
+  "num_hr_attn_blocks": 1,
   "hr_attn_num_channels": 4,
   "hr_attn_block_size": 16,
   "hr_attn_tp_out_chunk_size": 128,
@@ -33,9 +27,10 @@
   "use_amp": false,
   "amp_dtype": "bf16",
   "decoder_cubochoric_resolution": 1,
-  "decoder_num_starts": 8,
-  "decoder_steps": 12,
-  "decoder_lr": 0.03,
+  "decoder_num_starts": 2,
+  "decoder_steps": 0,
+  "decoder_lr": 0.05,
+  "decoder_method": "cubochoric",
   "decoder_max_table_rows": null,
   "decoder_table_cache_dir": "out/decoder_lookup_tables",
   "decoder_backend": "optimizing",
@@ -59,8 +54,6 @@
   },
   "smoke_test": false,
   "model": {
-    "type": "iso_embedding_sr_attn",
-    "model_module": "models.SR_double_conv_SRattn_a1",
-    "model_class": "IsoEmbeddingSRAttn"
+    "type": "iso_embedding_sr_attn"
   }
 }

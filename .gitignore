@@ -248,3 +248,6 @@ out/tmp_hcp_export.csv
 *.png
 diagnostics/
 outputs/
+
+# Ignore the entire Paper folder
+Paper/
