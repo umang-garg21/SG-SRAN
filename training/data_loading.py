@@ -51,6 +51,9 @@ def build_dataloader(
     rank: int = 0,
     world_size: int = 1,
     seed: int = 42,  # Seed parameter for reproducibility
+    return_lr_boundary_map: bool = False,
+    lr_boundary_angle_deg: float = 5.0,
+    lr_boundary_mark_both_sides: bool = True,
 ) -> DataLoader:
     """
     Build a DataLoader for quaternion SR datasets.
@@ -87,6 +90,12 @@ def build_dataloader(
         Total number of processes for DDP
     seed : int
         Random seed for reproducibility (default: 42)
+    return_lr_boundary_map : bool
+        If True, dataset returns (lr, hr, lr_boundary_map) batches.
+    lr_boundary_angle_deg : float
+        Quaternion-angle threshold (degrees) used to extract LR boundaries.
+    lr_boundary_mark_both_sides : bool
+        If True, mark both pixels adjacent to a boundary edge.
     Returns
     -------
     DataLoader
@@ -98,6 +107,9 @@ def build_dataloader(
         preload_torch=preload_torch,
         pin_memory=pin_memory,
         take_first=take_first,
+        return_lr_boundary_map=return_lr_boundary_map,
+        lr_boundary_angle_deg=lr_boundary_angle_deg,
+        lr_boundary_mark_both_sides=lr_boundary_mark_both_sides,
     )
 
     # Generator for deterministic shuffling

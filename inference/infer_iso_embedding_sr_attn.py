@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import importlib
+import inspect
 import json
 import os
 import sys
@@ -16,7 +18,6 @@ from tqdm import tqdm
 # Make project imports robust when run as a script.
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from models.SR_double_conv_SRattn import IsoEmbeddingSRAttn
 from training.config_utils import load_and_prepare_config
 from training.data_loading import build_dataloader
 from utils.symmetry_utils import resolve_symmetry
@@ -102,6 +103,18 @@ def _to_hwc_quat_single(q: torch.Tensor) -> torch.Tensor:
     raise ValueError(f"Expected quaternion axis of size 4 in dim=0 or dim=-1, got {tuple(q.shape)}")
 
 
+def _unpack_batch(batch) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    if not isinstance(batch, (tuple, list)):
+        raise ValueError(f"Expected batch tuple/list, got {type(batch)}")
+    if len(batch) == 2:
+        lr, hr = batch
+        return lr, hr, None
+    if len(batch) == 3:
+        lr, hr, lr_boundary_map = batch
+        return lr, hr, lr_boundary_map
+    raise ValueError(f"Expected batch length 2 or 3, got {len(batch)}")
+
+
 def _resolve_checkpoint(cfg, exp_dir: Path, ckpt_arg: str) -> Path:
     ckpt_candidate = Path(ckpt_arg)
     if ckpt_candidate.is_absolute():
@@ -110,35 +123,147 @@ def _resolve_checkpoint(cfg, exp_dir: Path, ckpt_arg: str) -> Path:
     return checkpoints_dir / ckpt_arg
 
 
+def _resolve_model_class(cfg):
+    model_cfg = getattr(cfg, "model", {}) or {}
+    if isinstance(model_cfg, dict):
+        model_module = model_cfg.get(
+            "model_module",
+            getattr(cfg, "model_module", "models.SR_double_conv_SRattn_a1"),
+        )
+        model_class = model_cfg.get(
+            "model_class",
+            getattr(cfg, "model_class", "IsoEmbeddingSRAttn"),
+        )
+    else:
+        model_module = getattr(
+            model_cfg,
+            "model_module",
+            getattr(cfg, "model_module", "models.SR_double_conv_SRattn_a1"),
+        )
+        model_class = getattr(
+            model_cfg,
+            "model_class",
+            getattr(cfg, "model_class", "IsoEmbeddingSRAttn"),
+        )
+    return getattr(importlib.import_module(model_module), model_class), model_module, model_class
+
+
 def _load_model_from_checkpoint(
     cfg,
     checkpoint_path: Path,
     device: torch.device,
-) -> IsoEmbeddingSRAttn:
-    model = IsoEmbeddingSRAttn(
-        crystal=str(getattr(cfg, "crystal", "fcc")),
-        d6_convention=str(getattr(cfg, "d6_convention", "z_axis")),
-        device=device,
-        upsample_factor=int(getattr(cfg, "scale", 4)),
-        upsample_residual=bool(getattr(cfg, "upsample_residual", True)),
-        num_hr_attn_blocks=int(getattr(cfg, "num_hr_attn_blocks", 1)),
-        hr_attn_num_channels=int(getattr(cfg, "hr_attn_num_channels", 8)),
-        hr_attn_block_size=int(getattr(cfg, "hr_attn_block_size", 16)),
-        hr_attn_tp_out_chunk_size=getattr(cfg, "hr_attn_tp_out_chunk_size", 2048),
-        hr_attn_checkpoint=bool(getattr(cfg, "hr_attn_checkpoint", False)),
-        decoder_cubochoric_resolution=int(getattr(cfg, "decoder_cubochoric_resolution", 1)),
-        decoder_num_starts=int(getattr(cfg, "decoder_num_starts", 2)),
-        decoder_steps=int(getattr(cfg, "decoder_steps", 1)),
-        decoder_lr=float(getattr(cfg, "decoder_lr", 0.05)),
-        decoder_method=str(getattr(cfg, "decoder_method", "cubochoric")),
-        decoder_max_table_rows=getattr(cfg, "decoder_max_table_rows", None),
-        decoder_table_cache_dir=getattr(
-            cfg, "decoder_table_cache_dir", "out/decoder_lookup_tables"
-        ),
-        decoder_backend=str(getattr(cfg, "decoder_backend", "optimizing")),
-    ).to(device)
+) -> torch.nn.Module:
+    model_cls, model_module, model_class = _resolve_model_class(cfg)
+    print(f"Model: {model_module}.{model_class}")
 
-    ckpt = torch.load(checkpoint_path, map_location=device)
+    init_params = set(inspect.signature(model_cls.__init__).parameters)
+    model_kwargs = {
+        "crystal": str(getattr(cfg, "crystal", "fcc")),
+        "d6_convention": str(getattr(cfg, "d6_convention", "z_axis")),
+        "device": device,
+        "upsample_factor": getattr(cfg, "upsample_factor", getattr(cfg, "scale", 4)),
+        "upsample_context_kernel_size": int(getattr(cfg, "upsample_context_kernel_size", 3)),
+        "upsample_residual": bool(getattr(cfg, "upsample_residual", True)),
+        "upsample_transpose_overlap": int(getattr(cfg, "upsample_transpose_overlap", 2)),
+        "upsample_boundary_threshold": float(getattr(cfg, "upsample_boundary_threshold", 0.5)),
+        "upsample_boundary_smooth_sigma": float(getattr(cfg, "upsample_boundary_smooth_sigma", 2.0)),
+        "upsample_boundary_smooth_iters": int(getattr(cfg, "upsample_boundary_smooth_iters", 12)),
+        "upsample_boundary_sdf_shift": float(getattr(cfg, "upsample_boundary_sdf_shift", 0.7)),
+        "use_lr_conv1": bool(getattr(cfg, "use_lr_conv1", True)),
+        "use_lr_conv2": bool(getattr(cfg, "use_lr_conv2", True)),
+        "use_lr_conv3": bool(getattr(cfg, "use_lr_conv3", False)),
+        "lr_conv1_kernel_size": int(getattr(cfg, "lr_conv1_kernel_size", 3)),
+        "lr_conv2_kernel_size": int(getattr(cfg, "lr_conv2_kernel_size", 9)),
+        "lr_conv3_kernel_size": int(getattr(cfg, "lr_conv3_kernel_size", 9)),
+        "lr_conv3_dilation": int(getattr(cfg, "lr_conv3_dilation", 1)),
+        "hr_conv1_kernel_size": int(getattr(cfg, "hr_conv1_kernel_size", 3)),
+        "use_residual_lr1": bool(getattr(cfg, "use_residual_lr1", False)),
+        "use_residual_lr2": bool(getattr(cfg, "use_residual_lr2", False)),
+        "use_residual_lr3": bool(getattr(cfg, "use_residual_lr3", False)),
+        "use_residual_hr1": bool(getattr(cfg, "use_residual_hr1", False)),
+        "use_attention": bool(getattr(cfg, "use_attention", True)),
+        "use_grain_attention": bool(getattr(cfg, "use_grain_attention", True)),
+        "grain_attention_boundary_source": str(
+            getattr(cfg, "grain_attention_boundary_source", "hr")
+        ),
+        "enable_lr_grain_attention_layer": bool(
+            getattr(cfg, "enable_lr_grain_attention_layer", getattr(cfg, "use_lr_grain_attention", False))
+        ),
+        "enable_hr_grain_attention_layer": bool(
+            getattr(
+                cfg,
+                "enable_hr_grain_attention_layer",
+                bool(getattr(cfg, "use_attention", True)) and bool(getattr(cfg, "use_grain_attention", True)),
+            )
+        ),
+        "enable_hr_block_attention_layer": bool(
+            getattr(
+                cfg,
+                "enable_hr_block_attention_layer",
+                bool(getattr(cfg, "use_attention", True)) and (not bool(getattr(cfg, "use_grain_attention", True))),
+            )
+        ),
+        "hr_grain_attention_boundary_source": str(
+            getattr(
+                cfg,
+                "hr_grain_attention_boundary_source",
+                getattr(cfg, "grain_attention_boundary_source", "hr"),
+            )
+        ),
+        "grain_attn_boundary_threshold": float(
+            getattr(cfg, "grain_attn_boundary_threshold", 0.5)
+        ),
+        "use_lr_grain_attention": bool(getattr(cfg, "use_lr_grain_attention", False)),
+        "num_lr_grain_attn_blocks": int(getattr(cfg, "num_lr_grain_attn_blocks", 1)),
+        "lr_grain_attn_num_channels": int(getattr(cfg, "lr_grain_attn_num_channels", 8)),
+        "lr_grain_attn_checkpoint": bool(getattr(cfg, "lr_grain_attn_checkpoint", False)),
+        "lr_grain_attn_boundary_threshold": float(
+            getattr(cfg, "lr_grain_attn_boundary_threshold", 0.5)
+        ),
+        "num_hr_attn_blocks": int(getattr(cfg, "num_hr_attn_blocks", 1)),
+        "hr_attn_num_channels": int(getattr(cfg, "hr_attn_num_channels", 8)),
+        "hr_attn_block_size": int(getattr(cfg, "hr_attn_block_size", 16)),
+        "hr_attn_tp_out_chunk_size": getattr(cfg, "hr_attn_tp_out_chunk_size", 2048),
+        "hr_attn_checkpoint": bool(getattr(cfg, "hr_attn_checkpoint", False)),
+        "use_boundary_gate": bool(getattr(cfg, "use_boundary_gate", False)),
+        "num_lr_attn_blocks": int(getattr(cfg, "num_lr_attn_blocks", 0)),
+        "lr_attn_block_size": int(getattr(cfg, "lr_attn_block_size", 8)),
+        "use_hr_conv1": bool(getattr(cfg, "use_hr_conv1", True)),
+        "use_masked_spatial_conv": bool(getattr(cfg, "use_masked_spatial_conv", True)),
+        "use_masked_upsample": bool(getattr(cfg, "use_masked_upsample", True)),
+        "spatial_mask_tau": float(getattr(cfg, "spatial_mask_tau", 0.6)),
+        "spatial_mask_min": float(getattr(cfg, "spatial_mask_min", 0.0)),
+        "spatial_mask_strength": float(getattr(cfg, "spatial_mask_strength", 1.0)),
+        "spatial_hard_threshold": float(getattr(cfg, "spatial_hard_threshold", 0.85)),
+        "upsample_mask_tau": getattr(cfg, "upsample_mask_tau", None),
+        "upsample_mask_min": getattr(cfg, "upsample_mask_min", None),
+        "upsample_mask_strength": getattr(cfg, "upsample_mask_strength", None),
+        "upsample_hard_threshold": getattr(cfg, "upsample_hard_threshold", None),
+        "mask_eps": float(getattr(cfg, "mask_eps", 1e-6)),
+        "hr_attn_mask_tau": float(getattr(cfg, "hr_attn_mask_tau", 0.6)),
+        "hr_attn_mask_spatial_sigma": float(getattr(cfg, "hr_attn_mask_spatial_sigma", 0.35)),
+        "hr_attn_mask_min": float(getattr(cfg, "hr_attn_mask_min", 0.0)),
+        "hr_attn_mask_strength": float(getattr(cfg, "hr_attn_mask_strength", 1.0)),
+        "hr_attn_hard_threshold": float(getattr(cfg, "hr_attn_hard_threshold", 0.85)),
+        "decoder_cubochoric_resolution": int(getattr(cfg, "decoder_cubochoric_resolution", 1)),
+        "decoder_num_starts": int(getattr(cfg, "decoder_num_starts", 2)),
+        "decoder_steps": int(getattr(cfg, "decoder_steps", 1)),
+        "decoder_lr": float(getattr(cfg, "decoder_lr", 0.05)),
+        "decoder_method": str(getattr(cfg, "decoder_method", "cubochoric")),
+        "decoder_max_table_rows": getattr(cfg, "decoder_max_table_rows", None),
+        "decoder_table_cache_dir": getattr(cfg, "decoder_table_cache_dir", "out/decoder_lookup_tables"),
+        "decoder_backend": str(getattr(cfg, "decoder_backend", "optimizing")),
+    }
+    model_kwargs = {k: v for k, v in model_kwargs.items() if k in init_params}
+    model = model_cls(**model_kwargs).to(device)
+
+    try:
+        ckpt = torch.load(checkpoint_path, map_location=device, weights_only=True)
+    except TypeError:
+        ckpt = torch.load(checkpoint_path, map_location=device)
+    except Exception:
+        ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+
     state_dict = ckpt.get("model_state_dict", ckpt)
     model.load_state_dict(state_dict, strict=True)
     model.eval()
@@ -162,6 +287,23 @@ def main() -> None:
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
 
     split = str(args.split).capitalize()
+    model_cls, _, _ = _resolve_model_class(cfg)
+    forward_sr_params_cls = inspect.signature(model_cls.forward_sr).parameters
+    model_supports_lr_boundary = "lr_boundary_map" in forward_sr_params_cls
+    model_requires_lr_boundary = (
+        model_supports_lr_boundary
+        and forward_sr_params_cls["lr_boundary_map"].default is inspect._empty
+    )
+    use_lr_boundary_map = bool(getattr(cfg, "use_lr_boundary_map", model_supports_lr_boundary))
+    if model_requires_lr_boundary:
+        use_lr_boundary_map = True
+    lr_boundary_angle_deg = float(getattr(cfg, "lr_boundary_angle_deg", 5.0))
+    lr_boundary_mark_both_sides = bool(getattr(cfg, "lr_boundary_mark_both_sides", True))
+    print(
+        f"LR boundary maps from dataloader: {use_lr_boundary_map} "
+        f"(model supports={model_supports_lr_boundary}, requires={model_requires_lr_boundary})"
+    )
+
     if args.take_first is not None:
         take_first = int(args.take_first)
     else:
@@ -180,6 +322,9 @@ def main() -> None:
         shuffle=False,
         take_first=take_first,
         seed=int(getattr(cfg, "seed", 42)),
+        return_lr_boundary_map=use_lr_boundary_map,
+        lr_boundary_angle_deg=lr_boundary_angle_deg,
+        lr_boundary_mark_both_sides=lr_boundary_mark_both_sides,
     )
 
     model = _load_model_from_checkpoint(cfg, checkpoint_path, device=device)
@@ -196,20 +341,32 @@ def main() -> None:
 
     sym_class = resolve_symmetry(getattr(cfg, "symmetry_group", "O"))
     records = []
+    forward_sr_params = inspect.signature(model.forward_sr).parameters
+    forward_supports_lr_boundary = "lr_boundary_map" in forward_sr_params
+    forward_requires_lr_boundary = (
+        forward_supports_lr_boundary
+        and forward_sr_params["lr_boundary_map"].default is inspect._empty
+    )
 
     total_written = 0
     with torch.no_grad():
-        for bidx, (lr_batch, hr_batch) in enumerate(tqdm(loader, desc=f"Infer-{split}", leave=False)):
+        for bidx, batch in enumerate(tqdm(loader, desc=f"Infer-{split}", leave=False)):
             if args.max_batches is not None and bidx >= int(args.max_batches):
                 break
 
+            lr_batch, hr_batch, lr_boundary_batch = _unpack_batch(batch)
             lr_batch = lr_batch.to(device=device, dtype=torch.float32, non_blocking=True)
             hr_batch = hr_batch.to(device=device, dtype=torch.float32, non_blocking=True)
+            if lr_boundary_batch is not None:
+                lr_boundary_batch = lr_boundary_batch.to(
+                    device=device, dtype=torch.float32, non_blocking=True
+                )
             bsz = int(lr_batch.shape[0])
 
             for j in range(bsz):
                 lr = lr_batch[j]
                 hr = hr_batch[j]
+                lr_boundary = lr_boundary_batch[j] if lr_boundary_batch is not None else None
 
                 lr_flat, lr_shape = _flatten_quat_chw(lr)
                 hr_hwc = _to_hwc_quat_single(hr)
@@ -218,7 +375,18 @@ def main() -> None:
                 # Optimizing decoder performs an internal gradient-based solve.
                 # Keep no_grad for the outer loop, but enable grad for decode.
                 with torch.enable_grad():
-                    sr_flat = model.forward_sr(lr_flat, lr_shape=lr_shape, normalize_input=True)
+                    forward_kwargs = {
+                        "lr_shape": lr_shape,
+                        "normalize_input": True,
+                    }
+                    if forward_supports_lr_boundary:
+                        if lr_boundary is None and forward_requires_lr_boundary:
+                            raise ValueError(
+                                "Model forward_sr requires lr_boundary_map but dataloader did not provide it."
+                            )
+                        if lr_boundary is not None:
+                            forward_kwargs["lr_boundary_map"] = lr_boundary
+                    sr_flat = model.forward_sr(lr_flat, **forward_kwargs)
                 if int(sr_flat.shape[0]) != int(hr_h * hr_w):
                     raise ValueError(
                         f"SR size mismatch: got N={int(sr_flat.shape[0])}, expected {int(hr_h * hr_w)}"

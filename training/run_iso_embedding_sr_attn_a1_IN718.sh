@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-EXP_DIR="$PROJECT_ROOT/experiments/Ti_Al_1pct/iso_embedding_sr_attn_hcp_01_2ndLR"
+EXP_DIR="$PROJECT_ROOT/experiments/IN718/iso_embedding_sr_attn_boundary_aware_01"
 CONFIG="config_new.json"
 GPU_IDS="0"
 RESUME=""

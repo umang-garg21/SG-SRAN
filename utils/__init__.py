@@ -10,6 +10,7 @@ from utils.quat_ops import (
     to_scalar_first,
     to_scalar_last,
     to_spatial_quat,
+    reduce_to_fz_min_angle,
 )
 from utils.symmetry_utils import canon_symmetry_str, generate_symmetry_files, resolve_symmetry
 
@@ -26,4 +27,5 @@ __all__ = [
     "to_scalar_first",
     "to_scalar_last",
     "to_spatial_quat",
+    "reduce_to_fz_min_angle",
 ]

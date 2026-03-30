@@ -17,7 +17,7 @@
   "upsample_residual": true,
   "num_hr_attn_blocks": 1,
   "hr_attn_num_channels": 8,
-  "hr_attn_block_size": 16,
+  "hr_attn_block_size": 64,
   "decoder_cubochoric_resolution": 1,
   "decoder_num_starts": 2,
   "decoder_steps": 1,

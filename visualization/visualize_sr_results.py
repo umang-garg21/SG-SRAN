@@ -292,6 +292,10 @@ def render_sr_hr_lr_side_by_side(
     # -------------------------------------------------------------------------
     # Convert to IPF RGB maps
     # -------------------------------------------------------------------------
+    lr_h, lr_w = lr_q_arr.shape[:2]
+    sr_h, sr_w = sr_q_arr.shape[:2]
+    hr_h, hr_w = hr_q_arr.shape[:2]
+
     sr_rgb = render_ipf_rgb(sr_q_arr, sym_class, ref_dir=ref_dir)
     hr_rgb = render_ipf_rgb(hr_q_arr, sym_class, ref_dir=ref_dir)
     lr_rgb = render_ipf_rgb(lr_q_arr, sym_class, ref_dir=ref_dir)
@@ -300,21 +304,23 @@ def render_sr_hr_lr_side_by_side(
     ncols = 3 if multi_ref else 1
     key_cols = 1 if include_key else 0
     total_cols = ncols + key_cols
-    total_rows = 3  # SR, HR, LR
+    total_rows = 3  # LR, SR, HR
 
     # -------------------------------------------------------------------------
-    # Figure setup
+    # Figure setup — LR row is physically smaller in proportion to its resolution
     # -------------------------------------------------------------------------
+    lr_scale = hr_h / lr_h  # e.g. 4.0 for 4× upsampling
+    row_h = 4.5
     base_w = 5.0
     key_w = 2.6 if include_key else 0
     fig_w = base_w * ncols + key_w
-    fig_h = 3 * 4.5
+    fig_h = row_h * (2 + 1.0 / lr_scale)
     fig = plt.figure(figsize=(fig_w, fig_h))
     gs = fig.add_gridspec(
         total_rows,
         total_cols,
         width_ratios=[1] * ncols + ([0.9] if include_key else []),
-        height_ratios=[1, 1, 1],
+        height_ratios=[1.0 / lr_scale, 1, 1],
         hspace=0.3,
         wspace=0.25,
     )
@@ -326,19 +332,19 @@ def render_sr_hr_lr_side_by_side(
         ax.axis("off")
 
     # -------------------------------------------------------------------------
-    # Plot SR (row 0), HR (row 1), LR (row 2)
+    # Plot LR (row 0), SR (row 1), HR (row 2)
     # -------------------------------------------------------------------------
     if multi_ref:
-        for j, (name, img) in enumerate(zip(("X", "Y", "Z"), sr_rgb)):
-            _imshow(fig.add_subplot(gs[0, j]), img, f"SR IPF-{name}")
-        for j, (name, img) in enumerate(zip(("X", "Y", "Z"), hr_rgb)):
-            _imshow(fig.add_subplot(gs[1, j]), img, f"HR IPF-{name}")
         for j, (name, img) in enumerate(zip(("X", "Y", "Z"), lr_rgb)):
-            _imshow(fig.add_subplot(gs[2, j]), img, f"LR IPF-{name}")
+            _imshow(fig.add_subplot(gs[0, j]), img, f"LR IPF-{name} ({lr_h}×{lr_w} px)")
+        for j, (name, img) in enumerate(zip(("X", "Y", "Z"), sr_rgb)):
+            _imshow(fig.add_subplot(gs[1, j]), img, f"SR IPF-{name} ({sr_h}×{sr_w} px)")
+        for j, (name, img) in enumerate(zip(("X", "Y", "Z"), hr_rgb)):
+            _imshow(fig.add_subplot(gs[2, j]), img, f"HR IPF-{name} ({hr_h}×{hr_w} px)")
     else:
-        _imshow(fig.add_subplot(gs[0, 0]), sr_rgb, f"SR IPF-{ref_dir.upper()}")
-        _imshow(fig.add_subplot(gs[1, 0]), hr_rgb, f"HR IPF-{ref_dir.upper()}")
-        _imshow(fig.add_subplot(gs[2, 0]), lr_rgb, f"LR IPF-{ref_dir.upper()}")
+        _imshow(fig.add_subplot(gs[0, 0]), lr_rgb, f"LR IPF-{ref_dir.upper()} ({lr_h}×{lr_w} px)")
+        _imshow(fig.add_subplot(gs[1, 0]), sr_rgb, f"SR IPF-{ref_dir.upper()} ({sr_h}×{sr_w} px)")
+        _imshow(fig.add_subplot(gs[2, 0]), hr_rgb, f"HR IPF-{ref_dir.upper()} ({hr_h}×{hr_w} px)")
 
     # -------------------------------------------------------------------------
     # IPF color key

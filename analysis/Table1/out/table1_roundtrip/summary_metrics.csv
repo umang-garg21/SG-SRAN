@@ -1,0 +1,5 @@
+dataset_label,variant_label,num_scans,mean_of_scan_mean_dS_rad,std_of_scan_mean_dS_rad,weighted_mean_dS_rad,paper_value
+IN718 (FCC),LUT lookup only (no refinement),147,0.007619833453323971,0.0005521483611802347,0.007619833453323971,0.0076 +/- 0.0006
+IN718 (FCC),"LUT + local refinement (12 steps, 8 starts)",147,0.011785319436113445,0.0009795117746622462,0.011785319436113445,0.0118 +/- 0.0010
+Ti-6Al-4V (HCP),LUT lookup only (no refinement),133,0.007921559767643535,0.0006178206534460484,0.007921559767643535,0.0079 +/- 0.0006
+Ti-6Al-4V (HCP),"LUT + local refinement (12 steps, 8 starts)",133,0.01828368847027309,0.0012015384128972032,0.01828368847027309,0.0183 +/- 0.0012

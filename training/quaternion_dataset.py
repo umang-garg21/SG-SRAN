@@ -8,6 +8,7 @@ Description: Quaternion super-resolution dataset class.
 """
 
 
+import math
 import os
 import re
 import glob
@@ -43,10 +44,12 @@ class QuaternionDataset(Dataset):
 
     Returns
     -------
-    LR : torch.float32 (4,h,w)
+    LR : torch.float32 (4,h,w) or (h,w,4)
         Low-resolution quaternion image.
-    HR : torch.float32 (4,H,W)
+    HR : torch.float32 (4,H,W) or (H,W,4)
         High-resolution quaternion image.
+    LR boundary map : torch.float32 (h,w), optional
+        Returned when `return_lr_boundary_map=True`.
     """
 
     _NAME_RE = re.compile(
@@ -63,6 +66,9 @@ class QuaternionDataset(Dataset):
         preload_torch: bool = False,
         preload_workers: int = 8,
         pin_memory: bool = True,
+        return_lr_boundary_map: bool = False,
+        lr_boundary_angle_deg: float = 5.0,
+        lr_boundary_mark_both_sides: bool = False,
     ):
         self.root = dataset_root
         self.split = split.capitalize()
@@ -70,6 +76,9 @@ class QuaternionDataset(Dataset):
         self.preload_torch = preload_torch
         self.preload_workers = preload_workers
         self.pin_memory = pin_memory
+        self.return_lr_boundary_map = bool(return_lr_boundary_map)
+        self.lr_boundary_angle_deg = float(lr_boundary_angle_deg)
+        self.lr_boundary_mark_both_sides = bool(lr_boundary_mark_both_sides)
 
         # ------------------------------------------------------------
         # Load metadata
@@ -125,6 +134,7 @@ class QuaternionDataset(Dataset):
         # ------------------------------------------------------------
         self._preloaded_lr = None
         self._preloaded_hr = None
+        self._preloaded_lr_boundary = None
 
         if preload:
 
@@ -141,14 +151,25 @@ class QuaternionDataset(Dataset):
                 if not hr_arr.flags.writeable:
                     hr_arr = np.array(hr_arr, copy=True)
                 if preload_torch:
-                    return torch.from_numpy(lr_arr), torch.from_numpy(hr_arr)
+                    lr_t = torch.from_numpy(lr_arr)
+                    hr_t = torch.from_numpy(hr_arr)
+                    if self.return_lr_boundary_map:
+                        lr_bmap = self._compute_lr_boundary_map_torch(lr_t)
+                        return lr_t, hr_t, lr_bmap
+                    return lr_t, hr_t
+                if self.return_lr_boundary_map:
+                    lr_bmap = self._compute_lr_boundary_map_torch(torch.from_numpy(lr_arr))
+                    return lr_arr, hr_arr, lr_bmap.numpy()
                 return lr_arr, hr_arr
 
             n_workers = min(self.preload_workers, len(self.pairs), os.cpu_count() or 1)
             with ThreadPoolExecutor(max_workers=n_workers) as ex:
                 results = list(ex.map(load_pair, self.pairs))
 
-            self._preloaded_lr, self._preloaded_hr = zip(*results)
+            if self.return_lr_boundary_map:
+                self._preloaded_lr, self._preloaded_hr, self._preloaded_lr_boundary = zip(*results)
+            else:
+                self._preloaded_lr, self._preloaded_hr = zip(*results)
 
     # ------------------------------------------------------------
     # Helpers
@@ -167,22 +188,70 @@ class QuaternionDataset(Dataset):
             arr = arr.astype(np.float32)
         return arr
 
+    @staticmethod
+    def _to_hwc_quat_torch(q: torch.Tensor) -> torch.Tensor:
+        """
+        Convert rank-3 quaternion image to (H,W,4).
+        Accepts (4,H,W) or (H,W,4).
+        """
+        if q.dim() != 3:
+            raise ValueError(f"Expected rank-3 quaternion image, got {tuple(q.shape)}")
+        if q.shape[0] == 4:
+            return q.permute(1, 2, 0)
+        if q.shape[-1] == 4:
+            return q
+        raise ValueError(f"Expected quaternion axis of size 4 in dim=0 or dim=-1, got {tuple(q.shape)}")
+
+    def _compute_lr_boundary_map_torch(self, lr_q: torch.Tensor) -> torch.Tensor:
+        """
+        Build a binary LR boundary map from adjacent quaternion dissimilarity.
+        """
+        q = self._to_hwc_quat_torch(lr_q).to(dtype=torch.float32)
+        q = q / q.norm(dim=-1, keepdim=True).clamp_min(1e-8)
+
+        h, w, _ = q.shape
+        boundary = torch.zeros((h, w), dtype=torch.float32)
+
+        theta = max(0.0, min(180.0, float(self.lr_boundary_angle_deg)))
+        cos_half = float(math.cos(math.radians(0.5 * theta)))
+
+        dot_x = (q[:, 1:, :] * q[:, :-1, :]).sum(dim=-1).abs().clamp(0.0, 1.0)
+        dot_y = (q[1:, :, :] * q[:-1, :, :]).sum(dim=-1).abs().clamp(0.0, 1.0)
+        b_x = (dot_x < cos_half).to(dtype=torch.float32)
+        b_y = (dot_y < cos_half).to(dtype=torch.float32)
+
+        if self.lr_boundary_mark_both_sides:
+            boundary[:, 1:] = torch.maximum(boundary[:, 1:], b_x)
+            boundary[:, :-1] = torch.maximum(boundary[:, :-1], b_x)
+            boundary[1:, :] = torch.maximum(boundary[1:, :], b_y)
+            boundary[:-1, :] = torch.maximum(boundary[:-1, :], b_y)
+        else:
+            boundary[:, 1:] = torch.maximum(boundary[:, 1:], b_x)
+            boundary[1:, :] = torch.maximum(boundary[1:, :], b_y)
+        return boundary
+
     # ------------------------------------------------------------
     # Dataset API
     # ------------------------------------------------------------
     def __len__(self) -> int:
         return len(self.pairs)
 
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor] | Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         # Fastest path: fully preloaded as torch tensors
         if self._preloaded_lr is not None and self.preload_torch:
             lr_t = self._preloaded_lr[idx]
             hr_t = self._preloaded_hr[idx]
+            lr_bmap_t = self._preloaded_lr_boundary[idx] if self.return_lr_boundary_map else None
 
         # Preloaded as numpy arrays
         elif self._preloaded_lr is not None:
             lr_t = torch.from_numpy(self._preloaded_lr[idx])
             hr_t = torch.from_numpy(self._preloaded_hr[idx])
+            lr_bmap_t = (
+                torch.from_numpy(self._preloaded_lr_boundary[idx])
+                if self.return_lr_boundary_map
+                else None
+            )
 
         # Lazy load with memmap fallback
         else:
@@ -201,10 +270,19 @@ class QuaternionDataset(Dataset):
 
             lr_t = torch.from_numpy(lr_arr)
             hr_t = torch.from_numpy(hr_arr)
+            lr_bmap_t = (
+                self._compute_lr_boundary_map_torch(lr_t)
+                if self.return_lr_boundary_map
+                else None
+            )
 
         # Note: do NOT call .pin_memory() here inside the worker process.
         # Let the DataLoader handle pinning (it will pin the collated batch
         # in the main process when DataLoader(pin_memory=True) is used).
+        if self.return_lr_boundary_map:
+            if lr_bmap_t is None:
+                lr_bmap_t = self._compute_lr_boundary_map_torch(lr_t)
+            return lr_t, hr_t, lr_bmap_t
         return lr_t, hr_t
 
     def get_numpy_spatial_quat(self, idx: int) -> Tuple[np.ndarray, np.ndarray]:

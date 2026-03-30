@@ -44,8 +44,6 @@ from models.local_iso_embedding import (
     build_local_iso_hcp_embedding,
 )
 
-
-
 def _normalize_quaternions(quats: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
     """
     Normalize a batch of quaternions to unit norm, ensuring the scalar part is non-negative.
@@ -60,8 +58,6 @@ def _normalize_quaternions(quats: torch.Tensor, eps: float = 1e-12) -> torch.Ten
     # Ensure scalar part (w) is non-negative for unique representation
     return torch.where(q[..., :1] < 0.0, -q, q)
 
-
-
 def _quat_conjugate(quats: torch.Tensor) -> torch.Tensor:
     """
     Compute the conjugate of a batch of quaternions.
@@ -71,8 +67,6 @@ def _quat_conjugate(quats: torch.Tensor) -> torch.Tensor:
         (..., 4) tensor of conjugated quaternions
     """
     return torch.cat([quats[..., :1], -quats[..., 1:]], dim=-1)
-
-
 
 def _sample_fz_quaternions_passive(
     group_name: str,
@@ -126,8 +120,6 @@ def _sample_fz_quaternions_passive(
         q = q[: int(max_rows)]
     return q
 
-
-
 class LocalIsoCrystalEncoder(nn.Module):
     """
     Local-iso encoder wrapper with crystal-family switch.
@@ -177,7 +169,6 @@ class LocalIsoCrystalEncoder(nn.Module):
             dtype=self.embedding.group_mats.dtype,
         )
 
-
     def forward_a1(self, quats_passive: torch.Tensor) -> torch.Tensor:
         """
         Encode quaternions to A1 irreps (lowest-order invariant features).
@@ -192,9 +183,6 @@ class LocalIsoCrystalEncoder(nn.Module):
         """
         q = self._to_embedding_device(quats_passive)
         return self.embedding.forward_irreps_passive(q, active_only=False)
-
-
-
 
 class CubochoricOptimizingLocalIsoDecoder(nn.Module):
     """
@@ -468,8 +456,6 @@ class CubochoricOptimizingLocalIsoDecoder(nn.Module):
             q_best = q[batch_idx, best_k]
         return _normalize_quaternions(q_best)
 
-
-
 class LearnableA1QuaternionDecoder(nn.Module):
     """
     Learnable MLP decoder from A1 features to passive unit quaternions.
@@ -529,7 +515,6 @@ class LearnableA1QuaternionDecoder(nn.Module):
         q = self.net(features)
         return _normalize_quaternions(q)
 
-
 class EquivariantSpatialConv(nn.Module):
     """
     Equivariant spatial convolution for irrep-valued feature maps.
@@ -542,10 +527,12 @@ class EquivariantSpatialConv(nn.Module):
         irreps_in: Irreps | str = "1x4e",
         irreps_out: Irreps | str | None = None,
         use_residual: bool = False,
+        dilation: int = 1,
     ):
         super().__init__()
         self.kernel_size = int(kernel_size)
-        self.padding = self.kernel_size // 2
+        self.dilation = int(dilation)
+        self.padding = (self.kernel_size // 2) * self.dilation
 
         self.irreps_in = Irreps(irreps_in)
         self.irreps_out = Irreps(irreps_out) if irreps_out is not None else self.irreps_in
@@ -585,7 +572,12 @@ class EquivariantSpatialConv(nn.Module):
         )
         # Unfolding extracts local spatial patches for convolution.
         # Each patch is weighted and aggregated to form the neighborhood context.
-        patches = feat_padded.unfold(2, self.kernel_size, 1).unfold(3, self.kernel_size, 1) # Shape: (B, C, H, W, k, k)
+        if self.dilation == 1:
+            patches = feat_padded.unfold(2, self.kernel_size, 1).unfold(3, self.kernel_size, 1) # Shape: (B, C, H, W, k, k)
+        else:
+            # F.unfold supports dilation; reshape output back to (B, C, H, W, k, k)
+            patches = F.unfold(feat_padded, kernel_size=self.kernel_size, dilation=self.dilation, padding=0, stride=1)
+            patches = patches.view(B, C, self.kernel_size, self.kernel_size, H * W).permute(0, 1, 4, 2, 3).reshape(B, C, H, W, self.kernel_size, self.kernel_size)
         w = self.spatial_weights.view(1, 1, 1, 1, self.kernel_size, self.kernel_size)
         neigh = (patches * w).sum(dim=(-1, -2))
 
@@ -606,8 +598,6 @@ class EquivariantSpatialConv(nn.Module):
             out = out.squeeze(0)
         return out
 
-
-
 class EquivariantTransposeConv(nn.Module):
     """
     Equivariant upsampler for irrep-valued feature maps.
@@ -625,13 +615,17 @@ class EquivariantTransposeConv(nn.Module):
     def __init__(
         self,
         kernel_size: int = 3,
-        upsample_factor: int = 4,
+        upsample_factor: int | tuple[int, int] = 4,
+        transpose_overlap: int = 2,
         use_residual: bool = True,
         irreps_in: Irreps | str = "1x4e",
         irreps_out: Irreps | str | None = None,
     ):
         super().__init__()
-        self.upsample_factor = int(upsample_factor)
+        if isinstance(upsample_factor, (list, tuple)):
+            self.upsample_factor = (int(upsample_factor[0]), int(upsample_factor[1]))
+        else:
+            self.upsample_factor = (int(upsample_factor), int(upsample_factor))
         self.kernel_size = int(kernel_size)
         self.padding = self.kernel_size // 2
         self.use_residual = bool(use_residual)
@@ -642,8 +636,15 @@ class EquivariantTransposeConv(nn.Module):
         self.out_dim = int(self.irreps_out.dim)
         C = self.in_dim
 
-        self.transpose_kernel_size = int(self.upsample_factor + 2)
-        self.transpose_padding = int((self.transpose_kernel_size - self.upsample_factor) // 2)
+        r_h, r_w = self.upsample_factor
+        self.transpose_kernel_size = (
+            int(r_h + int(transpose_overlap)),
+            int(r_w + int(transpose_overlap)),
+        )
+        self.transpose_padding = (
+            int((self.transpose_kernel_size[0] - r_h) // 2),
+            int((self.transpose_kernel_size[1] - r_w) // 2),
+        )
 
         # To preserve irrep structure, each irrep copy uses one shared spatial kernel
         # across all of its m channels (2l+1 entries). This avoids treating m channels
@@ -667,7 +668,7 @@ class EquivariantTransposeConv(nn.Module):
         )
         # Learn one kernel per irrep copy (not per channel).
         self.transpose_kernels = nn.Parameter(
-            torch.empty(self.num_irrep_copies, 1, self.transpose_kernel_size, self.transpose_kernel_size)
+            torch.empty(self.num_irrep_copies, 1, self.transpose_kernel_size[0], self.transpose_kernel_size[1])
         )
         with torch.no_grad():
             self._init_bilinear()
@@ -687,14 +688,24 @@ class EquivariantTransposeConv(nn.Module):
 
     def _init_bilinear(self) -> None:
         # Bilinear-style initialization gives stable interpolation behavior at start.
-        r = self.upsample_factor
-        k = self.transpose_kernel_size
-        bilinear_1d = torch.zeros(k)
-        center = (k - 1) / 2.0
-        for i in range(k):
-            bilinear_1d[i] = max(0.0, 1.0 - abs(i - center) / r)
-        bilinear_2d = bilinear_1d.unsqueeze(1) * bilinear_1d.unsqueeze(0)
-        bilinear_2d = bilinear_2d / bilinear_2d.sum()
+        # For anisotropic factors (r_h, r_w), each axis gets its own 1D bilinear kernel;
+        # the 2D kernel is their outer product.
+        r_h, r_w = self.upsample_factor
+        k_h, k_w = self.transpose_kernel_size
+
+        def _make_1d(k: int, r: int) -> torch.Tensor:
+            v = torch.zeros(k)
+            center = (k - 1) / 2.0
+            for i in range(k):
+                v[i] = max(0.0, 1.0 - abs(i - center) / r)
+            return v
+
+        bilinear_h = _make_1d(k_h, r_h)
+        bilinear_w = _make_1d(k_w, r_w)
+        bilinear_2d = bilinear_h.unsqueeze(1) * bilinear_w.unsqueeze(0)
+        s = bilinear_2d.sum()
+        if s > 0:
+            bilinear_2d = bilinear_2d / s
         self.transpose_kernels.data[:] = bilinear_2d.unsqueeze(0).unsqueeze(0)
 
     def _expanded_transpose_weight(self) -> torch.Tensor:
@@ -708,8 +719,8 @@ class EquivariantTransposeConv(nn.Module):
         img_shape: tuple[int, int],
     ) -> tuple[torch.Tensor, tuple[int, int]]:
         H, W = img_shape
-        r = self.upsample_factor
-        Hr, Wr = H * r, W * r
+        r_h, r_w = self.upsample_factor
+        Hr, Wr = H * r_h, W * r_w
 
         batched = features.dim() == 3
         if not batched:
@@ -729,7 +740,7 @@ class EquivariantTransposeConv(nn.Module):
             feat_img,
             up_weight,
             bias=None,
-            stride=self.upsample_factor,
+            stride=(r_h, r_w),
             padding=self.transpose_padding,
             output_padding=0,
             groups=C,
@@ -757,8 +768,6 @@ class EquivariantTransposeConv(nn.Module):
             out = out.squeeze(0)
         return out, (Hr, Wr)
 
-
-
 class AttentionBlock(nn.Module):
     """
     Block-local equivariant self-attention for a configurable feature irreps.
@@ -774,9 +783,9 @@ class AttentionBlock(nn.Module):
         super().__init__()
         del tp_out_chunk_size  # Kept for config compatibility.
 
-        c = int(num_channels)
+        self.num_channels= int(num_channels)
         self.irreps_feat = Irreps(irreps_feat)
-        self.irreps_h = Irreps([(int(mul) * c, ir) for mul, ir in self.irreps_feat])
+        self.irreps_h = Irreps([(int(mul) * self.num_channels, ir) for mul, ir in self.irreps_feat])
 
         # Global attention temperature.
         self.log_s = nn.Parameter(torch.tensor(0.0))
@@ -797,7 +806,16 @@ class AttentionBlock(nn.Module):
         with torch.no_grad():
             self.lin_out.weight.data.zero_()
 
-    def forward(
+        # Per-irrep-family slice boundaries for equivariant normalization.
+        # Each entry covers the full (mul * ir_dim) block for one irrep type.
+        # Normalizing the whole family together preserves the relative scale
+        # between the mul copies, which encodes meaningful orientation information.
+        self._irreps_norm_slices: list[tuple[int, int]] = [
+            (s.start, s.stop)
+            for s in self.irreps_feat.slices()
+        ]
+
+    def forward_old(
         self,
         feat: torch.Tensor,
         d_block: torch.Tensor,
@@ -829,8 +847,19 @@ class AttentionBlock(nn.Module):
             .reshape(Bb, Nb, C_feat)
         )
 
-        # O(3)-invariant dot-product attention.
-        f_n = F.normalize(feat_blocks, dim=-1)
+        # O(3)-invariant dot-product attention with per-irrep-family normalization.
+        # Each irrep type (e.g. all mul copies of l=4e) is normalized as one block:
+        # the full (mul * ir_dim) vector becomes unit-norm. This avoids mixing
+        # scales across different irrep orders AND preserves the relative magnitudes
+        # among the mul copies within each family (unlike per-copy normalization,
+        # which would discard that intra-family scale information).
+        f_n = torch.cat(
+            [
+                F.normalize(feat_blocks[:, :, start:end], dim=-1)
+                for start, end in self._irreps_norm_slices
+            ],
+            dim=-1,
+        )
         scores = torch.exp(self.log_s) * torch.bmm(f_n, f_n.transpose(-2, -1))
 
         pb = self.pos_bias(d_block.unsqueeze(-1)).squeeze(-1)
@@ -850,6 +879,112 @@ class AttentionBlock(nn.Module):
             .permute(0, 1, 3, 2, 4, 5)
             .reshape(B, H * W, C_feat)
         )
+        return delta
+
+    def _invariant_scores(self, feat_blocks: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+        """
+        Build O(3)-invariant attention scores from mixed-irrep features.
+
+        Args:
+            feat_blocks: (Bb, Nb, C_feat)
+        Returns:
+            scores: (Bb, Nb, Nb)
+        """
+        Bb, Nb, _ = feat_blocks.shape
+        scores = feat_blocks.new_zeros(Bb, Nb, Nb)
+
+        start = 0
+        for mul, ir in self.irreps_feat:
+            mul = int(mul)
+            d = ir.dim
+            n = mul * d
+
+            # (Bb, Nb, mul*d) -> (Bb, Nb, mul, d)
+            x = feat_blocks[..., start:start + n].reshape(Bb, Nb, mul, d)
+
+            # Normalize each irrep copy independently
+            x = x / x.norm(dim=-1,keepdim=True).clamp_min(eps)
+
+            # Copywise invariant dot products:
+            # (Bb, Nb, mul, d) x (Bb, Nb, mul, d) -> (Bb, Nb, Nb, mul)
+            sim = torch.einsum("bimd,bjmd->bijm", x, x)
+
+            # Average over multiplicity C so score scale does not grow with width
+            sim = sim.mean(dim=-1)  # (Bb, Nb, Nb)
+
+            scores = scores + sim
+            start += n
+
+        return scores
+
+    def forward(
+        self,
+        feat: torch.Tensor,
+        d_block: torch.Tensor,
+        H: int,
+        W: int,
+        block_h: int,
+        block_w: int,
+    ) -> torch.Tensor:
+        """
+        Args:
+            feat: (B, H*W, C_feat) features for padded spatial grid
+            d_block: (Nb, Nb) pairwise L2 distances within one block
+            H, W: padded spatial dimensions, multiples of block_h and block_w
+            block_h, block_w: block size in pixels
+
+        Returns:
+            delta: (B, H*W, C_feat) attention residual
+        """
+        B, HW, C_feat = feat.shape
+        if HW != H * W:
+            raise ValueError(f"Expected feat.shape[1] == H*W = {H*W}, got {HW}")
+
+        num_bh = H // block_h
+        num_bw = W // block_w
+        Nb = block_h * block_w
+        Bb = B * num_bh * num_bw
+        dtype = feat.dtype
+
+        # Partition: (B, H*W, C_feat) -> (Bb, Nb, C_feat)
+        feat_blocks = (
+            feat.reshape(B, num_bh, block_h, num_bw, block_w, C_feat)
+            .permute(0, 1, 3, 2, 4, 5)
+            .reshape(Bb, Nb, C_feat)
+        )
+
+        # O(3)-invariant attention logits from per-irrep-copy normalized similarities
+        scores = torch.exp(self.log_s) * self._invariant_scores(feat_blocks)
+
+        # Add scalar positional bias
+        pb = self.pos_bias(d_block.unsqueeze(-1)).squeeze(-1)  # (Nb, Nb)
+        scores = scores + pb.unsqueeze(0)  # (Bb, Nb, Nb)
+
+        # Softmax in fp32 for stability, then cast back
+        attn = torch.softmax(scores.float(), dim=-1).to(dtype)
+
+        # Equivariant value path
+        feat_flat = feat_blocks.reshape(Bb * Nb, C_feat)            # (Bb*Nb, C_feat)
+        h = self.lin_in(feat_flat).reshape(Bb, Nb, -1)              # (Bb, Nb, C_h)
+
+        # Context aggregation with invariant weights preserves equivariance
+        ctx = torch.bmm(attn, h)                                    # (Bb, Nb, C_h)
+
+        # Equivariant mixing
+        h_out = self.tp_out(
+            h.reshape(Bb * Nb, -1),
+            ctx.reshape(Bb * Nb, -1),
+        ).reshape(Bb, Nb, -1)
+
+        delta_blocks = self.lin_out(h_out.reshape(Bb * Nb, -1)).reshape(Bb, Nb, C_feat)
+
+        # Reassemble: (Bb, Nb, C_feat) -> (B, H*W, C_feat)
+        delta = (
+            delta_blocks.reshape(B, num_bh, num_bw, block_h, block_w, C_feat)
+            .permute(0, 1, 3, 2, 4, 5)
+            .reshape(B, H * W, C_feat)
+        )
+
         return delta
 
 class IsoEmbeddingSRAttn(nn.Module):
@@ -881,13 +1016,21 @@ class IsoEmbeddingSRAttn(nn.Module):
         crystal: str = "fcc",
         d6_convention: str = "z_axis",
         device: str | torch.device | None = None,
-        upsample_factor: int = 4,
+        upsample_factor: int | tuple[int, int] = 4,
         upsample_residual: bool = True,
+        upsample_transpose_overlap: int = 2,
         use_lr_conv1: bool = True,
         use_lr_conv2: bool = True,
+        use_lr_conv3: bool = False,
+        lr_conv1_kernel_size: int = 3,
+        lr_conv2_kernel_size: int = 9,
+        lr_conv3_kernel_size: int = 9,
+        lr_conv3_dilation: int = 1,
         use_residual_lr1: bool = False,
         use_residual_lr2: bool = False,
+        use_residual_lr3: bool = False,
         use_residual_hr1: bool = False,
+        hr_conv1_kernel_size: int = 3,
         use_attention: bool = True,
         num_hr_attn_blocks: int = 1,
         hr_attn_num_channels: int = 8,
@@ -920,9 +1063,13 @@ class IsoEmbeddingSRAttn(nn.Module):
         self.feature_dim = self.feature_dim_a1
         self.output_irreps = self.irreps_a1
         self.output_dim = self.feature_dim_a1
-        self.upsample_factor = int(upsample_factor)
+        if isinstance(upsample_factor, (list, tuple)):
+            self.upsample_factor = (int(upsample_factor[0]), int(upsample_factor[1]))
+        else:
+            self.upsample_factor = (int(upsample_factor), int(upsample_factor))
         self.use_lr_conv1 = bool(use_lr_conv1)
         self.use_lr_conv2 = bool(use_lr_conv2)
+        self.use_lr_conv3 = bool(use_lr_conv3)
         self.use_attention = bool(use_attention)
         self.hr_attn_block_size = int(hr_attn_block_size)
         self.hr_attn_checkpoint = bool(hr_attn_checkpoint)
@@ -945,31 +1092,40 @@ class IsoEmbeddingSRAttn(nn.Module):
         )
 
         # A1-only SR architecture:
-        # LR conv1 k=3: a1 -> a1
+        # LR conv1: a1 -> a1
         self.conv_lr1 = EquivariantSpatialConv(
-            kernel_size=3,
+            kernel_size=int(lr_conv1_kernel_size),
             irreps_in=self.irreps_a1,
             irreps_out=self.irreps_a1,
             use_residual=bool(use_residual_lr1),
         )
-        # LR conv2 k=9: a1 -> a1
+        # LR conv2: a1 -> a1
         self.conv_lr2 = EquivariantSpatialConv(
-            kernel_size=9,
+            kernel_size=int(lr_conv2_kernel_size),
             irreps_in=self.irreps_a1,
             irreps_out=self.irreps_a1,
             use_residual=bool(use_residual_lr2),
+        )
+        # LR conv3: a1 -> a1
+        self.conv_lr3 = EquivariantSpatialConv(
+            kernel_size=int(lr_conv3_kernel_size),
+            irreps_in=self.irreps_a1,
+            irreps_out=self.irreps_a1,
+            use_residual=bool(use_residual_lr3),
+            dilation=int(lr_conv3_dilation),
         )
         # Upsample k=3: a1 -> a1
         self.upsample_conv = EquivariantTransposeConv(
             kernel_size=3,
             upsample_factor=self.upsample_factor,
+            transpose_overlap=int(upsample_transpose_overlap),
             use_residual=bool(upsample_residual),
             irreps_in=self.irreps_a1,
             irreps_out=self.irreps_a1,
         )
         # HR conv1: a1 -> a1
         self.conv_hr1 = EquivariantSpatialConv(
-            kernel_size=3,
+            kernel_size=int(hr_conv1_kernel_size),
             irreps_in=self.irreps_a1,
             irreps_out=self.irreps_a1,
             use_residual=bool(use_residual_hr1),
@@ -1013,13 +1169,11 @@ class IsoEmbeddingSRAttn(nn.Module):
             dim=1,
         )
 
-
     def encode_a1(self, quats: torch.Tensor) -> torch.Tensor:
         """
         Encode quaternions to A1 irreps using the encoder.
         """
         return self.encoder.forward_a1(quats)
-
 
     def encode_full_target(self, quats: torch.Tensor) -> torch.Tensor:
         """
@@ -1061,7 +1215,6 @@ class IsoEmbeddingSRAttn(nn.Module):
             return q_fz, best_idx
         return q_fz
 
-
     def decode(self, features_a1: torch.Tensor) -> torch.Tensor:
         """
         Decode A1 features to quaternions using the decoder and reduce to FZ.
@@ -1075,7 +1228,6 @@ class IsoEmbeddingSRAttn(nn.Module):
             return q
         q = self.decoder(features_a1)
         return self.reduce_to_fz(q)
-
 
     @torch.no_grad()
     def _get_hr_sh_block(
@@ -1104,7 +1256,6 @@ class IsoEmbeddingSRAttn(nn.Module):
         self._cached_hr_block_shape = (block_h, block_w)
         self._cached_hr_sh_block = sh
         return sh.to(dtype)
-
 
     def _apply_attention(
         self,
@@ -1147,6 +1298,7 @@ class IsoEmbeddingSRAttn(nn.Module):
                 delta = checkpoint(_run_block, feat, use_reentrant=True)
             else:
                 delta = block(feat, sh_block, Hr_pad, Wr_pad, block_h, block_w)
+            
             feat = feat + delta
 
         if pad_h > 0 or pad_w > 0:
@@ -1173,6 +1325,9 @@ class IsoEmbeddingSRAttn(nn.Module):
         if self.use_lr_conv2:
             feat = self.conv_lr2(feat, lr_shape)
 
+        if self.use_lr_conv3:
+            feat = self.conv_lr3(feat, lr_shape)
+
         feat, hr_shape = self.upsample_conv(feat, lr_shape)
         feat = self.conv_hr1(feat, hr_shape)
         feat_a1 = self._apply_attention(feat, hr_shape)
@@ -1185,6 +1340,7 @@ class IsoEmbeddingSRAttn(nn.Module):
         hr_quats: torch.Tensor,
         lr_shape: tuple[int, int],
         normalize_input: bool = False,
+        tv_loss_weight: float = 0.0,
     ) -> torch.Tensor:
         """
         Compute MSE loss between predicted and target HR features (A1 irreps).
@@ -1221,7 +1377,15 @@ class IsoEmbeddingSRAttn(nn.Module):
             feat_hr_tgt = feat_hr_tgt_flat
 
         feat_hr, _ = self._forward_sr_features(feat_lr_a1, lr_shape)
-        return F.mse_loss(feat_hr, feat_hr_tgt)
+        mse = F.mse_loss(feat_hr, feat_hr_tgt)
+        if tv_loss_weight > 0.0:
+            H_hr = lr_shape[0] * self.upsample_factor[0]
+            W_hr = lr_shape[1] * self.upsample_factor[1]
+            f = feat_hr.reshape(B, H_hr, W_hr, -1)
+            tv = torch.mean(torch.abs(f[:, 1:, :, :] - f[:, :-1, :, :])) + \
+                 torch.mean(torch.abs(f[:, :, 1:, :] - f[:, :, :-1, :]))
+            return mse + tv_loss_weight * tv
+        return mse
 
 
     def forward_sr(
@@ -1262,7 +1426,6 @@ class IsoEmbeddingSRAttn(nn.Module):
 
         feat_a1 = self.encode_a1(quats)
         return self.decode(feat_a1)
-
 
 __all__ = [
     "AttentionBlock",

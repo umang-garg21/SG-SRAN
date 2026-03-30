@@ -19,6 +19,7 @@
   "crystal": "hcp",
   "d6_convention": "z_axis",
   "upsample_residual": true,
+  "upsample_transpose_overlap": 6,
   "use_lr_conv1": true,
   "use_lr_conv2": false,
   "use_attention": false,
