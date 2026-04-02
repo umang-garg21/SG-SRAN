@@ -68,7 +68,7 @@ class QuaternionDataset(Dataset):
         pin_memory: bool = True,
         return_lr_boundary_map: bool = False,
         lr_boundary_angle_deg: float = 5.0,
-        lr_boundary_mark_both_sides: bool = False,
+        lr_boundary_mark_both_sides: bool = True,
     ):
         self.root = dataset_root
         self.split = split.capitalize()

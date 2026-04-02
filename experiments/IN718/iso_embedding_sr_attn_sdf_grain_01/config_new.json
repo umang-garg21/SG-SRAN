@@ -46,8 +46,8 @@
   "use_residual_lr1": false,
   "use_residual_lr2": false,
   "use_residual_lr3": false,
-  "use_residual_hr1": false,
-  "use_hr_conv1":false,
+  "use_residual_hr1": true,
+  "use_hr_conv1": true,
   "hr_conv1_kernel_size": 9,
   "use_attention": false,
   "use_grain_attention": true,
@@ -67,6 +67,15 @@
   "hr_attn_block_size": 32,
   "hr_attn_tp_out_chunk_size": 128,
   "hr_attn_checkpoint": false,
+  "use_sdf_head": true,
+  "evidence_radius": 1,
+  "sdf_hidden_dim": 64,
+  "guidance_dim": 16,
+  "stats_code_dim": 16,
+  "use_refinement_head": false,
+  "refinement_num_steps": 2,
+  "refinement_hidden_dim": 32,
+  "refinement_kernel_size": 3,
   "use_amp": false,
   "amp_dtype": "bf16",
   "decoder_cubochoric_resolution": 1,
@@ -97,7 +106,7 @@
   "smoke_test": false,
   "model": {
     "type": "iso_embedding_sr_attn",
-    "model_module": "models.SR_double_conv_SRattn_a1_Boundary_aware",
+    "model_module": "models.SR_double_conv_SRattn_a1_sdf_grain_Attn",
     "model_class": "IsoEmbeddingSRAttn"
   }
 }

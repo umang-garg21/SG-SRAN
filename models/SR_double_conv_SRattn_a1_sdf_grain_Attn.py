@@ -45,6 +45,14 @@ from models.local_iso_embedding import (
     build_local_iso_fcc_embedding,
     build_local_iso_hcp_embedding,
 )
+from models.irrep_sdf_sr_one_sided import (
+    build_irrep_boundary_evidence,
+    IrrepEvidenceBoundarySDFHead,
+)
+from models.SR_double_conv_SRattn_a1_boundary_refine import (
+    EquivariantSpatialConv as GuidedEquivariantSpatialConv,
+    BoundaryRefinementHead,
+)
 
 def _normalize_quaternions(quats: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
     """
@@ -2371,6 +2379,16 @@ class IsoEmbeddingSRAttn(nn.Module):
         decoder_max_table_rows: int | None = None,
         decoder_table_cache_dir: str | Path | None = "out/decoder_lookup_tables",
         decoder_backend: str = "optimizing",
+        # SDF head parameters (Change 1-3 from plan)
+        use_sdf_head: bool = True,
+        evidence_radius: int = 1,
+        sdf_hidden_dim: int = 64,
+        guidance_dim: int = 16,
+        stats_code_dim: int = 16,
+        use_refinement_head: bool = False,
+        refinement_num_steps: int = 2,
+        refinement_hidden_dim: int = 32,
+        refinement_kernel_size: int = 3,
     ):
         super().__init__()
         if device is None:
@@ -2509,12 +2527,32 @@ class IsoEmbeddingSRAttn(nn.Module):
             boundary_sdf_shift=float(upsample_boundary_sdf_shift),
         )
         # HR conv1: a1 -> a1
-        self.conv_hr1 = EquivariantSpatialConv(
-            kernel_size=int(hr_conv1_kernel_size),
-            irreps_in=self.irreps_a1,
-            irreps_out=self.irreps_a1,
-            use_residual=bool(use_residual_hr1),
-        )
+        # When use_sdf_head=True use the guidance-aware version from boundary_refine;
+        # otherwise fall back to the plain version defined in this file.
+        self.use_sdf_head = bool(use_sdf_head)
+        if self.use_sdf_head and bool(use_hr_conv1):
+            if not bool(use_residual_hr1):
+                import warnings as _w
+                _w.warn(
+                    "use_sdf_head=True with use_hr_conv1=True requires use_residual_hr1=True "
+                    "(GuidedEquivariantSpatialConv collapses features without a residual skip). "
+                    "Forcing use_residual_hr1=True.",
+                    UserWarning, stacklevel=2,
+                )
+                use_residual_hr1 = True
+            self.conv_hr1 = GuidedEquivariantSpatialConv(
+                kernel_size=int(hr_conv1_kernel_size),
+                irreps_in=self.irreps_a1,
+                irreps_out=self.irreps_a1,
+                use_residual=bool(use_residual_hr1),
+            )
+        else:
+            self.conv_hr1 = EquivariantSpatialConv(
+                kernel_size=int(hr_conv1_kernel_size),
+                irreps_in=self.irreps_a1,
+                irreps_out=self.irreps_a1,
+                use_residual=bool(use_residual_hr1),
+            )
         # Attention block(s)
         if self.use_attention:
             if self.enable_hr_grain_attention_layer:
@@ -2545,6 +2583,43 @@ class IsoEmbeddingSRAttn(nn.Module):
                 self.attention_blocks = nn.ModuleList([])
         else:
             self.attention_blocks = nn.ModuleList([])
+
+        # SDF head: internal boundary prediction from pairwise irrep evidence.
+        # evidence_channels = 2 * num_offsets * num_irrep_blocks
+        self.evidence_radius = int(evidence_radius)
+        _evidence_offsets = []
+        for _dy in range(-self.evidence_radius, self.evidence_radius + 1):
+            for _dx in range(-self.evidence_radius, self.evidence_radius + 1):
+                if _dy == 0 and _dx == 0:
+                    continue
+                _evidence_offsets.append((_dy, _dx))
+        self.evidence_offsets = _evidence_offsets
+        _n_irrep_blocks = len(list(self.irreps_a1))
+        _evidence_channels = len(self.evidence_offsets) * _n_irrep_blocks * 2
+        self.guidance_dim = int(guidance_dim)
+        if self.use_sdf_head:
+            self.boundary_sdf_head = IrrepEvidenceBoundarySDFHead(
+                in_channels=_evidence_channels,
+                upsample_factor=self.upsample_factor,
+                hidden_dim=int(sdf_hidden_dim),
+                guidance_dim=self.guidance_dim,
+                stats_code_dim=int(stats_code_dim),
+            )
+        else:
+            self.boundary_sdf_head = None
+
+        # Optional boundary refinement head (requires use_sdf_head for guidance).
+        if bool(use_refinement_head) and self.use_sdf_head:
+            self.refinement_head = BoundaryRefinementHead(
+                irreps_feat=self.irreps_a1,
+                guidance_dim=self.guidance_dim,
+                kernel_size=int(refinement_kernel_size),
+                num_steps=int(refinement_num_steps),
+                hidden_dim=int(refinement_hidden_dim),
+                refine_boundary_logits=True,
+            )
+        else:
+            self.refinement_head = None
 
         self._cached_hr_block_shape: tuple[int, int] | None = None
         self._cached_hr_sh_block: torch.Tensor | None = None
@@ -2718,6 +2793,32 @@ class IsoEmbeddingSRAttn(nn.Module):
                     )
                 feat = feat + delta
 
+            # GrainAttention gives zero delta to boundary pixels (label == -1).
+            # Those pixels still carry bilinearly-interpolated (cross-grain-blended)
+            # upsampler features.  Fill them with the 3x3 mean of their interior
+            # neighbours, which are all in one grain because the boundary is 1px wide.
+            labels_for_fill = hr_labels if not use_lr_source else None
+            if labels_for_fill is None and use_lr_source and lr_labels is not None:
+                # Project LR labels to HR so we know which HR pixels are boundary.
+                r_h, r_w = self.upsample_factor
+                y_hr = torch.arange(Hr, device=feat.device, dtype=torch.long)
+                x_hr = torch.arange(Wr, device=feat.device, dtype=torch.long)
+                gy, gx = torch.meshgrid(y_hr, x_hr, indexing="ij")
+                H_lr = lr_labels.shape[-2]
+                W_lr = lr_labels.shape[-1]
+                py = torch.div(gy, r_h, rounding_mode="floor").clamp(0, H_lr - 1)
+                px = torch.div(gx, r_w, rounding_mode="floor").clamp(0, W_lr - 1)
+                labels_for_fill = lr_labels[:, py, px]  # (B,Hr,Wr)
+
+            if labels_for_fill is not None:
+                bnd = (labels_for_fill < 0).to(feat.dtype)  # 1 on boundary, (B,Hr,Wr)
+                if bool(bnd.any()):
+                    feat_img = feat.reshape(B, Hr, Wr, C).permute(0, 3, 1, 2)  # (B,C,Hr,Wr)
+                    neighbor_avg = F.avg_pool2d(feat_img, kernel_size=3, stride=1, padding=1)
+                    fill = bnd.unsqueeze(1)  # (B,1,Hr,Wr)
+                    feat_img = feat_img * (1.0 - fill) + neighbor_avg * fill
+                    feat = feat_img.permute(0, 2, 3, 1).reshape(B, Hr * Wr, C)
+
             if not batched:
                 feat = feat.squeeze(0)
             return feat
@@ -2807,7 +2908,6 @@ class IsoEmbeddingSRAttn(nn.Module):
             feat = feat.squeeze(0)
         return feat
 
-    @torch.no_grad()
     def _prepare_boundary_context(
         self,
         lr_boundary_map: torch.Tensor,
@@ -2822,7 +2922,10 @@ class IsoEmbeddingSRAttn(nn.Module):
           LR boundary map -> LR 1px boundary -> HR 1px boundary -> grain maps.
         """
         if lr_boundary_map is None:
-            raise ValueError("lr_boundary_map is required for boundary-aware SR forward.")
+            raise ValueError(
+                "lr_boundary_map is required for boundary-aware SR forward. "
+                "Set use_sdf_head=True for internal boundary prediction."
+            )
 
         H, W = lr_shape
         boundary_lr = self.upsample_conv._format_lr_boundary_map(
@@ -2856,11 +2959,15 @@ class IsoEmbeddingSRAttn(nn.Module):
         self,
         feat_lr_a1: torch.Tensor,
         lr_shape: tuple[int, int],
-        lr_boundary_map: torch.Tensor,
+        lr_boundary_map: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, tuple[int, int]]:
         """
         Main SR feature pipeline: LR convs, upsampling, HR conv, attention.
         Returns HR features and HR shape.
+
+        lr_boundary_map is optional when use_sdf_head=True; when provided it is
+        used for the grain-label pipeline (more precise labels) while the SDF head
+        still runs to produce guidance for HR convolution and refinement.
         """
         if self.use_lr_conv1:
             feat = self.conv_lr1(feat_lr_a1, lr_shape)
@@ -2873,6 +2980,20 @@ class IsoEmbeddingSRAttn(nn.Module):
         if self.use_lr_conv3:
             feat = self.conv_lr3(feat, lr_shape)
 
+        # Internal boundary prediction via SDF head.
+        sdf_out = None
+        if self.boundary_sdf_head is not None:
+            evidence = build_irrep_boundary_evidence(
+                feat_lr=feat,
+                lr_shape=lr_shape,
+                irreps_feat=self.irreps_a1,
+                offsets=self.evidence_offsets,
+                radius=self.evidence_radius,
+            )
+            sdf_out = self.boundary_sdf_head(evidence["tensor"], lr_shape)
+            if lr_boundary_map is None:
+                lr_boundary_map = torch.sigmoid(sdf_out["boundary_logits_lr"])
+
         batch_size = int(feat.shape[0]) if feat.dim() == 3 else 1
         boundary_ctx = self._prepare_boundary_context(
             lr_boundary_map=lr_boundary_map,
@@ -2881,6 +3002,28 @@ class IsoEmbeddingSRAttn(nn.Module):
             device=feat.device,
             dtype=feat.dtype,
         )
+
+        # When the SDF head is active, its HR boundary prediction is more accurate
+        # than the hard-segmentation pipeline (which uses thresholded LR labels
+        # upsampled via SDF normals).  Override the HR grain labels used by
+        # GrainAttention with labels derived directly from boundary_prob_hr.
+        if sdf_out is not None and self.enable_hr_grain_attention_layer:
+            sdf_boundary_hr = sdf_out["boundary_prob_hr"]  # (B,1,Hr,Wr)
+            Hr_s = sdf_boundary_hr.shape[-2]
+            Wr_s = sdf_boundary_hr.shape[-1]
+            interior_hr_sdf = sdf_boundary_hr[:, 0] <= self.upsample_conv.boundary_threshold
+            hr_labels_sdf = torch.full(
+                (batch_size, Hr_s, Wr_s), -1, device=feat.device, dtype=torch.long
+            )
+            for _b in range(batch_size):
+                _labels_cpu, _ = self.upsample_conv._connected_components_4(interior_hr_sdf[_b])
+                hr_labels_sdf[_b] = _labels_cpu.to(device=feat.device, dtype=torch.long)
+            boundary_ctx = dict(boundary_ctx)
+            boundary_ctx["boundary_hr_1px"] = (
+                sdf_boundary_hr >= self.upsample_conv.boundary_threshold
+            ).to(feat.dtype)
+            boundary_ctx["hr_labels"] = hr_labels_sdf
+
         self._last_boundary_context = boundary_ctx
 
         feat = self._apply_lr_grain_attention(feat, lr_shape, boundary_ctx=boundary_ctx)
@@ -2892,8 +3035,23 @@ class IsoEmbeddingSRAttn(nn.Module):
             lr_labels=boundary_ctx["lr_labels"],
         )
         if self.use_hr_conv1:
-            feat = self.conv_hr1(feat, hr_shape)
+            guidance_hr = sdf_out["guidance_hr"] if sdf_out is not None else None
+            b_logits_hr = sdf_out["boundary_logits_hr"] if sdf_out is not None else None
+            if isinstance(self.conv_hr1, GuidedEquivariantSpatialConv):
+                feat = self.conv_hr1(feat, hr_shape, guidance=guidance_hr, boundary_logits=b_logits_hr)
+            else:
+                feat = self.conv_hr1(feat, hr_shape)
+
         feat_a1 = self._apply_attention(feat, hr_shape, boundary_ctx=boundary_ctx)
+
+        if self.refinement_head is not None and sdf_out is not None:
+            feat_a1, _ = self.refinement_head(
+                feat_a1,
+                hr_shape,
+                guidance=sdf_out["guidance_hr"],
+                boundary_logits=sdf_out["boundary_logits_hr"],
+            )
+
         return feat_a1, hr_shape
 
 
@@ -2902,14 +3060,14 @@ class IsoEmbeddingSRAttn(nn.Module):
         lr_quats: torch.Tensor,
         hr_quats: torch.Tensor,
         lr_shape: tuple[int, int],
-        lr_boundary_map: torch.Tensor,
+        lr_boundary_map: torch.Tensor | None = None,
         normalize_input: bool = False,
         tv_loss_weight: float = 0.0,
     ) -> torch.Tensor:
         """
         Compute MSE loss between predicted and target HR features (A1 irreps).
         Used for feature-space supervision.
-        lr_boundary_map is required.
+        lr_boundary_map is optional when use_sdf_head=True.
         """
         lr_quats = lr_quats.to(self.device)
         hr_quats = hr_quats.to(self.device)
@@ -2961,12 +3119,12 @@ class IsoEmbeddingSRAttn(nn.Module):
         self,
         lr_quats: torch.Tensor,
         lr_shape: tuple[int, int],
-        lr_boundary_map: torch.Tensor,
+        lr_boundary_map: torch.Tensor | None = None,
         normalize_input: bool = True,
     ) -> torch.Tensor:
         """
         Forward pass for SR: input LR quaternions, output SR quaternions.
-        lr_boundary_map is required.
+        lr_boundary_map is optional when use_sdf_head=True.
         """
         lr_quats = lr_quats.to(self.device)
         if normalize_input:
@@ -2999,8 +3157,10 @@ class IsoEmbeddingSRAttn(nn.Module):
             quats = _normalize_quaternions(quats)
 
         if img_shape is not None:
-            if lr_boundary_map is None:
-                raise ValueError("lr_boundary_map is required in SR mode")
+            if lr_boundary_map is None and not self.use_sdf_head:
+                raise ValueError(
+                    "lr_boundary_map is required in SR mode when use_sdf_head=False"
+                )
             return self.forward_sr(
                 quats,
                 lr_shape=img_shape,
