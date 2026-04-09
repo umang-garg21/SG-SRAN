@@ -1137,13 +1137,15 @@ class BoundaryAwareAttentionUpsampler(nn.Module):
     def _build_hr_1px_boundary_and_maps(
         self,
         boundary_lr: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        sdf_hr_override: torch.Tensor | None = None,
+        return_dense_labels: bool = False,
+    ) -> tuple[torch.Tensor, ...]:
         """
         Boundary-prep-aligned pipeline:
           1) LR interior components from LR boundary map
           2) Dense LR labels (fill unlabeled boundary pixels)
           3) LR 1px boundary from dense LR labels
-          4) HR soft field from LR 1px boundary (box+gaussian)
+          4) HR soft field from LR 1px boundary (box+gaussian), unless overridden
           5) HR labels by normal-shift remap
           6) Final HR 1px boundary from HR labels
 
@@ -1152,6 +1154,7 @@ class BoundaryAwareAttentionUpsampler(nn.Module):
             boundary_hr_1px: (B,1,Hr,Wr) float in {0,1}
             hr_to_lr_map: (B,Hr,Wr) long, -1 on HR boundary pixels
             lr_labels_masked: (B,H,W) long, -1 on LR boundary pixels
+            lr_labels_dense: optional (B,H,W) long dense LR labels
         """
         B, _, H, W = boundary_lr.shape
         r_h, r_w = self.upsample_factor
@@ -1163,6 +1166,31 @@ class BoundaryAwareAttentionUpsampler(nn.Module):
         boundary_hr_1px = torch.zeros((B, 1, Hr, Wr), device=device, dtype=dtype)
         hr_to_lr_map = torch.full((B, Hr, Wr), -1, device=device, dtype=torch.long)
         lr_labels_masked = torch.full((B, H, W), -1, device=device, dtype=torch.long)
+        lr_labels_dense_all = None
+        if return_dense_labels:
+            lr_labels_dense_all = torch.full((B, H, W), -1, device=device, dtype=torch.long)
+
+        sdf_override_img = None
+        if sdf_hr_override is not None:
+            sdf_override_img = sdf_hr_override.to(device=device, dtype=dtype)
+            if sdf_override_img.dim() == 4:
+                if sdf_override_img.shape[:2] != (B, 1):
+                    raise ValueError(
+                        f"Expected sdf_hr_override shape {(B, 1, Hr, Wr)}, got {tuple(sdf_override_img.shape)}"
+                    )
+            elif sdf_override_img.dim() == 3:
+                if sdf_override_img.shape[0] != B:
+                    raise ValueError(
+                        f"Expected sdf_hr_override batch size {B}, got {tuple(sdf_override_img.shape)}"
+                    )
+            else:
+                raise ValueError(
+                    f"sdf_hr_override must have shape (B,1,Hr,Wr) or (B,Hr,Wr), got {tuple(sdf_override_img.shape)}"
+                )
+            if tuple(int(v) for v in sdf_override_img.shape[-2:]) != (Hr, Wr):
+                raise ValueError(
+                    f"sdf_hr_override spatial shape {tuple(sdf_override_img.shape[-2:])} does not match {(Hr, Wr)}"
+                )
 
         interior_lr = boundary_lr[:, 0] <= self.boundary_threshold
 
@@ -1178,6 +1206,8 @@ class BoundaryAwareAttentionUpsampler(nn.Module):
                 narrow_width_max=int(self.narrow_component_max_width),
             )
             labels_lr_dense = self._fill_unlabeled_pixels_4n(labels_lr)
+            if lr_labels_dense_all is not None:
+                lr_labels_dense_all[b] = labels_lr_dense
 
             b_lr = self._thin_boundary_from_labels_2d(labels_lr_dense)
             boundary_lr_1px[b, 0] = b_lr.to(dtype=dtype)
@@ -1186,10 +1216,15 @@ class BoundaryAwareAttentionUpsampler(nn.Module):
             labels_lr_valid[b_lr] = -1
             lr_labels_masked[b] = labels_lr_valid
 
-            sdf_hr = self._smooth_boundary_to_sdf_like_boundary_prep(
-                boundary_lr=boundary_lr_1px[b:b + 1],
-                hr_shape=(Hr, Wr),
-            )[0, 0]
+            if sdf_override_img is None:
+                sdf_hr = self._smooth_boundary_to_sdf_like_boundary_prep(
+                    boundary_lr=boundary_lr_1px[b:b + 1],
+                    hr_shape=(Hr, Wr),
+                )[0, 0]
+            elif sdf_override_img.dim() == 4:
+                sdf_hr = sdf_override_img[b, 0]
+            else:
+                sdf_hr = sdf_override_img[b]
             shift_scale_hr = None
             if narrow_ids.numel() > 0:
                 narrow_lr_mask = self._labels_mask_from_ids(labels_lr_dense, narrow_ids)
@@ -1215,6 +1250,8 @@ class BoundaryAwareAttentionUpsampler(nn.Module):
             hr_map[b_hr] = -1
             hr_to_lr_map[b] = hr_map
 
+        if lr_labels_dense_all is not None:
+            return boundary_lr_1px, boundary_hr_1px, hr_to_lr_map, lr_labels_masked, lr_labels_dense_all
         return boundary_lr_1px, boundary_hr_1px, hr_to_lr_map, lr_labels_masked
 
     @staticmethod
@@ -1587,6 +1624,180 @@ class BoundaryAwareAttentionUpsampler(nn.Module):
         seed_hr = seed_flat.reshape(B, Hr, Wr, C).permute(0, 3, 1, 2)
         valid_hr = valid_flat.reshape(B, 1, Hr, Wr)
         return seed_hr, valid_hr
+
+    @torch.no_grad()
+    def trace_hr_attention_pixels(
+        self,
+        feat_lr_img: torch.Tensor,
+        hr_to_lr_map: torch.Tensor,
+        lr_labels: torch.Tensor,
+        pixel_coords: list[tuple[int, int, int]] | list[tuple[int, int]],
+    ) -> list[dict[str, torch.Tensor | int | bool]]:
+        """
+        Trace whole-grain LR attention weights for selected HR pixels.
+
+        Parameters
+        ----------
+        feat_lr_img:
+            LR feature image (B,C,H,W).
+        hr_to_lr_map:
+            Dense HR owner map (B,Hr,Wr).
+        lr_labels:
+            LR grain labels (B,H,W).
+        pixel_coords:
+            Selected HR pixels as either [(y_hr, x_hr), ...] for B=1 or
+            [(b, y_hr, x_hr), ...] for general batched use.
+
+        Returns
+        -------
+        list[dict]
+            Per-pixel attention diagnostics including an LR heatmap, grain mask,
+            and query-source metadata.
+        """
+        B, C, H, W = feat_lr_img.shape
+        Hr, Wr = hr_to_lr_map.shape[-2], hr_to_lr_map.shape[-1]
+        r_h, r_w = self.upsample_factor
+        attn_temp = torch.exp(self.log_grain_attn_temp)
+
+        traces: list[dict[str, torch.Tensor | int | bool]] = []
+        for item in pixel_coords:
+            if len(item) == 2:
+                if B != 1:
+                    raise ValueError("2-tuple pixel coords require B=1")
+                b = 0
+                y_hr, x_hr = int(item[0]), int(item[1])
+            elif len(item) == 3:
+                b, y_hr, x_hr = int(item[0]), int(item[1]), int(item[2])
+            else:
+                raise ValueError(f"Expected (y,x) or (b,y,x), got {item!r}")
+
+            if not (0 <= b < B and 0 <= y_hr < Hr and 0 <= x_hr < Wr):
+                raise ValueError(
+                    f"Probe pixel {(b, y_hr, x_hr)!r} outside valid range "
+                    f"B={B}, Hr={Hr}, Wr={Wr}"
+                )
+
+            gid = int(hr_to_lr_map[b, y_hr, x_hr].item())
+            k_all = feat_lr_img[b].permute(1, 2, 0).reshape(H * W, C)
+            lr_flat = lr_labels[b].reshape(-1)
+
+            y_parent = min(H - 1, max(0, y_hr // r_h))
+            x_parent = min(W - 1, max(0, x_hr // r_w))
+            parent_idx = int(y_parent * W + x_parent)
+
+            qx_lr = (float(x_hr) + 0.5) / float(r_w) - 0.5
+            qy_lr = (float(y_hr) + 0.5) / float(r_h) - 0.5
+            q_coord = feat_lr_img.new_tensor([[qx_lr, qy_lr]])
+
+            heatmap = feat_lr_img.new_zeros((H, W))
+            grain_mask = feat_lr_img.new_zeros((H, W))
+            sim_map = feat_lr_img.new_zeros((H, W))
+            dist_bias_map = feat_lr_img.new_zeros((H, W))
+            impact_map = feat_lr_img.new_zeros((H, W))
+            query_lr_idx = parent_idx
+            query_replaced = False
+
+            if gid < 0:
+                traces.append(
+                    {
+                        "batch_index": b,
+                        "y_hr": y_hr,
+                        "x_hr": x_hr,
+                        "gid": gid,
+                        "parent_y_lr": y_parent,
+                        "parent_x_lr": x_parent,
+                        "query_y_lr": y_parent,
+                        "query_x_lr": x_parent,
+                        "query_replaced": query_replaced,
+                        "heatmap_lr": heatmap,
+                        "grain_mask_lr": grain_mask,
+                        "invariant_similarity_lr": sim_map,
+                        "distance_bias_lr": dist_bias_map,
+                        "context_impact_lr": impact_map,
+                        "context_shift_norm": 0.0,
+                    }
+                )
+                continue
+
+            k_idx = (lr_flat == gid).nonzero(as_tuple=False).squeeze(1)
+            if k_idx.numel() == 0:
+                traces.append(
+                    {
+                        "batch_index": b,
+                        "y_hr": y_hr,
+                        "x_hr": x_hr,
+                        "gid": gid,
+                        "parent_y_lr": y_parent,
+                        "parent_x_lr": x_parent,
+                        "query_y_lr": y_parent,
+                        "query_x_lr": x_parent,
+                        "query_replaced": query_replaced,
+                        "heatmap_lr": heatmap,
+                        "grain_mask_lr": grain_mask,
+                        "invariant_similarity_lr": sim_map,
+                        "distance_bias_lr": dist_bias_map,
+                        "context_impact_lr": impact_map,
+                        "context_shift_norm": 0.0,
+                    }
+                )
+                continue
+
+            q = k_all[parent_idx : parent_idx + 1]
+            k = k_all[k_idx]
+            grain_mask.view(-1)[k_idx] = 1.0
+
+            if int(lr_flat[parent_idx].item()) != gid:
+                k_y = torch.div(k_idx, W, rounding_mode="floor").to(feat_lr_img.dtype)
+                k_x = torch.remainder(k_idx, W).to(feat_lr_img.dtype)
+                k_coords = torch.stack([k_x, k_y], dim=-1)
+                d_bad = torch.cdist(q_coord, k_coords, p=2)
+                nn_bad = int(torch.argmin(d_bad, dim=-1).item())
+                query_lr_idx = int(k_idx[nn_bad].item())
+                q = k_all[query_lr_idx : query_lr_idx + 1]
+                query_replaced = True
+
+            k_y = torch.div(k_idx, W, rounding_mode="floor").to(feat_lr_img.dtype)
+            k_x = torch.remainder(k_idx, W).to(feat_lr_img.dtype)
+            k_coords = torch.stack([k_x, k_y], dim=-1)
+
+            invariant_scores = self._invariant_grain_scores(q, k)
+            scores = attn_temp * invariant_scores
+            d = torch.cdist(q_coord, k_coords, p=2)
+            distance_bias = self.pos_bias(d.unsqueeze(-1)).squeeze(-1)
+            scores = scores + distance_bias
+            attn = torch.softmax(scores.float(), dim=-1).to(q.dtype).squeeze(0)
+            heatmap.view(-1)[k_idx] = attn
+            sim_map.view(-1)[k_idx] = invariant_scores.squeeze(0)
+            dist_bias_map.view(-1)[k_idx] = distance_bias.squeeze(0)
+            feature_delta = (k - q).norm(dim=-1)
+            impact = attn * feature_delta
+            impact_map.view(-1)[k_idx] = impact
+            ctx = torch.sum(attn.unsqueeze(-1) * k, dim=0)
+            context_shift_norm = float((ctx - q.squeeze(0)).norm().item())
+
+            query_y_lr = query_lr_idx // W
+            query_x_lr = query_lr_idx % W
+            traces.append(
+                {
+                    "batch_index": b,
+                    "y_hr": y_hr,
+                    "x_hr": x_hr,
+                    "gid": gid,
+                    "parent_y_lr": y_parent,
+                    "parent_x_lr": x_parent,
+                    "query_y_lr": int(query_y_lr),
+                    "query_x_lr": int(query_x_lr),
+                    "query_replaced": bool(query_replaced),
+                    "heatmap_lr": heatmap,
+                    "grain_mask_lr": grain_mask,
+                    "invariant_similarity_lr": sim_map,
+                    "distance_bias_lr": dist_bias_map,
+                    "context_impact_lr": impact_map,
+                    "context_shift_norm": context_shift_norm,
+                }
+            )
+
+        return traces
 
     def forward(
         self,

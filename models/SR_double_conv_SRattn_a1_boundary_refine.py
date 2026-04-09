@@ -1223,7 +1223,8 @@ class BoundaryRefinementHead(nn.Module):
         hr_shape: tuple[int, int],
         guidance: torch.Tensor | None = None,
         boundary_logits: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        return_trace: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor | None] | tuple[torch.Tensor, torch.Tensor | None, list[dict[str, torch.Tensor | int | None]]]:
         Hr, Wr = hr_shape
         batched = feat.dim() == 3
         if not batched:
@@ -1237,6 +1238,7 @@ class BoundaryRefinementHead(nn.Module):
 
         feat_img = feat.reshape(B, Hr, Wr, C).permute(0, 3, 1, 2).contiguous()
         b_logits = boundary_logits
+        trace: list[dict[str, torch.Tensor | int | None]] | None = [] if return_trace else None
 
         for step in range(self.num_steps):
             feat_padded = F.pad(feat_img, (self.padding, self.padding, self.padding, self.padding), mode="replicate")
@@ -1267,11 +1269,40 @@ class BoundaryRefinementHead(nn.Module):
             if self.boundary_delta is not None and b_logits is not None:
                 b_logits = b_logits + self.boundary_delta(gate_in)
 
+            if trace is not None:
+                feat_step = feat_img.permute(0, 2, 3, 1).reshape(B, Hr * Wr, C).contiguous()
+                trace.append(
+                    {
+                        "step": int(step + 1),
+                        "feat": feat_step.detach().clone(),
+                        "boundary_logits": (
+                            b_logits.detach().clone() if b_logits is not None else None
+                        ),
+                    }
+                )
+
         out = feat_img.permute(0, 2, 3, 1).reshape(B, Hr * Wr, C).contiguous()
         if not batched:
             out = out.squeeze(0)
             if b_logits is not None:
                 b_logits = b_logits.squeeze(0)
+            if trace is not None:
+                squeezed_trace: list[dict[str, torch.Tensor | int | None]] = []
+                for item in trace:
+                    feat_item = item["feat"]
+                    logits_item = item["boundary_logits"]
+                    squeezed_trace.append(
+                        {
+                            "step": item["step"],
+                            "feat": feat_item.squeeze(0) if isinstance(feat_item, torch.Tensor) else feat_item,
+                            "boundary_logits": (
+                                logits_item.squeeze(0) if isinstance(logits_item, torch.Tensor) else logits_item
+                            ),
+                        }
+                    )
+                trace = squeezed_trace
+        if trace is not None:
+            return out, b_logits, trace
         return out, b_logits
 
 

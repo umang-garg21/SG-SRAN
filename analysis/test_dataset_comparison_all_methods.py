@@ -11,7 +11,7 @@ This keeps the same overall format as `patch_sample_comparison_all_methods.ipynb
 5. full-test evaluation harness
 6. run
 7. representative full-map IPF overview
-8. representative patch dashboard
+8. representative full-map dashboard
 9. full test-split scalar summary table
 
 Important note on the final table:
@@ -25,7 +25,7 @@ Important note on the final table:
   those concatenated scalar maps, so they reflect whole-split scalar-map error
   instead of only the difference between two dataset means.
 - Dataset-level SSIM over disconnected images is not uniquely defined. Here it is
-  computed on the vertically concatenated misorientation map for the full split so
+  computed on the vertically concatenated IPF RGB maps (ref_dir=Z) for SR vs HR so
   it remains a whole-dataset metric rather than a per-sample average.
 
 Plots and summary tables are saved to an analysis output folder. They are not
@@ -114,8 +114,6 @@ DATASET_DIR = Path("/data/home/umang/Materials/Materials_data_mount/datasets/IN7
 SPLIT = "Test"
 TAKE_FIRST = None          # set an int for a smoke test
 REPRESENTATIVE_INDEX = 0   # first sorted test sample by default
-PATCH_ROWS = slice(50, 120)
-PATCH_COLS = slice(50, 150)
 SHOW_PLOTS = True
 DISPLAY_PLOTS = False
 SAVE_PLOTS = True
@@ -128,6 +126,7 @@ OUTPUT_ROOT = repo_root / "analysis" / "test_dataset_comparison_outputs" / f"{SP
 OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
 RESUME_CACHE_ROOT = repo_root / "analysis" / "test_dataset_comparison_resume" / DATASET_DIR.name / SPLIT.lower()
 RESUME_CACHE_ROOT.mkdir(parents=True, exist_ok=True)
+IPF_SSIM_REF_DIR = "Z"
 FIGURE_DIR = OUTPUT_ROOT / "figures"
 TABLE_DIR = OUTPUT_ROOT / "tables"
 METRIC_DIR = OUTPUT_ROOT / "metrics"
@@ -296,14 +295,6 @@ def _safe_artifact_name(name):
     return name.lower().replace(" ", "_").replace("/", "_")
 
 
-def _slice_payload(slc):
-    return {
-        "start": slc.start,
-        "stop": slc.stop,
-        "step": slc.step,
-    }
-
-
 def _save_representative_cache(path, representative):
     path = Path(path)
     payload = {}
@@ -325,23 +316,22 @@ def _load_representative_cache(path):
     return representative
 
 
-def _evaluation_signature(method_name, pairs, representative_index, patch_rows, patch_cols, sym_ops):
+def _evaluation_signature(method_name, pairs, representative_index, sym_ops):
     representative_sample_id = None
     if 0 <= representative_index < len(pairs):
         representative_sample_id = pairs[representative_index]["sample_id"]
     return {
-        "resume_version": 1,
+        "resume_version": 4,
         "method_name": method_name,
         "dataset_dir": str(DATASET_DIR),
         "split": SPLIT,
         "take_first": TAKE_FIRST,
         "concat_shape": list(CONCAT_SHAPE),
+        "ipf_concat_shape": list(IPF_CONCAT_SHAPE),
         "n_samples": len(pairs),
         "sample_ids": [pair["sample_id"] for pair in pairs],
         "representative_index": int(representative_index),
         "representative_sample_id": representative_sample_id,
-        "patch_rows": _slice_payload(patch_rows),
-        "patch_cols": _slice_payload(patch_cols),
         "symmetry": _resolve_symmetry_name(sym_ops) or str(sym_ops),
     }
 
@@ -353,15 +343,13 @@ def _reset_resume_cache_dir(cache_dir):
     cache_dir.mkdir(parents=True, exist_ok=True)
 
 
-def _prepare_resume_cache(method_name, pairs, representative_index, patch_rows, patch_cols, sym_ops):
+def _prepare_resume_cache(method_name, pairs, representative_index, sym_ops):
     safe_method_name = _safe_artifact_name(method_name)
     cache_dir = RESUME_CACHE_ROOT / safe_method_name
     signature = _evaluation_signature(
         method_name,
         pairs,
         representative_index,
-        patch_rows,
-        patch_cols,
         sym_ops,
     )
     state_path = cache_dir / "state.json"
@@ -373,6 +361,10 @@ def _prepare_resume_cache(method_name, pairs, representative_index, patch_rows, 
         "grod_hr": cache_dir / "grod_hr.dat",
         "kam_sr": cache_dir / "kam_sr.dat",
         "kam_hr": cache_dir / "kam_hr.dat",
+        "ipf_sr": cache_dir / "ipf_sr.dat",
+        "ipf_hr": cache_dir / "ipf_hr.dat",
+        "boundary_sr": cache_dir / "boundary_sr.dat",
+        "boundary_hr": cache_dir / "boundary_hr.dat",
     }
 
     state = _read_json(state_path) if state_path.exists() else None
@@ -436,6 +428,7 @@ def _progress_metrics_payload(results):
         name: {
             "global": results[name]["global"],
             "representative_sample_id": results[name]["representative"]["sample_id"],
+            "representative_boundary_f1": results[name]["representative"].get("boundary_f1"),
         }
         for name in results
     }
@@ -491,6 +484,7 @@ def infer_concat_shape(pairs):
 
 CONCAT_SHAPE = infer_concat_shape(PAIRS)
 print("concat_shape_for_dataset_metrics:", CONCAT_SHAPE)
+IPF_CONCAT_SHAPE = (CONCAT_SHAPE[0], CONCAT_SHAPE[1], 3)
 
 # %% Section 2: Quaternion + metric helpers
 def normalize_quat(q, eps=1e-12):
@@ -698,6 +692,64 @@ def compute_kam(
     return kam, stats
 
 
+def compute_boundary_mask(ori_map, *, sym_ops=None, threshold_deg=5.0, connectivity=4):
+    ori_map = np.asarray(ori_map, dtype=np.float64)
+    H, W = ori_map.shape[:2]
+    neighbors = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+    if connectivity == 8:
+        neighbors += [(-1, -1), (-1, 1), (1, -1), (1, 1)]
+
+    boundary = np.zeros((H, W), dtype=bool)
+    for dy, dx in neighbors:
+        src_y0 = max(0, -dy)
+        src_y1 = H - max(0, dy)
+        src_x0 = max(0, -dx)
+        src_x1 = W - max(0, dx)
+        dst_y0 = max(0, dy)
+        dst_y1 = H - max(0, -dy)
+        dst_x0 = max(0, dx)
+        dst_x1 = W - max(0, -dx)
+
+        shifted = np.zeros_like(ori_map)
+        shifted[dst_y0:dst_y1, dst_x0:dst_x1] = ori_map[src_y0:src_y1, src_x0:src_x1]
+
+        valid_mask = np.zeros((H, W), dtype=bool)
+        valid_mask[dst_y0:dst_y1, dst_x0:dst_x1] = True
+
+        mis = np.zeros((H, W), dtype=np.float64)
+        if np.any(valid_mask):
+            mis_vals = crystallographic_misorientation(
+                ori_map[valid_mask],
+                shifted[valid_mask],
+                sym_quats=sym_ops,
+                degrees=True,
+            )
+            mis[valid_mask] = mis_vals
+        boundary |= mis > float(threshold_deg)
+
+    return boundary
+
+
+def boundary_metrics(sr_boundary, hr_boundary):
+    sr_boundary = np.asarray(sr_boundary, dtype=bool)
+    hr_boundary = np.asarray(hr_boundary, dtype=bool)
+    tp = int(np.sum(sr_boundary & hr_boundary))
+    fp = int(np.sum(sr_boundary & ~hr_boundary))
+    fn = int(np.sum(~sr_boundary & hr_boundary))
+    precision = float(tp / (tp + fp)) if (tp + fp) > 0 else float("nan")
+    recall = float(tp / (tp + fn)) if (tp + fn) > 0 else float("nan")
+    denom = 2 * tp + fp + fn
+    f1 = float((2 * tp) / denom) if denom > 0 else float("nan")
+    return {
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
+        "tp": tp,
+        "fp": fp,
+        "fn": fn,
+    }
+
+
 def _resolve_symmetry_quats(sym_quats):
     if sym_quats is None:
         return None
@@ -736,6 +788,18 @@ def _resolve_symmetry_name(sym_quats):
     return None
 
 
+def _resolve_ipf_sym(sym_ops):
+    if sym_ops is None:
+        return resolve_symmetry("Oh")
+    if isinstance(sym_ops, str):
+        return resolve_symmetry(sym_ops)
+    if hasattr(sym_ops, "laue"):
+        return sym_ops
+    if hasattr(sym_ops, "data"):
+        return sym_ops
+    return resolve_symmetry(str(sym_ops))
+
+
 def max_misorientation_from_sym(sym_quats):
     # The pairwise angle between symmetry operators is not the same as the
     # maximum crystallographic disorientation inside the fundamental zone.
@@ -762,17 +826,23 @@ def _summarize_scalar_map_pair(sr_concat, hr_concat, *, percentile_key, percenti
 
     sr_mean = float(np.nanmean(sr_concat))
     hr_mean = float(np.nanmean(hr_concat))
+    sr_std = float(np.nanstd(sr_concat))
+    hr_std = float(np.nanstd(hr_concat))
+    abs_mean_mag_diff = float(abs(sr_mean) - abs(hr_mean))
+    delta_std = float(np.nanstd(delta))
 
     return {
         "mean": sr_mean,
-        "std": float(np.nanstd(sr_concat)),
+        "std": sr_std,
         percentile_key: _safe_nanpercentile(sr_concat, percentile),
         "hr_mean": hr_mean,
-        "hr_std": float(np.nanstd(hr_concat)),
+        "hr_std": hr_std,
         f"hr_{percentile_key}": _safe_nanpercentile(hr_concat, percentile),
         "mean_diff": float(sr_mean - hr_mean),
         "abs_mean_diff": float(abs(sr_mean - hr_mean)),
+        "abs_mean_mag_diff": abs_mean_mag_diff,
         "mean_abs_delta": float(np.nanmean(abs_delta)),
+        "std_delta": delta_std,
         "rmse_delta": float(np.sqrt(np.nanmean(delta ** 2))),
     }
 
@@ -807,12 +877,29 @@ def ssim_from_map(ref_map, test_map, win_size=7, data_range=None):
     )
 
 
+def ssim_from_rgb_map(ref_rgb, test_rgb, win_size=7, data_range=1.0):
+    if not SKIMAGE_AVAILABLE or sk_ssim is None:
+        return np.nan
+    ref_rgb = np.asarray(ref_rgb, dtype=np.float64)
+    test_rgb = np.asarray(test_rgb, dtype=np.float64)
+    if ref_rgb.ndim != 3 or ref_rgb.shape[-1] != 3:
+        raise ValueError(f"Expected RGB map (H, W, 3), got {ref_rgb.shape}")
+    if test_rgb.shape != ref_rgb.shape:
+        raise ValueError(f"SSIM RGB shape mismatch: {test_rgb.shape} vs {ref_rgb.shape}")
+    win_size = min(int(win_size), ref_rgb.shape[0], ref_rgb.shape[1])
+    if win_size % 2 == 0:
+        win_size -= 1
+    win_size = max(win_size, 3)
+    return float(
+        sk_ssim(ref_rgb, test_rgb, data_range=float(data_range), win_size=win_size, channel_axis=-1)
+    )
+
+
 # %% Section 3: Load models + representative test sample
 rep_lr = np.load(REP_PAIR["lr_file"]).astype(np.float32)
 rep_hr = np.load(REP_PAIR["hr_file"]).astype(np.float32)
-rep_hr_patch = rep_hr[PATCH_ROWS, PATCH_COLS]
-rep_grod_hr_patch, _ = compute_grod(rep_hr_patch, sym_ops=sym)
-rep_kam_hr_patch, _ = compute_kam(rep_hr_patch, radius=1, sym_ops=sym)
+rep_grod_hr_full, _ = compute_grod(rep_hr, sym_ops=sym)
+rep_kam_hr_full, _ = compute_kam(rep_hr, radius=1, sym_ops=sym)
 sample_scale = (int(rep_hr.shape[0] // rep_lr.shape[0]), int(rep_hr.shape[1] // rep_lr.shape[1]))
 
 
@@ -1006,7 +1093,7 @@ def _ensure_qrbsa_model_loaded():
 
 print("Representative LR shape:", rep_lr.shape)
 print("Representative HR shape:", rep_hr.shape)
-print("Representative patch shape:", rep_hr_patch.shape)
+print("Representative full-map shape:", rep_hr.shape)
 print("Sample scale:", sample_scale)
 
 model_bicubic_finterp = QuaternionBicubicFInterpolateSR(
@@ -1038,13 +1125,23 @@ def _forward_model_sr_split(model_obj, lr_flat, lr_shape, *, lr_boundary_map=Non
     with torch.no_grad():
         lr_flat = _normalize_quat_torch(lr_flat)
         feat_lr_a1 = model_obj.encode_a1(lr_flat)
-        if lr_boundary_map is None:
-            feat_hr_a1, _ = model_obj._forward_sr_features(feat_lr_a1, lr_shape)
-        else:
+        forward_kwargs = {}
+        if lr_boundary_map is not None:
+            forward_kwargs["lr_boundary_map"] = lr_boundary_map
+        try:
             feat_hr_a1, _ = model_obj._forward_sr_features(
                 feat_lr_a1,
                 lr_shape,
-                lr_boundary_map=lr_boundary_map,
+                lr_quats=lr_flat,
+                **forward_kwargs,
+            )
+        except TypeError as exc:
+            if "lr_quats" not in str(exc):
+                raise
+            feat_hr_a1, _ = model_obj._forward_sr_features(
+                feat_lr_a1,
+                lr_shape,
+                **forward_kwargs,
             )
         feat_hr_a1 = feat_hr_a1.detach()
 
@@ -1598,7 +1695,18 @@ def _prepare_models_for_method(method_name):
     torch.cuda.empty_cache()
 
 # %% Section 5: Full-test evaluation harness
-def _summarize_global_maps(mis_concat, grod_sr_concat, grod_hr_concat, kam_sr_concat, kam_hr_concat, max_mis_deg):
+def _summarize_global_maps(
+    mis_concat,
+    grod_sr_concat,
+    grod_hr_concat,
+    kam_sr_concat,
+    kam_hr_concat,
+    ipf_sr_concat,
+    ipf_hr_concat,
+    boundary_sr_concat,
+    boundary_hr_concat,
+    max_mis_deg,
+):
     zero_ref = np.zeros(mis_concat.shape, dtype=np.float32)
 
     mis_stats = {
@@ -1606,7 +1714,7 @@ def _summarize_global_maps(mis_concat, grod_sr_concat, grod_hr_concat, kam_sr_co
         "median": float(np.nanmedian(mis_concat)),
         "p90": float(np.nanpercentile(mis_concat, 90)),
         "psnr": psnr_from_map(zero_ref, mis_concat, max_val=max_mis_deg),
-        "ssim": ssim_from_map(zero_ref, mis_concat, win_size=7, data_range=max_mis_deg),
+        "ssim": ssim_from_rgb_map(ipf_hr_concat, ipf_sr_concat, win_size=7, data_range=1.0),
     }
 
     grod_stats = _summarize_scalar_map_pair(
@@ -1622,12 +1730,35 @@ def _summarize_global_maps(mis_concat, grod_sr_concat, grod_hr_concat, kam_sr_co
         percentile=90,
     )
 
+    boundary_stats = boundary_metrics(boundary_sr_concat, boundary_hr_concat)
+
     return {
         "mis": mis_stats,
         "grod": grod_stats,
         "kam": kam_stats,
+        "boundary": boundary_stats,
+        "boundary_f1": boundary_stats["f1"],
         "concat_shape": tuple(mis_concat.shape),
     }
+
+
+def _attach_representative_boundary_metrics(representative, *, sym_ops):
+    if representative is None:
+        return None
+    if "boundary_f1" in representative:
+        return representative
+
+    boundary_sr_full = compute_boundary_mask(
+        representative["sr_full"], sym_ops=sym_ops, threshold_deg=5.0, connectivity=4
+    )
+    boundary_hr_full = compute_boundary_mask(
+        representative["hr"], sym_ops=sym_ops, threshold_deg=5.0, connectivity=4
+    )
+    stats = boundary_metrics(boundary_sr_full, boundary_hr_full)
+    representative["boundary_precision"] = stats["precision"]
+    representative["boundary_recall"] = stats["recall"]
+    representative["boundary_f1"] = stats["f1"]
+    return representative
 
 
 def evaluate_method_over_dataset(
@@ -1636,8 +1767,6 @@ def evaluate_method_over_dataset(
     pairs,
     *,
     representative_index=0,
-    patch_rows=PATCH_ROWS,
-    patch_cols=PATCH_COLS,
     sym_ops=sym,
 ):
     max_mis_deg = max_misorientation_from_sym(sym_ops)
@@ -1646,8 +1775,6 @@ def evaluate_method_over_dataset(
         method_name,
         pairs,
         representative_index,
-        patch_rows,
-        patch_cols,
         sym_ops,
     )
     cache_state = cache["state"]
@@ -1657,6 +1784,10 @@ def evaluate_method_over_dataset(
         and cache["representative_path"].exists()
     ):
         representative = _load_representative_cache(cache["representative_path"])
+        boundary_metrics_missing = "boundary_f1" not in representative
+        representative = _attach_representative_boundary_metrics(representative, sym_ops=sym_ops)
+        if boundary_metrics_missing:
+            _save_representative_cache(cache["representative_path"], representative)
         global_stats = _read_json(cache["final_result_path"])["global"]
         print(f"[{method_name}] loaded completed evaluation from resume cache: {cache['cache_dir']}")
         return {
@@ -1674,20 +1805,40 @@ def evaluate_method_over_dataset(
     grod_hr_concat = np.memmap(array_paths["grod_hr"], dtype=np.float32, mode=array_mode, shape=CONCAT_SHAPE)
     kam_sr_concat = np.memmap(array_paths["kam_sr"], dtype=np.float32, mode=array_mode, shape=CONCAT_SHAPE)
     kam_hr_concat = np.memmap(array_paths["kam_hr"], dtype=np.float32, mode=array_mode, shape=CONCAT_SHAPE)
+    ipf_sr_concat = np.memmap(array_paths["ipf_sr"], dtype=np.float32, mode=array_mode, shape=IPF_CONCAT_SHAPE)
+    ipf_hr_concat = np.memmap(array_paths["ipf_hr"], dtype=np.float32, mode=array_mode, shape=IPF_CONCAT_SHAPE)
+    boundary_sr_concat = np.memmap(array_paths["boundary_sr"], dtype=np.uint8, mode=array_mode, shape=CONCAT_SHAPE)
+    boundary_hr_concat = np.memmap(array_paths["boundary_hr"], dtype=np.uint8, mode=array_mode, shape=CONCAT_SHAPE)
 
     if array_mode == "w+":
-        for arr in (mis_concat, grod_sr_concat, grod_hr_concat, kam_sr_concat, kam_hr_concat):
+        for arr in (
+            mis_concat,
+            grod_sr_concat,
+            grod_hr_concat,
+            kam_sr_concat,
+            kam_hr_concat,
+            ipf_sr_concat,
+            ipf_hr_concat,
+        ):
             arr[:] = np.nan
+            arr.flush()
+        for arr in (boundary_sr_concat, boundary_hr_concat):
+            arr[:] = 0
             arr.flush()
 
     if cache["representative_path"].exists():
         representative = _load_representative_cache(cache["representative_path"])
+        boundary_metrics_missing = "boundary_f1" not in representative
+        representative = _attach_representative_boundary_metrics(representative, sym_ops=sym_ops)
+        if boundary_metrics_missing:
+            _save_representative_cache(cache["representative_path"], representative)
 
     start_idx = int(cache_state.get("completed_samples", 0))
     row_start = int(cache_state.get("row_start", 0))
     if 0 < start_idx < len(pairs):
         print(f"[{method_name}] resuming from sample {start_idx + 1}/{len(pairs)} using {cache['cache_dir']}")
 
+    ipf_sym = _resolve_ipf_sym(sym_ops)
     try:
         for idx in tqdm(range(start_idx, len(pairs)), desc=method_name, leave=False):
             pair = pairs[idx]
@@ -1700,6 +1851,15 @@ def evaluate_method_over_dataset(
             grod_hr_full, _ = compute_grod(hr, sym_ops=sym_ops)
             kam_sr_full, _ = compute_kam(sr_full, radius=1, sym_ops=sym_ops)
             kam_hr_full, _ = compute_kam(hr, radius=1, sym_ops=sym_ops)
+            ipf_sr_full = render_ipf_rgb(sr_full, ipf_sym, ref_dir=IPF_SSIM_REF_DIR)
+            ipf_hr_full = render_ipf_rgb(hr, ipf_sym, ref_dir=IPF_SSIM_REF_DIR)
+            boundary_sr_full = compute_boundary_mask(
+                sr_full, sym_ops=sym_ops, threshold_deg=5.0, connectivity=4
+            )
+            boundary_hr_full = compute_boundary_mask(
+                hr, sym_ops=sym_ops, threshold_deg=5.0, connectivity=4
+            )
+            rep_boundary_stats = boundary_metrics(boundary_sr_full, boundary_hr_full)
 
             h, w = hr.shape[:2]
             row_end = row_start + h
@@ -1708,7 +1868,21 @@ def evaluate_method_over_dataset(
             grod_hr_concat[row_start:row_end, :w] = grod_hr_full.astype(np.float32)
             kam_sr_concat[row_start:row_end, :w] = kam_sr_full.astype(np.float32)
             kam_hr_concat[row_start:row_end, :w] = kam_hr_full.astype(np.float32)
-            for arr in (mis_concat, grod_sr_concat, grod_hr_concat, kam_sr_concat, kam_hr_concat):
+            ipf_sr_concat[row_start:row_end, :w, :] = np.asarray(ipf_sr_full, dtype=np.float32)
+            ipf_hr_concat[row_start:row_end, :w, :] = np.asarray(ipf_hr_full, dtype=np.float32)
+            boundary_sr_concat[row_start:row_end, :w] = boundary_sr_full.astype(np.uint8)
+            boundary_hr_concat[row_start:row_end, :w] = boundary_hr_full.astype(np.uint8)
+            for arr in (
+                mis_concat,
+                grod_sr_concat,
+                grod_hr_concat,
+                kam_sr_concat,
+                kam_hr_concat,
+                ipf_sr_concat,
+                ipf_hr_concat,
+                boundary_sr_concat,
+                boundary_hr_concat,
+            ):
                 arr.flush()
 
             row_start = row_end
@@ -1718,12 +1892,13 @@ def evaluate_method_over_dataset(
                     "sample_id": pair["sample_id"],
                     "lr": lr,
                     "hr": hr,
-                    "hr_patch": hr[patch_rows, patch_cols],
                     "sr_full": sr_full,
-                    "sr_patch": sr_full[patch_rows, patch_cols],
-                    "mis_patch": mis_full[patch_rows, patch_cols],
-                    "grod": grod_sr_full[patch_rows, patch_cols].astype(np.float32),
-                    "kam": kam_sr_full[patch_rows, patch_cols].astype(np.float32),
+                    "mis": mis_full.astype(np.float32),
+                    "grod": grod_sr_full.astype(np.float32),
+                    "kam": kam_sr_full.astype(np.float32),
+                    "boundary_precision": rep_boundary_stats["precision"],
+                    "boundary_recall": rep_boundary_stats["recall"],
+                    "boundary_f1": rep_boundary_stats["f1"],
                 }
                 _save_representative_cache(cache["representative_path"], representative)
 
@@ -1736,7 +1911,20 @@ def evaluate_method_over_dataset(
                 last_sample_id=pair["sample_id"],
             )
 
-            del lr, hr, sr_full, mis_full, grod_sr_full, grod_hr_full, kam_sr_full, kam_hr_full
+            del (
+                lr,
+                hr,
+                sr_full,
+                mis_full,
+                grod_sr_full,
+                grod_hr_full,
+                kam_sr_full,
+                kam_hr_full,
+                ipf_sr_full,
+                ipf_hr_full,
+                boundary_sr_full,
+                boundary_hr_full,
+            )
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
@@ -1748,19 +1936,27 @@ def evaluate_method_over_dataset(
             mis_full = misorientation_map(sr_full, hr, sym_quats=sym_ops, degrees=True).astype(np.float32)
             grod_sr_full, _ = compute_grod(sr_full, sym_ops=sym_ops)
             kam_sr_full, _ = compute_kam(sr_full, radius=1, sym_ops=sym_ops)
+            boundary_sr_full = compute_boundary_mask(
+                sr_full, sym_ops=sym_ops, threshold_deg=5.0, connectivity=4
+            )
+            boundary_hr_full = compute_boundary_mask(
+                hr, sym_ops=sym_ops, threshold_deg=5.0, connectivity=4
+            )
+            rep_boundary_stats = boundary_metrics(boundary_sr_full, boundary_hr_full)
             representative = {
                 "sample_id": pair["sample_id"],
                 "lr": lr,
                 "hr": hr,
-                "hr_patch": hr[patch_rows, patch_cols],
                 "sr_full": sr_full,
-                "sr_patch": sr_full[patch_rows, patch_cols],
-                "mis_patch": mis_full[patch_rows, patch_cols],
-                "grod": grod_sr_full[patch_rows, patch_cols].astype(np.float32),
-                "kam": kam_sr_full[patch_rows, patch_cols].astype(np.float32),
+                "mis": mis_full.astype(np.float32),
+                "grod": grod_sr_full.astype(np.float32),
+                "kam": kam_sr_full.astype(np.float32),
+                "boundary_precision": rep_boundary_stats["precision"],
+                "boundary_recall": rep_boundary_stats["recall"],
+                "boundary_f1": rep_boundary_stats["f1"],
             }
             _save_representative_cache(cache["representative_path"], representative)
-            del lr, hr, sr_full, mis_full, grod_sr_full, kam_sr_full
+            del lr, hr, sr_full, mis_full, grod_sr_full, kam_sr_full, boundary_sr_full, boundary_hr_full
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
@@ -1770,6 +1966,10 @@ def evaluate_method_over_dataset(
             grod_hr_concat=grod_hr_concat,
             kam_sr_concat=kam_sr_concat,
             kam_hr_concat=kam_hr_concat,
+            ipf_sr_concat=ipf_sr_concat,
+            ipf_hr_concat=ipf_hr_concat,
+            boundary_sr_concat=boundary_sr_concat,
+            boundary_hr_concat=boundary_hr_concat,
             max_mis_deg=max_mis_deg,
         )
         _write_json(
@@ -1790,13 +1990,24 @@ def evaluate_method_over_dataset(
             last_sample_id=None if not pairs else pairs[-1]["sample_id"],
         )
     finally:
-        del mis_concat, grod_sr_concat, grod_hr_concat, kam_sr_concat, kam_hr_concat
+        del (
+            mis_concat,
+            grod_sr_concat,
+            grod_hr_concat,
+            kam_sr_concat,
+            kam_hr_concat,
+            ipf_sr_concat,
+            ipf_hr_concat,
+            boundary_sr_concat,
+            boundary_hr_concat,
+        )
 
     print(
         f"[{method_name}] "
         f"global mis_mean={global_stats['mis']['mean']:.3f}°, "
         f"PSNR={global_stats['mis']['psnr']:.2f} dB, "
-        f"SSIM={global_stats['mis']['ssim']:.4f}, "
+        f"SSIM(IPF)={global_stats['mis']['ssim']:.4f}, "
+        f"BoundaryF1={global_stats['boundary_f1']:.4f}, "
         f"mean|GROD-HR|={global_stats['grod']['mean_abs_delta']:.3f}°, "
         f"mean|KAM-HR|={global_stats['kam']['mean_abs_delta']:.3f}°"
     )
@@ -1826,8 +2037,6 @@ def compare_methods_over_dataset(
     pairs,
     *,
     representative_index=0,
-    patch_rows=PATCH_ROWS,
-    patch_cols=PATCH_COLS,
     sym_ops=sym,
 ):
     representative = None
@@ -1858,17 +2067,14 @@ def compare_methods_over_dataset(
             component_count += int(sr_a.size)
 
             if idx == representative_index:
-                rep_patch_a = sr_a[patch_rows, patch_cols]
-                rep_patch_b = sr_b[patch_rows, patch_cols]
-                rep_patch_mis = mis_full[patch_rows, patch_cols]
                 representative = {
                     "sample_id": pair["sample_id"],
                     "summary": {
-                        "mean": float(np.nanmean(rep_patch_mis)),
-                        "median": float(np.nanmedian(rep_patch_mis)),
-                        "p90": float(np.nanpercentile(rep_patch_mis, 90)),
-                        "max": float(np.nanmax(rep_patch_mis)),
-                        "mean_abs_component_diff": float(np.mean(np.abs(rep_patch_a - rep_patch_b))),
+                        "mean": float(np.nanmean(mis_full)),
+                        "median": float(np.nanmedian(mis_full)),
+                        "p90": float(np.nanpercentile(mis_full, 90)),
+                        "max": float(np.nanmax(mis_full)),
+                        "mean_abs_component_diff": float(np.mean(np.abs(sr_a - sr_b))),
                     },
                 }
 
@@ -1902,8 +2108,6 @@ for method_name, method_fn in METHODS.items():
         method_fn,
         PAIRS,
         representative_index=REPRESENTATIVE_INDEX,
-        patch_rows=PATCH_ROWS,
-        patch_cols=PATCH_COLS,
         sym_ops=sym,
     )
     _write_json(
@@ -1925,8 +2129,6 @@ if "Bicubic" in METHODS and "Bicubic (F.interpolate)" in METHODS:
         METHODS["Bicubic (F.interpolate)"],
         PAIRS,
         representative_index=REPRESENTATIVE_INDEX,
-        patch_rows=PATCH_ROWS,
-        patch_cols=PATCH_COLS,
         sym_ops=sym,
     )
     _write_json(METRIC_DIR / "bicubic_backend_comparison.json", bicubic_backend_comparison)
@@ -1999,34 +2201,34 @@ if SHOW_PLOTS:
     else:
         plt.close(fig)
 
-# %% Section 8: Combined representative patch dashboard
+# %% Section 8: Combined representative full-map dashboard
 if SHOW_PLOTS:
     from matplotlib.colors import Normalize
 
     method_names = list(METHODS.keys())
     ref_dirs = ("X", "Y", "Z")
-    panel_names = ["HR Patch"] + method_names
+    panel_names = ["HR"] + method_names
     n_methods = len(method_names)
     n_data_cols = len(panel_names)
 
-    patch_ipf = {"HR Patch": dict(zip(ref_dirs, render_ipf_rgb(rep_hr_patch, sym)))}
+    full_ipf = {"HR": dict(zip(ref_dirs, render_ipf_rgb(rep_hr, sym)))}
     for name in method_names:
-        patch_ipf[name] = dict(zip(ref_dirs, render_ipf_rgb(all_results[name]["representative"]["sr_patch"], sym)))
+        full_ipf[name] = dict(zip(ref_dirs, render_ipf_rgb(all_results[name]["representative"]["sr_full"], sym)))
 
     vmax_grod = max(
-        [np.nanmax(rep_grod_hr_patch)] + [np.nanmax(all_results[n]["representative"]["grod"]) for n in method_names]
+        [np.nanmax(rep_grod_hr_full)] + [np.nanmax(all_results[n]["representative"]["grod"]) for n in method_names]
     )
     vmax_kam = max(
-        [np.nanmax(rep_kam_hr_patch)] + [np.nanmax(all_results[n]["representative"]["kam"]) for n in method_names]
+        [np.nanmax(rep_kam_hr_full)] + [np.nanmax(all_results[n]["representative"]["kam"]) for n in method_names]
     )
 
     row_labels = [
-        "Patch IPF-X",
-        "Patch IPF-Y",
-        "Patch IPF-Z",
-        "Patch GROD",
-        "Patch KAM",
-        "Patch Misorientation\nHistogram",
+        "Full IPF-X",
+        "Full IPF-Y",
+        "Full IPF-Z",
+        "Full GROD",
+        "Full KAM",
+        "Full Misorientation\nHistogram",
     ]
 
     fig = plt.figure(figsize=(2.2 * (n_data_cols + 1.45), 15.3), constrained_layout=True)
@@ -2036,7 +2238,7 @@ if SHOW_PLOTS:
         width_ratios=[0.48] + [1] * n_data_cols + [0.08],
         height_ratios=[1, 1, 1, 1, 1, 1.24],
     )
-    fig.suptitle(f"{representative_sample_id} — Patch Comparison Dashboard", fontsize=17)
+    fig.suptitle(f"{representative_sample_id} — Full-map Comparison Dashboard", fontsize=17)
 
     for r, label in enumerate(row_labels):
         ax_label = fig.add_subplot(gs[r, 0])
@@ -2055,27 +2257,27 @@ if SHOW_PLOTS:
         axes.append(row_axes)
 
     for ridx, rd in enumerate(ref_dirs):
-        axes[ridx][0].imshow(patch_ipf["HR Patch"][rd])
+        axes[ridx][0].imshow(full_ipf["HR"][rd])
         for c, name in enumerate(method_names, start=1):
-            axes[ridx][c].imshow(patch_ipf[name][rd])
+            axes[ridx][c].imshow(full_ipf[name][rd])
 
     norm_grod = Normalize(vmin=0, vmax=vmax_grod)
     for c in range(n_data_cols):
-        data = rep_grod_hr_patch if c == 0 else all_results[method_names[c - 1]]["representative"]["grod"]
+        data = rep_grod_hr_full if c == 0 else all_results[method_names[c - 1]]["representative"]["grod"]
         im_grod = axes[3][c].imshow(data, cmap="inferno", norm=norm_grod)
     grod_cax = fig.add_subplot(gs[3, -1])
     fig.colorbar(im_grod, cax=grod_cax, label="GROD (°)")
 
     norm_kam = Normalize(vmin=0, vmax=vmax_kam)
     for c in range(n_data_cols):
-        data = rep_kam_hr_patch if c == 0 else all_results[method_names[c - 1]]["representative"]["kam"]
+        data = rep_kam_hr_full if c == 0 else all_results[method_names[c - 1]]["representative"]["kam"]
         im_kam = axes[4][c].imshow(data, cmap="coolwarm", norm=norm_kam)
     kam_cax = fig.add_subplot(gs[4, -1])
     fig.colorbar(im_kam, cax=kam_cax, label="KAM (°), blue → red")
 
     ax_hist_ref = fig.add_subplot(gs[5, 1])
     ax_hist_ref.axis("off")
-    ax_hist_ref.text(0.5, 0.57, "HR patch\nreference", ha="center", va="center", fontsize=9, color="0.35")
+    ax_hist_ref.text(0.5, 0.57, "HR full-map\nreference", ha="center", va="center", fontsize=9, color="0.35")
     ax_hist_ref.text(
         0.5,
         0.29,
@@ -2090,7 +2292,7 @@ if SHOW_PLOTS:
     hist_colors = list(plt.cm.tab10.colors) + list(plt.cm.Set2.colors)
     for idx, name in enumerate(method_names):
         ax = fig.add_subplot(hist_gs[0, idx])
-        m = all_results[name]["representative"]["mis_patch"].ravel()
+        m = all_results[name]["representative"]["mis"].ravel()
         m = m[~np.isnan(m)]
         m_max = float(np.nanmax(m)) if m.size else 1.0
         x_hi = max(1.0, m_max * 1.02)
@@ -2124,7 +2326,7 @@ if SHOW_PLOTS:
             ax.set_yticklabels([])
 
     if SAVE_PLOTS:
-        _finalize_figure(fig, FIGURE_DIR / "02_patch_comparison_dashboard.png")
+        _finalize_figure(fig, FIGURE_DIR / "02_full_map_comparison_dashboard.png")
     else:
         plt.close(fig)
 
@@ -2141,15 +2343,12 @@ for name in method_names:
             "Mis median": g["mis"]["median"],
             "Mis p90": g["mis"]["p90"],
             "PSNR mis": g["mis"]["psnr"],
-            "SSIM mis": g["mis"]["ssim"],
-            "GROD mean": g["grod"]["mean"],
-            "GROD std": g["grod"]["std"],
-            "mean|GROD - HR|": g["grod"]["mean_abs_delta"],
-            "GROD p90": g["grod"]["p90"],
-            "KAM mean": g["kam"]["mean"],
-            "KAM std": g["kam"]["std"],
-            "mean|KAM - HR|": g["kam"]["mean_abs_delta"],
-            "KAM p90": g["kam"]["p90"],
+            "SSIM IPF": g["mis"]["ssim"],
+            "Boundary F1": g["boundary_f1"],
+            "|mean(GROD method - GROD HR)|": abs(g["grod"]["mean_diff"]),
+            "std(GROD method - GROD HR)": g["grod"]["std_delta"],
+            "|mean(KAM method - KAM HR)|": abs(g["kam"]["mean_diff"]),
+            "std(KAM method - KAM HR)": g["kam"]["std_delta"],
         }
     )
 
@@ -2159,15 +2358,12 @@ metric_order = [
     "Mis median",
     "Mis p90",
     "PSNR mis",
-    "SSIM mis",
-    "GROD mean",
-    "GROD std",
-    "mean|GROD - HR|",
-    "GROD p90",
-    "KAM mean",
-    "KAM std",
-    "mean|KAM - HR|",
-    "KAM p90",
+    "SSIM IPF",
+    "Boundary F1",
+    "|mean(GROD method - GROD HR)|",
+    "std(GROD method - GROD HR)",
+    "|mean(KAM method - KAM HR)|",
+    "std(KAM method - KAM HR)",
 ]
 df_summary = df_summary.loc[metric_order]
 
@@ -2175,31 +2371,45 @@ first_method = method_names[0]
 reference_stats = pd.DataFrame(
     {
         "Whole test split HR": {
-            "GROD mean": all_results[first_method]["global"]["grod"]["hr_mean"],
-            "GROD std": all_results[first_method]["global"]["grod"]["hr_std"],
-            "GROD p90": all_results[first_method]["global"]["grod"]["hr_p90"],
-            "KAM mean": all_results[first_method]["global"]["kam"]["hr_mean"],
-            "KAM std": all_results[first_method]["global"]["kam"]["hr_std"],
-            "KAM p90": all_results[first_method]["global"]["kam"]["hr_p90"],
+            "GROD HR mean": all_results[first_method]["global"]["grod"]["hr_mean"],
+            "GROD HR std": all_results[first_method]["global"]["grod"]["hr_std"],
+            "KAM HR mean": all_results[first_method]["global"]["kam"]["hr_mean"],
+            "KAM HR std": all_results[first_method]["global"]["kam"]["hr_std"],
         }
     }
 )
 metric_targets = reference_stats["Whole test split HR"].to_dict()
+
+grod_kam_means_rows = []
+for name in method_names:
+    g = all_results[name]["global"]
+    grod_kam_means_rows.append(
+        {
+            "Method": name,
+            "GROD mean": g["grod"]["mean"],
+            "KAM mean": g["kam"]["mean"],
+        }
+    )
+grod_kam_means_rows.append(
+    {
+        "Method": "HR reference",
+        "GROD mean": all_results[first_method]["global"]["grod"]["hr_mean"],
+        "KAM mean": all_results[first_method]["global"]["kam"]["hr_mean"],
+    }
+)
+grod_kam_means = pd.DataFrame(grod_kam_means_rows).set_index("Method")
 
 metric_pref = {
     "Mis mean": "min",
     "Mis median": "min",
     "Mis p90": "min",
     "PSNR mis": "max",
-    "SSIM mis": "max",
-    "GROD mean": "ref",
-    "GROD std": "ref",
-    "mean|GROD - HR|": "min",
-    "GROD p90": "ref",
-    "KAM mean": "ref",
-    "KAM std": "ref",
-    "mean|KAM - HR|": "min",
-    "KAM p90": "ref",
+    "SSIM IPF": "max",
+    "Boundary F1": "max",
+    "|mean(GROD method - GROD HR)|": "min",
+    "std(GROD method - GROD HR)": "min",
+    "|mean(KAM method - KAM HR)|": "min",
+    "std(KAM method - KAM HR)": "min",
 }
 
 quick_rows = []
@@ -2210,11 +2420,10 @@ for metric in df_summary.index:
         best_method = vals.idxmax()
         best_value = float(np.nanmax(vals.to_numpy(dtype=float)))
         better = "higher"
-    elif direction == "ref":
-        target = float(metric_targets[metric])
-        best_method = (vals - target).abs().idxmin()
+    elif direction == "absmin":
+        best_method = np.abs(vals).idxmin()
         best_value = float(vals.loc[best_method])
-        better = "closest to HR"
+        better = "closest to 0"
     else:
         best_method = vals.idxmin()
         best_value = float(np.nanmin(vals.to_numpy(dtype=float)))
@@ -2230,8 +2439,10 @@ for metric in df_summary.index:
 quick_read = pd.DataFrame(quick_rows).set_index("Metric")
 
 print("Full test-split scalar summary:")
-print("- lower is better for misorientation rows and for mean|GROD - HR| / mean|KAM - HR|")
-print("- GROD/KAM mean/std/percentile rows are ranked by closeness to the HR reference table")
+print("- |mean(GROD method - GROD HR)| and |mean(KAM method - KAM HR)| are absolute whole-split mean differences; lower is better")
+print("- GROD/KAM means table lists raw method means alongside the HR reference")
+print("- Boundary F1 is computed from whole-map SR/HR boundary masks over the full test split; higher is better")
+print("- std(GROD method - GROD HR) and std(KAM method - KAM HR) are delta-map standard deviations; lower is better")
 print("- PSNR/SSIM are computed from the whole test split, not averaged per sample")
 print("- GROD/KAM summary rows are computed from concatenated per-sample scalar maps")
 print("- mean|GROD - HR| and mean|KAM - HR| are direct whole-split scalar-map MAEs")
@@ -2252,9 +2463,8 @@ def _highlight_by_direction(row):
         score = vals.copy()
         best = np.nanmax(score)
         worst = np.nanmin(score)
-    elif direction == "ref":
-        target = float(metric_targets[row.name])
-        score = np.abs(vals - target)
+    elif direction == "absmin":
+        score = np.abs(vals)
         best = np.nanmin(score)
         worst = np.nanmax(score)
     else:
@@ -2277,6 +2487,15 @@ def _highlight_by_direction(row):
 
 reference_style = (
     reference_stats.style.format("{:.3f}").set_caption("Whole test-split HR reference scalar stats").set_table_styles(
+        [
+            {"selector": "caption", "props": [("caption-side", "top"), ("font-size", "12px"), ("font-weight", "600")]},
+            {"selector": "th", "props": [("text-align", "center"), ("padding", "6px 10px"), ("background-color", "#f4f6f8")]},
+            {"selector": "td", "props": [("text-align", "center"), ("padding", "6px 10px")]},
+        ]
+    )
+)
+grod_kam_means_style = (
+    grod_kam_means.style.format("{:.3f}").set_caption("GROD/KAM means by method (HR reference included)").set_table_styles(
         [
             {"selector": "caption", "props": [("caption-side", "top"), ("font-size", "12px"), ("font-weight", "600")]},
             {"selector": "th", "props": [("text-align", "center"), ("padding", "6px 10px"), ("background-color", "#f4f6f8")]},
@@ -2311,6 +2530,13 @@ _save_dataframe_bundle(
     TABLE_DIR / "reference_stats.csv",
     TABLE_DIR / "reference_stats.html",
     styler=reference_style,
+    float_format="%.6f",
+)
+_save_dataframe_bundle(
+    grod_kam_means,
+    TABLE_DIR / "grod_kam_means.csv",
+    TABLE_DIR / "grod_kam_means.html",
+    styler=grod_kam_means_style,
     float_format="%.6f",
 )
 _save_dataframe_bundle(

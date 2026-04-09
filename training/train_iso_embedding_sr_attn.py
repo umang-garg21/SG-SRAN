@@ -133,6 +133,63 @@ def _save_history(history_path: Path, history: dict) -> None:
         json.dump(history, f, indent=2)
 
 
+def _init_history() -> dict:
+    return {
+        "train": [],
+        "val": [],
+        "lr": [],
+        "train_terms": {},
+        "val_terms": {},
+    }
+
+
+def _normalize_history(history: dict | None) -> dict:
+    base = _init_history()
+    if history is None:
+        return base
+
+    base["train"] = list(history.get("train", []))
+    base["val"] = list(history.get("val", []))
+    base["lr"] = list(history.get("lr", []))
+    base["train_terms"] = {
+        str(k): list(v) for k, v in dict(history.get("train_terms", {})).items()
+    }
+    base["val_terms"] = {
+        str(k): list(v) for k, v in dict(history.get("val_terms", {})).items()
+    }
+    return base
+
+
+def _append_metric_history(metric_history: dict[str, list], metrics: dict[str, float], prior_len: int) -> None:
+    keys = set(metric_history.keys()) | set(metrics.keys())
+    for key in keys:
+        if key not in metric_history:
+            metric_history[key] = [None] * prior_len
+        value = metrics.get(key, None)
+        metric_history[key].append(float(value) if value is not None else None)
+
+
+def _loss_output_to_tensor_and_info(loss_output) -> tuple[torch.Tensor, dict[str, float]]:
+    if (
+        isinstance(loss_output, tuple)
+        and len(loss_output) == 2
+        and isinstance(loss_output[1], dict)
+    ):
+        loss, raw_info = loss_output
+    else:
+        loss, raw_info = loss_output, {}
+
+    info: dict[str, float] = {}
+    for key, value in raw_info.items():
+        if isinstance(value, torch.Tensor):
+            if value.numel() != 1:
+                continue
+            info[str(key)] = float(value.detach().item())
+        elif isinstance(value, (int, float)):
+            info[str(key)] = float(value)
+    return loss, info
+
+
 def _save_loss_plot(plot_path: Path, history: dict, exp_name: str) -> None:
     try:
         import matplotlib
@@ -142,21 +199,60 @@ def _save_loss_plot(plot_path: Path, history: dict, exp_name: str) -> None:
         train = history.get("train", [])
         val   = history.get("val", [])
         lr    = history.get("lr", [])
+        train_terms = history.get("train_terms", {})
+        val_terms = history.get("val_terms", {})
         epochs = list(range(1, len(train) + 1))
+        component_names = sorted(
+            key
+            for key in (set(train_terms.keys()) | set(val_terms.keys()))
+            if key != "loss_total"
+        )
 
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(9, 7), sharex=True)
+        nrows = 3 if component_names else 2
+        fig, axes = plt.subplots(nrows, 1, figsize=(10, 8 if component_names else 7), sharex=True)
+        if nrows == 2:
+            ax1, ax3 = axes
+            ax2 = None
+        else:
+            ax1, ax2, ax3 = axes
         fig.suptitle(exp_name, fontsize=11)
 
         ax1.plot(epochs, train, label="train", linewidth=1.5)
         ax1.plot(epochs, val,   label="val",   linewidth=1.5, linestyle="--")
-        ax1.set_ylabel("MSE Loss (feature space)")
+        ax1.set_ylabel("Total Loss")
         ax1.legend()
         ax1.grid(True, alpha=0.3)
 
-        ax2.plot(epochs, lr[:len(epochs)], color="tab:orange", linewidth=1.5)
-        ax2.set_ylabel("Learning Rate")
-        ax2.set_xlabel("Epoch")
-        ax2.grid(True, alpha=0.3)
+        if ax2 is not None:
+            color_cycle = plt.rcParams.get("axes.prop_cycle", None)
+            colors = color_cycle.by_key().get("color", []) if color_cycle is not None else []
+            for idx, name in enumerate(component_names):
+                color = colors[idx % len(colors)] if colors else None
+                train_vals = train_terms.get(name, [])
+                val_vals = val_terms.get(name, [])
+                ax2.plot(
+                    epochs,
+                    train_vals[:len(epochs)],
+                    label=f"{name} train",
+                    linewidth=1.2,
+                    color=color,
+                )
+                ax2.plot(
+                    epochs,
+                    val_vals[:len(epochs)],
+                    label=f"{name} val",
+                    linewidth=1.2,
+                    linestyle="--",
+                    color=color,
+                )
+            ax2.set_ylabel("Loss Terms")
+            ax2.legend(ncol=2, fontsize=8)
+            ax2.grid(True, alpha=0.3)
+
+        ax3.plot(epochs, lr[:len(epochs)], color="tab:orange", linewidth=1.5)
+        ax3.set_ylabel("Learning Rate")
+        ax3.set_xlabel("Epoch")
+        ax3.grid(True, alpha=0.3)
 
         plt.tight_layout()
         plot_path.parent.mkdir(parents=True, exist_ok=True)
@@ -610,7 +706,7 @@ def _load_checkpoint(
         scheduler.load_state_dict(ckpt["scheduler_state_dict"])
     start_epoch = int(ckpt.get("epoch", -1)) + 1
     best_val_loss = float(ckpt.get("best_val_loss", float("inf")))
-    history = ckpt.get("history", {"train": [], "val": [], "lr": []})
+    history = _normalize_history(ckpt.get("history"))
     return start_epoch, best_val_loss, history
 
 
@@ -626,13 +722,15 @@ def _train_one_epoch(
     memory_debug_every: int = 0,
     cuda_empty_cache_every: int = 0,
     tv_loss_weight: float = 0.0,
-) -> float:
+) -> tuple[float, dict[str, float]]:
     model_core.train()
     total_loss = 0.0
+    metric_sums: dict[str, float] = {}
     n_steps = 0
     _feature_loss_params = inspect.signature(model_core.feature_loss_sr).parameters
     _supports_tv_loss_weight = "tv_loss_weight" in _feature_loss_params
     _supports_lr_boundary_map = "lr_boundary_map" in _feature_loss_params
+    _supports_return_info = "return_info" in _feature_loss_params
     _requires_lr_boundary_map = (
         _supports_lr_boundary_map
         and _feature_loss_params["lr_boundary_map"].default is inspect._empty
@@ -669,11 +767,14 @@ def _train_one_epoch(
                     loss_kwargs["lr_boundary_map"] = lr_boundary_map
             if _supports_tv_loss_weight:
                 loss_kwargs["tv_loss_weight"] = tv_loss_weight
-            loss = model_core.feature_loss_sr(
+            if _supports_return_info:
+                loss_kwargs["return_info"] = True
+            loss_output = model_core.feature_loss_sr(
                 lr_flat,
                 hr_flat,
                 **loss_kwargs,
             )
+            loss, loss_info = _loss_output_to_tensor_and_info(loss_output)
         if scaler is not None:
             scaler.scale(loss).backward()
             if clip > 0:
@@ -688,6 +789,8 @@ def _train_one_epoch(
             optimizer.step()
 
         total_loss += float(loss.detach().item())
+        for key, value in loss_info.items():
+            metric_sums[key] = metric_sums.get(key, 0.0) + float(value)
         n_steps += 1
         if (
             device.type == "cuda"
@@ -709,7 +812,10 @@ def _train_one_epoch(
                 f"max_alloc={max_alloc_gb:.2f}G max_reserved={max_resv_gb:.2f}G"
             )
 
-    return total_loss / max(1, n_steps)
+    avg_metrics = {
+        key: value / max(1, n_steps) for key, value in metric_sums.items()
+    }
+    return total_loss / max(1, n_steps), avg_metrics
 
 
 @torch.no_grad()
@@ -720,13 +826,15 @@ def _validate_one_epoch(
     use_amp: bool,
     amp_dtype: torch.dtype,
     tv_loss_weight: float = 0.0,
-) -> float:
+) -> tuple[float, dict[str, float]]:
     model_core.eval()
     total_loss = 0.0
+    metric_sums: dict[str, float] = {}
     n_steps = 0
     _feature_loss_params = inspect.signature(model_core.feature_loss_sr).parameters
     _supports_tv_loss_weight = "tv_loss_weight" in _feature_loss_params
     _supports_lr_boundary_map = "lr_boundary_map" in _feature_loss_params
+    _supports_return_info = "return_info" in _feature_loss_params
     _requires_lr_boundary_map = (
         _supports_lr_boundary_map
         and _feature_loss_params["lr_boundary_map"].default is inspect._empty
@@ -762,15 +870,23 @@ def _validate_one_epoch(
                     loss_kwargs["lr_boundary_map"] = lr_boundary_map
             if _supports_tv_loss_weight:
                 loss_kwargs["tv_loss_weight"] = tv_loss_weight
-            loss = model_core.feature_loss_sr(
+            if _supports_return_info:
+                loss_kwargs["return_info"] = True
+            loss_output = model_core.feature_loss_sr(
                 lr_flat,
                 hr_flat,
                 **loss_kwargs,
             )
+            loss, loss_info = _loss_output_to_tensor_and_info(loss_output)
         total_loss += float(loss.detach().item())
+        for key, value in loss_info.items():
+            metric_sums[key] = metric_sums.get(key, 0.0) + float(value)
         n_steps += 1
 
-    return total_loss / max(1, n_steps)
+    avg_metrics = {
+        key: value / max(1, n_steps) for key, value in metric_sums.items()
+    }
+    return total_loss / max(1, n_steps), avg_metrics
 
 
 def _render_sr_hr_lr_ipf(
@@ -922,14 +1038,18 @@ def main() -> None:
         _model_supports_lr_boundary
         and _feature_loss_params_cls["lr_boundary_map"].default is inspect._empty
     )
+    feature_upsampler_type = str(getattr(cfg, "feature_upsampler_type", "shifted_bilinear")).strip().lower()
     use_lr_boundary_map = bool(getattr(cfg, "use_lr_boundary_map", _model_supports_lr_boundary))
+    if feature_upsampler_type == "grain_attention":
+        use_lr_boundary_map = True
     if _model_requires_lr_boundary:
         use_lr_boundary_map = True
     lr_boundary_angle_deg = float(getattr(cfg, "lr_boundary_angle_deg", 5.0))
     lr_boundary_mark_both_sides = bool(getattr(cfg, "lr_boundary_mark_both_sides", True))
     print(
         f"LR boundary maps from dataloader: {use_lr_boundary_map} "
-        f"(model supports={_model_supports_lr_boundary}, requires={_model_requires_lr_boundary})"
+        f"(model supports={_model_supports_lr_boundary}, requires={_model_requires_lr_boundary}, "
+        f"feature_upsampler_type={feature_upsampler_type})"
     )
 
     seed = int(get_seed_from_config(cfg))
@@ -1002,6 +1122,7 @@ def main() -> None:
         "d6_convention": str(getattr(cfg, "d6_convention", "z_axis")),
         "device": device,
         "upsample_factor": getattr(cfg, "upsample_factor", getattr(cfg, "scale", 4)),
+        "feature_upsampler_type": str(getattr(cfg, "feature_upsampler_type", "shifted_bilinear")),
         "upsample_context_kernel_size": int(getattr(cfg, "upsample_context_kernel_size", 3)),
         "upsample_residual": bool(getattr(cfg, "upsample_residual", True)),
         "upsample_transpose_overlap": int(getattr(cfg, "upsample_transpose_overlap", 2)),
@@ -1009,10 +1130,12 @@ def main() -> None:
         "upsample_boundary_smooth_sigma": float(getattr(cfg, "upsample_boundary_smooth_sigma", 2.0)),
         "upsample_boundary_smooth_iters": int(getattr(cfg, "upsample_boundary_smooth_iters", 12)),
         "upsample_boundary_sdf_shift": float(getattr(cfg, "upsample_boundary_sdf_shift", 0.7)),
+        "use_boundary_gate": bool(getattr(cfg, "use_boundary_gate", False)),
         "evidence_radius": int(getattr(cfg, "evidence_radius", 1)),
         "sdf_hidden_dim": int(getattr(cfg, "sdf_hidden_dim", 64)),
         "guidance_dim": int(getattr(cfg, "guidance_dim", 16)),
         "stats_code_dim": int(getattr(cfg, "stats_code_dim", 16)),
+        "stats_hidden_dim": int(getattr(cfg, "stats_hidden_dim", 32)),
         "extra_stats_dim": int(getattr(cfg, "extra_stats_dim", 0)),
         "num_lr_blocks": int(getattr(cfg, "num_lr_blocks", 1)),
         "num_hr_blocks": int(getattr(cfg, "num_hr_blocks", 1)),
@@ -1024,6 +1147,17 @@ def main() -> None:
         "refinement_kernel_size": int(getattr(cfg, "refinement_kernel_size", 3)),
         "hard_one_sided": bool(getattr(cfg, "hard_one_sided", True)),
         "hard_boundary_band": bool(getattr(cfg, "hard_boundary_band", False)),
+        "lambda_feat": float(getattr(cfg, "lambda_feat", 1.0)),
+        "lambda_boundary": float(getattr(cfg, "lambda_boundary", 0.5)),
+        "lambda_lr_boundary": float(getattr(cfg, "lambda_lr_boundary", 0.10)),
+        "lambda_side_correct": float(getattr(cfg, "lambda_side_correct", 0.10)),
+        "lambda_side_entropy": float(getattr(cfg, "lambda_side_entropy", 0.002)),
+        "boundary_thr_deg": float(getattr(cfg, "boundary_thr_deg", 3.0)),
+        "boundary_connectivity": int(getattr(cfg, "boundary_connectivity", 4)),
+        "use_focal_boundary": bool(getattr(cfg, "use_focal_boundary", True)),
+        "focal_gamma": float(getattr(cfg, "focal_gamma", 2.0)),
+        "side_correct_band_kernel": getattr(cfg, "side_correct_band_kernel", (3, 3)),
+        "side_correct_rel_gap": float(getattr(cfg, "side_correct_rel_gap", 0.05)),
         "use_lr_conv1": bool(getattr(cfg, "use_lr_conv1", True)),
         "use_lr_conv2": bool(getattr(cfg, "use_lr_conv2", True)),
         "use_lr_conv3": bool(getattr(cfg, "use_lr_conv3", False)),
@@ -1138,7 +1272,7 @@ def main() -> None:
 
     start_epoch = 0
     best_val_loss = float("inf")
-    history = {"train": [], "val": [], "lr": []}
+    history = _init_history()
 
     if args.resume and last_ckpt.exists():
         start_epoch, best_val_loss, history = _load_checkpoint(
@@ -1162,7 +1296,7 @@ def main() -> None:
 
     for epoch in range(start_epoch, epochs):
         model_core = _unwrap_model(model)
-        train_loss = _train_one_epoch(
+        train_loss, train_metrics = _train_one_epoch(
             model_core,
             loaders["train"],
             optimizer,
@@ -1175,7 +1309,7 @@ def main() -> None:
             cuda_empty_cache_every=cuda_empty_cache_every,
             tv_loss_weight=tv_loss_weight,
         )
-        val_loss = _validate_one_epoch(
+        val_loss, val_metrics = _validate_one_epoch(
             model_core,
             loaders["val"],
             device,
@@ -1191,15 +1325,27 @@ def main() -> None:
         history["train"].append(float(train_loss))
         history["val"].append(float(val_loss))
         history["lr"].append(current_lr)
+        _append_metric_history(history["train_terms"], train_metrics, len(history["train"]) - 1)
+        _append_metric_history(history["val_terms"], val_metrics, len(history["val"]) - 1)
 
         if writer is not None:
             writer.add_scalar("Loss/Train", float(train_loss), epoch)
             writer.add_scalar("Loss/Val", float(val_loss), epoch)
             writer.add_scalar("LR", current_lr, epoch)
+            for key, value in train_metrics.items():
+                writer.add_scalar(f"LossTerms/Train/{key}", float(value), epoch)
+            for key, value in val_metrics.items():
+                writer.add_scalar(f"LossTerms/Val/{key}", float(value), epoch)
 
+        metric_bits = []
+        for label, metrics in (("train", train_metrics), ("val", val_metrics)):
+            for key in ("loss_feat", "loss_boundary", "loss_side_correct", "loss_side_entropy"):
+                if key in metrics:
+                    metric_bits.append(f"{label}_{key.replace('loss_', '')}={metrics[key]:.3e}")
         print(
             f"Epoch {epoch + 1}/{epochs} | "
             f"train={train_loss:.6e} val={val_loss:.6e} lr={current_lr:.2e}"
+            + (f" | {' '.join(metric_bits)}" if metric_bits else "")
         )
 
         _save_checkpoint(

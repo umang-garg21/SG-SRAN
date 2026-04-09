@@ -162,6 +162,7 @@ def _load_model_from_checkpoint(
         "d6_convention": str(getattr(cfg, "d6_convention", "z_axis")),
         "device": device,
         "upsample_factor": getattr(cfg, "upsample_factor", getattr(cfg, "scale", 4)),
+        "feature_upsampler_type": str(getattr(cfg, "feature_upsampler_type", "shifted_bilinear")),
         "upsample_context_kernel_size": int(getattr(cfg, "upsample_context_kernel_size", 3)),
         "upsample_residual": bool(getattr(cfg, "upsample_residual", True)),
         "upsample_transpose_overlap": int(getattr(cfg, "upsample_transpose_overlap", 2)),
@@ -169,10 +170,12 @@ def _load_model_from_checkpoint(
         "upsample_boundary_smooth_sigma": float(getattr(cfg, "upsample_boundary_smooth_sigma", 2.0)),
         "upsample_boundary_smooth_iters": int(getattr(cfg, "upsample_boundary_smooth_iters", 12)),
         "upsample_boundary_sdf_shift": float(getattr(cfg, "upsample_boundary_sdf_shift", 0.7)),
+        "use_boundary_gate": bool(getattr(cfg, "use_boundary_gate", False)),
         "evidence_radius": int(getattr(cfg, "evidence_radius", 1)),
         "sdf_hidden_dim": int(getattr(cfg, "sdf_hidden_dim", 64)),
         "guidance_dim": int(getattr(cfg, "guidance_dim", 16)),
         "stats_code_dim": int(getattr(cfg, "stats_code_dim", 16)),
+        "stats_hidden_dim": int(getattr(cfg, "stats_hidden_dim", 32)),
         "extra_stats_dim": int(getattr(cfg, "extra_stats_dim", 0)),
         "num_lr_blocks": int(getattr(cfg, "num_lr_blocks", 1)),
         "num_hr_blocks": int(getattr(cfg, "num_hr_blocks", 1)),
@@ -184,6 +187,17 @@ def _load_model_from_checkpoint(
         "refinement_kernel_size": int(getattr(cfg, "refinement_kernel_size", 3)),
         "hard_one_sided": bool(getattr(cfg, "hard_one_sided", True)),
         "hard_boundary_band": bool(getattr(cfg, "hard_boundary_band", False)),
+        "lambda_feat": float(getattr(cfg, "lambda_feat", 1.0)),
+        "lambda_boundary": float(getattr(cfg, "lambda_boundary", 0.5)),
+        "lambda_lr_boundary": float(getattr(cfg, "lambda_lr_boundary", 0.10)),
+        "lambda_side_correct": float(getattr(cfg, "lambda_side_correct", 0.10)),
+        "lambda_side_entropy": float(getattr(cfg, "lambda_side_entropy", 0.002)),
+        "boundary_thr_deg": float(getattr(cfg, "boundary_thr_deg", 3.0)),
+        "boundary_connectivity": int(getattr(cfg, "boundary_connectivity", 4)),
+        "use_focal_boundary": bool(getattr(cfg, "use_focal_boundary", True)),
+        "focal_gamma": float(getattr(cfg, "focal_gamma", 2.0)),
+        "side_correct_band_kernel": getattr(cfg, "side_correct_band_kernel", (3, 3)),
+        "side_correct_rel_gap": float(getattr(cfg, "side_correct_rel_gap", 0.05)),
         "use_lr_conv1": bool(getattr(cfg, "use_lr_conv1", True)),
         "use_lr_conv2": bool(getattr(cfg, "use_lr_conv2", True)),
         "use_lr_conv3": bool(getattr(cfg, "use_lr_conv3", False)),
@@ -309,14 +323,18 @@ def main() -> None:
         model_supports_lr_boundary
         and forward_sr_params_cls["lr_boundary_map"].default is inspect._empty
     )
+    feature_upsampler_type = str(getattr(cfg, "feature_upsampler_type", "shifted_bilinear")).strip().lower()
     use_lr_boundary_map = bool(getattr(cfg, "use_lr_boundary_map", model_supports_lr_boundary))
+    if feature_upsampler_type == "grain_attention":
+        use_lr_boundary_map = True
     if model_requires_lr_boundary:
         use_lr_boundary_map = True
     lr_boundary_angle_deg = float(getattr(cfg, "lr_boundary_angle_deg", 5.0))
     lr_boundary_mark_both_sides = bool(getattr(cfg, "lr_boundary_mark_both_sides", True))
     print(
         f"LR boundary maps from dataloader: {use_lr_boundary_map} "
-        f"(model supports={model_supports_lr_boundary}, requires={model_requires_lr_boundary})"
+        f"(model supports={model_supports_lr_boundary}, requires={model_requires_lr_boundary}, "
+        f"feature_upsampler_type={feature_upsampler_type})"
     )
 
     if args.take_first is not None:

@@ -1,0 +1,90 @@
+{
+  "exp_dir": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/irrep_sdf_sr_one_sided_modified_lean_norefine_01",
+  "config": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/irrep_sdf_sr_one_sided_modified_lean_norefine_01/config_new.json",
+  "checkpoint": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/irrep_sdf_sr_one_sided_modified_lean_norefine_01/checkpoints/best_model.pt",
+  "split": "Test",
+  "sample_idx": 0,
+  "decoded_gallery": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/irrep_sdf_sr_one_sided_modified_lean_norefine_01/analysis/stage_probe/test_sample0000/decoded_probe_gallery.png",
+  "upsampler_boundary_overlay": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/irrep_sdf_sr_one_sided_modified_lean_norefine_01/analysis/stage_probe/test_sample0000/upsampler_boundary_overlay.png",
+  "upsampler_boundary_overlay_stage": "upsample_center_hr",
+  "sdf_comparison": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/irrep_sdf_sr_one_sided_modified_lean_norefine_01/analysis/stage_probe/test_sample0000/oldprep_sdf_vs_sdf_hr.png",
+  "scalar_gallery": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/irrep_sdf_sr_one_sided_modified_lean_norefine_01/analysis/stage_probe/test_sample0000/scalar_probe_gallery.png",
+  "attention_gallery": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/irrep_sdf_sr_one_sided_modified_lean_norefine_01/analysis/stage_probe/test_sample0000/attention_probe_gallery.png",
+  "probe_stage_names": [
+    "encode_a1_lr",
+    "lr_block_1",
+    "lr_block_2",
+    "lr_block_3",
+    "grain_attention_out",
+    "upsample_center_hr",
+    "upsample_plus_hr",
+    "upsample_minus_hr",
+    "upsample_shifted_mix_hr",
+    "hr_block_1",
+    "final_feat_before_decode"
+  ],
+  "scalar_probe_names": [
+    "evidence_mean",
+    "boundary_lr_1px",
+    "boundary_hr_1px",
+    "center_valid_hr",
+    "hr_to_lr_owner",
+    "boundary_prob_hr",
+    "sdf_hr",
+    "boundary_band_hr",
+    "side_prob_plus",
+    "side_prob_minus"
+  ],
+  "attention_probe_points": [
+    {
+      "y_hr": 151,
+      "x_hr": 88,
+      "is_boundary": true
+    },
+    {
+      "y_hr": 119,
+      "x_hr": 165,
+      "is_boundary": true
+    },
+    {
+      "y_hr": 200,
+      "x_hr": 4,
+      "is_boundary": true
+    },
+    {
+      "y_hr": 11,
+      "x_hr": 3,
+      "is_boundary": false
+    },
+    {
+      "y_hr": 166,
+      "x_hr": 141,
+      "is_boundary": false
+    },
+    {
+      "y_hr": 19,
+      "x_hr": 213,
+      "is_boundary": false
+    },
+    {
+      "y_hr": 4,
+      "x_hr": 69,
+      "is_boundary": false
+    },
+    {
+      "y_hr": 209,
+      "x_hr": 53,
+      "is_boundary": false
+    },
+    {
+      "y_hr": 234,
+      "x_hr": 19,
+      "is_boundary": false
+    },
+    {
+      "y_hr": 45,
+      "x_hr": 48,
+      "is_boundary": false
+    }
+  ]
+}
