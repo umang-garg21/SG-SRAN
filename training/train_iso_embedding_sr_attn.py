@@ -1591,7 +1591,7 @@ def main() -> None:
         "lr_conv3_dilation": int(getattr(cfg, "lr_conv3_dilation", 1)),
         "hr_conv1_kernel_size": int(getattr(cfg, "hr_conv1_kernel_size", 3)),
         "conv_feature_mask_cosine_threshold": float(
-            getattr(cfg, "conv_feature_mask_cosine_threshold", 0.99)
+            getattr(cfg, "conv_feature_mask_cosine_threshold", 0.98)
         ),
         "conv_feature_mask_soft": bool(getattr(cfg, "conv_feature_mask_soft", False)),
         "conv_feature_mask_temperature": float(
@@ -1677,7 +1677,7 @@ def main() -> None:
         "window_size": int(getattr(cfg, "window_size", 5)),
         "kmax_slots": int(getattr(cfg, "kmax_slots", 4)),
         "cluster_threshold_deg": float(getattr(cfg, "cluster_threshold_deg", 2.0)),
-        "cluster_connectivity": int(getattr(cfg, "cluster_connectivity", 4)),
+        "cluster_connectivity": int(getattr(cfg, "cluster_connectivity", 8)),
         "num_experts": int(getattr(cfg, "num_experts", 12)),
         "top_k_experts": int(getattr(cfg, "top_k_experts", 2)),
         "phase_dim": int(getattr(cfg, "phase_dim", 32)),

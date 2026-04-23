@@ -591,15 +591,16 @@ class QuaternionBankClusterer(nn.Module):
         self,
         sym_ops_quat: torch.Tensor,
         threshold_deg: float = 2.0,
-        connectivity: int = 4,
+        connectivity: int = 8,
         window_size: int = 5,
     ):
         super().__init__()
         if int(window_size) < 3 or int(window_size) % 2 == 0:
             raise ValueError(f"OCRP expects an odd window_size >= 3, got {window_size}")
-        if int(connectivity) != 4:
-            raise ValueError(f"OCRP currently expects 4-neighbor clustering, got {connectivity}")
+        if int(connectivity) not in (4, 8):
+            raise ValueError(f"OCRP currently expects 4- or 8-neighbor clustering, got {connectivity}")
         self.threshold_rad = float(np.deg2rad(float(threshold_deg)))
+        self.connectivity = int(connectivity)
         self.window_size = int(window_size)
         self.num_nodes = int(self.window_size * self.window_size)
 
@@ -614,6 +615,11 @@ class QuaternionBankClusterer(nn.Module):
                     edges.append((idx, idx + 1))
                 if y + 1 < self.window_size:
                     edges.append((idx, idx + self.window_size))
+                if self.connectivity == 8 and y + 1 < self.window_size:
+                    if x + 1 < self.window_size:
+                        edges.append((idx, idx + self.window_size + 1))
+                    if x - 1 >= 0:
+                        edges.append((idx, idx + self.window_size - 1))
         edge_idx_a = torch.tensor([a for a, _ in edges], dtype=torch.long)
         edge_idx_b = torch.tensor([b for _, b in edges], dtype=torch.long)
         self.register_buffer("edge_idx_a", edge_idx_a, persistent=False)
@@ -1340,7 +1346,7 @@ class OCRPPatchUpsampler(nn.Module):
         window_size: int = 5,
         kmax_slots: int = 4,
         cluster_threshold_deg: float = 2.0,
-        cluster_connectivity: int = 4,
+        cluster_connectivity: int = 8,
         phase_dim: int = 32,
         router_hidden_dim: int = 128,
         router_conv_hidden_dim: int = 64,
@@ -1530,14 +1536,14 @@ class IsoEmbeddingSROCRP(nn.Module):
         use_lr_conv1: bool = True,
         lr_conv1_kernel_size: int = 5,
         use_residual_lr1: bool = True,
-        conv_feature_mask_cosine_threshold: float = 0.99,
+        conv_feature_mask_cosine_threshold: float = 0.98,
         conv_feature_mask_soft: bool = False,
         conv_feature_mask_temperature: float = 32.0,
         upsample_factor: int | tuple[int, int] | list[int] = 4,
         window_size: int = 5,
         kmax_slots: int = 4,
         cluster_threshold_deg: float = 2.0,
-        cluster_connectivity: int = 4,
+        cluster_connectivity: int = 8,
         phase_dim: int = 32,
         ocrp_router_hidden_dim: int = 128,
         ocrp_router_conv_hidden_dim: int = 64,
