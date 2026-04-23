@@ -26,6 +26,17 @@ try:
         dihedral_group_D6_paper,
         dihedral_group_D6_zaxis,
     )
+    from models.SR_ocrp import (
+        ClusterSlotBuilder,
+        CosineMaskedEquivariantSpatialConv,
+        IsoEmbeddingSROCRP,
+        MedoidSlotContextBuilder,
+        OCRPPatchUpsampler,
+        PatchSlotRouter,
+        QuaternionBankClusterer,
+        SharedTPPatchProposalHead,
+        WithinSlotInvariantPool,
+    )
 except ModuleNotFoundError as exc:
     if exc.name not in {"e3nn", "orix"}:
         raise
@@ -47,5 +58,14 @@ else:
             "cubic_group_O",
             "dihedral_group_D6_paper",
             "dihedral_group_D6_zaxis",
+            "QuaternionBankClusterer",
+            "ClusterSlotBuilder",
+            "MedoidSlotContextBuilder",
+            "CosineMaskedEquivariantSpatialConv",
+            "WithinSlotInvariantPool",
+            "PatchSlotRouter",
+            "SharedTPPatchProposalHead",
+            "OCRPPatchUpsampler",
+            "IsoEmbeddingSROCRP",
         ]
     )

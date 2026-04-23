@@ -65,6 +65,40 @@ def resize_quat_target(target_hwc: torch.Tensor, size_hw: tuple[int, int]) -> to
     return q / q.norm(dim=-1, keepdim=True).clamp_min(1e-8)
 
 
+def _project_lr_array_to_hr_sparse(
+    arr: np.ndarray,
+    lr_hw: tuple[int, int],
+    hr_hw: tuple[int, int],
+    fill_value: float | int = 0,
+) -> np.ndarray:
+    """Embed an LR 2D/3D array on an HR canvas; unsampled pixels use fill_value."""
+    h_lr, w_lr = int(lr_hw[0]), int(lr_hw[1])
+    h_hr, w_hr = int(hr_hw[0]), int(hr_hw[1])
+    if arr.shape[:2] != (h_lr, w_lr):
+        raise ValueError(
+            f"Array shape {tuple(arr.shape[:2])} does not match lr_hw={(h_lr, w_lr)}"
+        )
+    if h_lr <= 0 or w_lr <= 0 or h_hr <= 0 or w_hr <= 0:
+        raise ValueError(f"Invalid shapes lr={(h_lr, w_lr)} hr={(h_hr, w_hr)}")
+
+    scale_y = h_hr // h_lr
+    scale_x = w_hr // w_lr
+    if h_lr * scale_y != h_hr or w_lr * scale_x != w_hr:
+        raise ValueError(
+            "HR shape must be an integer multiple of LR shape for sparse projection: "
+            f"lr={(h_lr, w_lr)} hr={(h_hr, w_hr)}"
+        )
+
+    out_shape = (h_hr, w_hr) + tuple(arr.shape[2:])
+    out = np.full(out_shape, fill_value, dtype=arr.dtype)
+    y_idx = np.arange(h_lr, dtype=np.int64) * scale_y + (scale_y // 2)
+    x_idx = np.arange(w_lr, dtype=np.int64) * scale_x + (scale_x // 2)
+    y_idx = np.clip(y_idx, 0, h_hr - 1)
+    x_idx = np.clip(x_idx, 0, w_hr - 1)
+    out[np.ix_(y_idx, x_idx)] = arr
+    return out
+
+
 def decode_probe_stages(
     model_obj,
     probe_stages: list[dict[str, Any]],
@@ -269,6 +303,7 @@ def render_upsampler_boundary_overlay(
     sym_class,
     out_png: str | Path,
     ref_dir: str = "X",
+    pixels_per_image_pixel: int = 1,
 ) -> Path:
     """Render LR/HR grain correspondence beside the direct upsampled output with learned SDF overlay."""
     out_path = Path(out_png)
@@ -321,15 +356,17 @@ def render_upsampler_boundary_overlay(
             f"hr_to_lr_owner shape {tuple(hr_to_lr_owner.shape)} does not match HR stage shape {hr_hw}"
         )
 
-    lr_rgb = render_ipf_rgb(lr_quat_hwc.numpy().astype(np.float32), sym_class, ref_dir=ref_dir)
+    lr_rgb_native = render_ipf_rgb(lr_quat_hwc.numpy().astype(np.float32), sym_class, ref_dir=ref_dir)
     hr_rgb = render_ipf_rgb(hr_quat_hwc.numpy().astype(np.float32), sym_class, ref_dir=ref_dir)
+    lr_rgb = _project_lr_array_to_hr_sparse(lr_rgb_native, lr_hw, hr_hw, fill_value=0)
 
     lr_labels_np = lr_labels_dense.numpy()
-    lr_boundary_np = _label_boundary_mask(lr_labels_np)
-    valid_lr = lr_labels_np >= 0
-    max_label = int(lr_labels_np[valid_lr].max()) if bool(valid_lr.any()) else 0
+    lr_labels_hr_np = _project_lr_array_to_hr_sparse(lr_labels_np, lr_hw, hr_hw, fill_value=-1)
+    lr_boundary_np = _label_boundary_mask(lr_labels_hr_np)
+    valid_lr = lr_labels_hr_np >= 0
+    max_label = int(lr_labels_hr_np[valid_lr].max()) if bool(valid_lr.any()) else 0
     label_cmap = plt.get_cmap("tab20", max(1, max_label + 1))
-    label_overlay = np.ma.masked_where(~valid_lr, lr_labels_np)
+    label_overlay = np.ma.masked_where(~valid_lr, lr_labels_hr_np)
     label_alpha = np.where(valid_lr, 0.28, 0.0)
 
     sdf_np = np.clip(sdf_hr.numpy(), 0.0, 1.0)
@@ -338,48 +375,57 @@ def render_upsampler_boundary_overlay(
     hr_owner_boundary_np = _label_boundary_mask(hr_owner_np)
 
     stage_name = str(upsampler_stage_row.get("name", "upsampler_stage"))
-    fig, axes = plt.subplots(1, 2, figsize=(11.8, 5.8), constrained_layout=True)
-    fig.suptitle("LR And HR Grain Correspondence With Learned SDF Geometry", fontsize=14, y=1.02)
+    scale = max(1, int(pixels_per_image_pixel))
+    panel_h, panel_w = hr_hw
+    panel_h_px = panel_h * scale
+    panel_w_px = panel_w * scale
+    dpi_out = 180
+    fig, axes = plt.subplots(
+        1,
+        2,
+        figsize=(2.0 * panel_w_px / float(dpi_out), panel_h_px / float(dpi_out)),
+        dpi=dpi_out,
+        squeeze=False,
+    )
+    axes = axes[0]
+    fig.subplots_adjust(left=0.0, right=1.0, bottom=0.0, top=1.0, wspace=0.0, hspace=0.0)
 
-    axes[0].imshow(lr_rgb)
-    axes[0].imshow(label_overlay, cmap=label_cmap, alpha=label_alpha, interpolation="nearest")
+    axes[0].imshow(lr_rgb, interpolation="nearest", resample=False)
+    axes[0].imshow(label_overlay, cmap=label_cmap, alpha=label_alpha, interpolation="nearest", resample=False)
     axes[0].contour(lr_boundary_np.astype(np.float32), levels=[0.5], colors=["#ffffff"], linewidths=0.9)
-    _annotate_grain_ids(axes[0], lr_labels_np, color="white")
-    axes[0].set_title(f"LR Input With Dense LR Labels (IPF-{ref_dir})", fontsize=11)
+    _annotate_grain_ids(axes[0], lr_labels_hr_np, color="white")
     axes[0].axis("off")
     axes[0].text(
-        0.02,
-        0.02,
-        "overlay = aux['lr_labels_dense']; numbers = LR grain ids",
+        0.01,
+        0.99,
+        f"LR->HR sparse + lr_labels_dense (IPF-{ref_dir})",
         transform=axes[0].transAxes,
         fontsize=9,
         color="white",
         ha="left",
-        va="bottom",
+        va="top",
         bbox={"boxstyle": "round,pad=0.25", "facecolor": "black", "alpha": 0.65, "edgecolor": "none"},
     )
 
-    axes[1].imshow(hr_rgb)
-    sdf_artist = axes[1].imshow(sdf_np, cmap="magma", alpha=sdf_alpha, vmin=0.0, vmax=1.0)
+    axes[1].imshow(hr_rgb, interpolation="nearest", resample=False)
+    sdf_artist = axes[1].imshow(sdf_np, cmap="magma", alpha=sdf_alpha, vmin=0.0, vmax=1.0, interpolation="nearest", resample=False)
     axes[1].contour(sdf_np, levels=[0.35, 0.55, 0.75], colors=["#ffe600"], linewidths=0.8, alpha=0.9)
     axes[1].contour(hr_owner_boundary_np.astype(np.float32), levels=[0.5], colors=["#00e5ff"], linewidths=0.8, alpha=0.8)
     _annotate_grain_ids(axes[1], hr_owner_np, color="white")
-    axes[1].set_title(f"{stage_name} With Learned sdf_hr And HR Grain Owners (IPF-{ref_dir})", fontsize=11)
     axes[1].axis("off")
     axes[1].text(
-        0.02,
-        0.02,
-        "heatmap = aux['sdf_hr']; cyan = HR grain boundaries; numbers = aux['hr_to_lr_owner']",
+        0.01,
+        0.99,
+        f"{stage_name}: sdf_hr + hr_to_lr_owner (IPF-{ref_dir})",
         transform=axes[1].transAxes,
         fontsize=9,
         color="white",
         ha="left",
-        va="bottom",
+        va="top",
         bbox={"boxstyle": "round,pad=0.25", "facecolor": "black", "alpha": 0.65, "edgecolor": "none"},
     )
-    fig.colorbar(sdf_artist, ax=axes[1], fraction=0.046, pad=0.03)
 
-    fig.savefig(out_path, dpi=180, bbox_inches="tight")
+    fig.savefig(out_path, dpi=dpi_out)
     plt.close(fig)
     return out_path
 
@@ -936,37 +982,50 @@ def render_decoded_probe_gallery(
     rows: list[dict[str, Any]],
     sym_class,
     out_png: str | Path,
+    pixels_per_image_pixel: int = 1,
+    left_label_gutter_px: int = 260,
 ) -> Path:
     """Render a clearly labeled stage-by-stage decoded gallery."""
     out_path = Path(out_png)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     n_rows = len(rows)
-    max_row_h = max(int(row["shape"][0]) for row in rows)
-    height_ratios = [max(0.42, float(int(row["shape"][0])) / float(max_row_h)) for row in rows]
+
+    prepared_rows: list[dict[str, Any]] = []
+    target_hw: tuple[int, int] | None = None
+    for row in rows:
+        if str(row.get("name", "")).strip().lower() == "hr_target":
+            target_hw = tuple(int(v) for v in row["shape"])
+            break
+    if target_hw is None:
+        target_hw = (
+            max(int(row["shape"][0]) for row in rows),
+            max(int(row["shape"][1]) for row in rows),
+        )
+
+    scale = max(1, int(pixels_per_image_pixel))
+    panel_h, panel_w = int(target_hw[0]), int(target_hw[1])
+    panel_h_px = panel_h * scale
+    panel_w_px = panel_w * scale
+    label_gutter_px = max(0, int(left_label_gutter_px))
+    dpi_out = 180
+    fig_px_w = label_gutter_px + 4 * panel_w_px
+    fig_px_h = n_rows * panel_h_px
     fig, axes = plt.subplots(
         n_rows,
         4,
-        figsize=(14.0, max(1.95 * sum(height_ratios), 4.0)),
-        constrained_layout=True,
+        figsize=(fig_px_w / float(dpi_out), fig_px_h / float(dpi_out)),
+        dpi=dpi_out,
         squeeze=False,
-        gridspec_kw={"height_ratios": height_ratios},
     )
-    fig.suptitle("Decoded Irrep Probe Stages", fontsize=14, y=1.01)
-    col_titles = (
-        "Column 1: Decoded IPF-X",
-        "Column 2: Decoded IPF-Y",
-        "Column 3: Decoded IPF-Z",
-        "Column 4: Pairwise Misorientation vs HR (deg)",
-    )
-    for title, ax in zip(col_titles, axes[0]):
-        ax.set_title(title, fontsize=11)
+    left_frac = float(label_gutter_px) / float(fig_px_w) if fig_px_w > 0 else 0.0
+    fig.subplots_adjust(left=left_frac, right=1.0, bottom=0.0, top=1.0, wspace=0.0, hspace=0.0)
 
-    prepared_rows: list[dict[str, Any]] = []
     error_min = None
     error_max = None
     for row in rows:
         quat_hwc = row["quat_hwc"]
+        row_hw = tuple(int(v) for v in row["shape"])
         rgb_x, rgb_y, rgb_z = render_ipf_rgb(quat_hwc.numpy().astype(np.float32), sym_class, ref_dir="ALL")
         if str(row["name"]) == "hr_target":
             err = torch.zeros(tuple(row["shape"]), dtype=torch.float32)
@@ -976,8 +1035,27 @@ def render_decoded_probe_gallery(
                 resize_quat_target(row["hr_target_hwc"], row["shape"]),
                 sym=sym_class,
             )
-        row_min = float(err.min())
-        row_max = float(err.max())
+
+        is_lr_like_row = ("lr" in str(row["name"]).strip().lower()) and (row_hw != target_hw)
+        if is_lr_like_row:
+            rgb_x = _project_lr_array_to_hr_sparse(rgb_x, row_hw, target_hw, fill_value=0)
+            rgb_y = _project_lr_array_to_hr_sparse(rgb_y, row_hw, target_hw, fill_value=0)
+            rgb_z = _project_lr_array_to_hr_sparse(rgb_z, row_hw, target_hw, fill_value=0)
+            err_np = _project_lr_array_to_hr_sparse(
+                err.numpy().astype(np.float32),
+                row_hw,
+                target_hw,
+                fill_value=np.nan,
+            )
+            err = torch.from_numpy(err_np)
+
+        err_finite = err[torch.isfinite(err)]
+        if err_finite.numel() > 0:
+            row_min = float(err_finite.min())
+            row_max = float(err_finite.max())
+        else:
+            row_min = 0.0
+            row_max = 0.0
         error_min = row_min if error_min is None else min(error_min, row_min)
         error_max = row_max if error_max is None else max(error_max, row_max)
         prepared_rows.append(
@@ -1002,28 +1080,78 @@ def render_decoded_probe_gallery(
         for cidx, (panel, cmap, vmin, vmax) in enumerate(panels):
             ax = axes[ridx, cidx]
             if cmap is None:
-                ax.imshow(panel)
+                ax.imshow(panel, interpolation="nearest", resample=False)
             else:
-                err_im = ax.imshow(panel, cmap=cmap, vmin=vmin, vmax=vmax)
-                cbar = fig.colorbar(err_im, ax=ax, fraction=0.046, pad=0.02)
-                cbar.set_label("deg", fontsize=8)
-                cbar.ax.tick_params(labelsize=7)
+                panel_arr = np.asarray(panel)
+                if np.isnan(panel_arr).any():
+                    err_cmap = plt.get_cmap(cmap).copy()
+                    err_cmap.set_bad(color="black")
+                    err_im = ax.imshow(
+                        np.ma.masked_invalid(panel_arr),
+                        cmap=err_cmap,
+                        vmin=vmin,
+                        vmax=vmax,
+                        interpolation="nearest",
+                        resample=False,
+                    )
+                else:
+                    err_im = ax.imshow(
+                        panel_arr,
+                        cmap=cmap,
+                        vmin=vmin,
+                        vmax=vmax,
+                        interpolation="nearest",
+                        resample=False,
+                    )
             ax.axis("off")
+            if ridx == 0:
+                col_name = (
+                    "IPF-X"
+                    if cidx == 0
+                    else "IPF-Y"
+                    if cidx == 1
+                    else "IPF-Z"
+                    if cidx == 2
+                    else "Misorientation (deg)"
+                )
+                ax.text(
+                    0.01,
+                    0.99,
+                    col_name,
+                    transform=ax.transAxes,
+                    fontsize=9,
+                    color="white",
+                    ha="left",
+                    va="top",
+                    bbox={"boxstyle": "round,pad=0.2", "facecolor": "black", "alpha": 0.65, "edgecolor": "none"},
+                )
         h, w = row["shape"]
         row_label = f"Row {ridx + 1}: {row['name']} ({h}x{w})"
-        axes[ridx, 0].set_ylabel(row_label, fontsize=10, rotation=0, labelpad=62, va="center")
-        axes[ridx, 0].text(
-            -0.18,
-            1.02,
-            row_label,
-            transform=axes[ridx, 0].transAxes,
-            fontsize=10,
-            ha="left",
-            va="bottom",
-            clip_on=False,
-        )
+        if label_gutter_px > 0:
+            y_center = 1.0 - ((float(ridx) + 0.5) / float(n_rows))
+            fig.text(
+                0.01,
+                y_center,
+                row_label,
+                fontsize=10,
+                color="black",
+                ha="left",
+                va="center",
+            )
+        else:
+            axes[ridx, 0].text(
+                0.01,
+                0.01,
+                row_label,
+                transform=axes[ridx, 0].transAxes,
+                fontsize=8,
+                color="white",
+                ha="left",
+                va="bottom",
+                bbox={"boxstyle": "round,pad=0.2", "facecolor": "black", "alpha": 0.65, "edgecolor": "none"},
+            )
 
-    fig.savefig(out_path, dpi=180, bbox_inches="tight")
+    fig.savefig(out_path, dpi=dpi_out)
     plt.close(fig)
     return out_path
 

@@ -5,12 +5,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CALLER_PWD="$PWD"
 
-EXP_DIR="$PROJECT_ROOT/experiments/IN718/iso_embedding_sr_attn_boundary_aware_01"
+EXP_DIR="$PROJECT_ROOT/experiments/IN718/iso_embedding_ocrp_01"
 CONFIG="config_new.json"
 GPU_IDS="0"
 RESUME=""
 
-# Parse optional flags
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --resume) RESUME="--resume"; shift ;;
@@ -21,7 +20,6 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Resolve EXP_DIR relative to the shell location where this script was invoked.
 if [[ "$EXP_DIR" != /* ]]; then
     CAND_CALLER="$CALLER_PWD/$EXP_DIR"
     CAND_PROJECT="$PROJECT_ROOT/$EXP_DIR"
@@ -44,8 +42,12 @@ if [[ ! -f "$EXP_DIR/$CONFIG" ]]; then
 fi
 
 mkdir -p "$EXP_DIR/logs"
+export NUMBA_CACHE_DIR="${NUMBA_CACHE_DIR:-/tmp/numba_cache}"
+mkdir -p "$NUMBA_CACHE_DIR"
+export MPLCONFIGDIR="${MPLCONFIGDIR:-/tmp/matplotlib}"
+mkdir -p "$MPLCONFIGDIR"
 
-python -m training.train_iso_embedding_sr_attn \
+python -m training.train_iso_embedding_ocrp \
     --exp_dir "$EXP_DIR" \
     --config "$CONFIG" \
     --gpu_ids "$GPU_IDS" \

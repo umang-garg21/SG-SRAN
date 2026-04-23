@@ -1,4 +1,13 @@
-"""Training exports for IsoEmbeddingSRAttn."""
+"""Training package bootstrap and shared exports."""
+
+import os
+from pathlib import Path
+
+# `orix` pulls in numba-cached helpers during import. Some environments do not
+# provide a writable/default cache locator, so we force a safe cache root early
+# before importing the rest of the training stack.
+os.environ.setdefault("NUMBA_CACHE_DIR", "/tmp/numba_cache")
+Path(os.environ["NUMBA_CACHE_DIR"]).mkdir(parents=True, exist_ok=True)
 
 from training.config_utils import load_and_prepare_config
 from training.data_loading import build_dataloader

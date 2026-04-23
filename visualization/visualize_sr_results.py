@@ -1,6 +1,7 @@
 import os
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.axes import Axes
 from typing import Optional
 from utils.quat_ops import (
     enforce_hemisphere,
@@ -10,6 +11,159 @@ from utils.quat_ops import (
     quat_mul_np,
 )
 from visualization.ipf_render import render_ipf_rgb
+
+
+def _project_lr_rgb_to_hr_sparse(
+    lr_rgb: np.ndarray,
+    lr_hw: tuple[int, int],
+    hr_hw: tuple[int, int],
+) -> np.ndarray:
+    """Embed LR RGB pixels on an HR canvas; non-sampled pixels are black."""
+    h_lr, w_lr = int(lr_hw[0]), int(lr_hw[1])
+    h_hr, w_hr = int(hr_hw[0]), int(hr_hw[1])
+    if lr_rgb.shape[:2] != (h_lr, w_lr):
+        raise ValueError(
+            f"LR RGB shape {tuple(lr_rgb.shape[:2])} does not match lr_hw={(h_lr, w_lr)}"
+        )
+    if h_lr <= 0 or w_lr <= 0 or h_hr <= 0 or w_hr <= 0:
+        raise ValueError(f"Invalid shapes lr={(h_lr, w_lr)} hr={(h_hr, w_hr)}")
+
+    scale_y = h_hr // h_lr
+    scale_x = w_hr // w_lr
+    if h_lr * scale_y != h_hr or w_lr * scale_x != w_hr:
+        raise ValueError(
+            "HR shape must be an integer multiple of LR shape for sparse projection: "
+            f"lr={(h_lr, w_lr)} hr={(h_hr, w_hr)}"
+        )
+
+    out = np.zeros((h_hr, w_hr, 3), dtype=lr_rgb.dtype)
+    y_idx = np.arange(h_lr, dtype=np.int64) * scale_y + (scale_y // 2)
+    x_idx = np.arange(w_lr, dtype=np.int64) * scale_x + (scale_x // 2)
+    y_idx = np.clip(y_idx, 0, h_hr - 1)
+    x_idx = np.clip(x_idx, 0, w_hr - 1)
+    out[np.ix_(y_idx, x_idx)] = lr_rgb
+    return out
+
+
+def _upsample_lr_rgb_to_hr_nearest(
+    lr_rgb: np.ndarray,
+    lr_hw: tuple[int, int],
+    hr_hw: tuple[int, int],
+) -> np.ndarray:
+    """Upsample LR RGB to the HR canvas with nearest-neighbor replication."""
+    h_lr, w_lr = int(lr_hw[0]), int(lr_hw[1])
+    h_hr, w_hr = int(hr_hw[0]), int(hr_hw[1])
+    if lr_rgb.shape[:2] != (h_lr, w_lr):
+        raise ValueError(
+            f"LR RGB shape {tuple(lr_rgb.shape[:2])} does not match lr_hw={(h_lr, w_lr)}"
+        )
+    if h_lr <= 0 or w_lr <= 0 or h_hr <= 0 or w_hr <= 0:
+        raise ValueError(f"Invalid shapes lr={(h_lr, w_lr)} hr={(h_hr, w_hr)}")
+
+    scale_y = h_hr // h_lr
+    scale_x = w_hr // w_lr
+    if h_lr * scale_y != h_hr or w_lr * scale_x != w_hr:
+        raise ValueError(
+            "HR shape must be an integer multiple of LR shape for nearest upsampling: "
+            f"lr={(h_lr, w_lr)} hr={(h_hr, w_hr)}"
+        )
+    return np.repeat(np.repeat(lr_rgb, scale_y, axis=0), scale_x, axis=1)
+
+
+def _pad_rgb_to_canvas(
+    rgb: np.ndarray,
+    target_hw: tuple[int, int],
+) -> np.ndarray:
+    """Center-pad an RGB image on a black canvas without resampling."""
+    h, w = int(rgb.shape[0]), int(rgb.shape[1])
+    th, tw = int(target_hw[0]), int(target_hw[1])
+    if h > th or w > tw:
+        raise ValueError(f"Image {(h, w)} is larger than target canvas {(th, tw)}")
+    out = np.zeros((th, tw, 3), dtype=rgb.dtype)
+    y0 = (th - h) // 2
+    x0 = (tw - w) // 2
+    out[y0 : y0 + h, x0 : x0 + w] = rgb
+    return out
+
+
+def _style_simple_ipf_key(
+    ax,
+    *,
+    title: str = "IPF Key",
+    title_fontsize: float = 10.0,
+    label_fontsize: float = 8.0,
+) -> None:
+    """
+    Restyle the default orix IPF key so it reads as a clean legend panel.
+
+    The goal is a compact key with light boundaries and corner labels placed
+    inside the panel rather than floating well outside it.
+    """
+    ax.plot_ipf_color_key(show_title=False)
+    ax.set_title(title, fontsize=title_fontsize, fontweight="semibold", pad=6, color="#111111")
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_facecolor("white")
+
+    try:
+        ax.set_xticks([])
+        ax.set_yticks([])
+    except Exception:
+        pass
+
+    for txt in list(getattr(ax, "texts", [])):
+        try:
+            txt.set_visible(False)
+        except Exception:
+            pass
+
+    for line in getattr(ax, "lines", []):
+        try:
+            line.set_color("none")
+            line.set_linewidth(0.0)
+            line.set_solid_capstyle("round")
+            line.set_solid_joinstyle("round")
+            line.set_clip_on(True)
+        except Exception:
+            pass
+
+    for patch in getattr(ax, "patches", []):
+        try:
+            patch.set_linewidth(0.0)
+            patch.set_edgecolor("none")
+            patch.set_joinstyle("round")
+            patch.set_clip_on(True)
+        except Exception:
+            pass
+
+    for coll in getattr(ax, "collections", []):
+        try:
+            coll.set_linewidths(0.0)
+        except Exception:
+            pass
+        try:
+            coll.set_edgecolor("face")
+        except Exception:
+            pass
+
+    label_specs = [
+        ("[111]", 0.50, 0.96, "center", "top"),
+        ("[001]", 0.10, 0.07, "left", "bottom"),
+        ("[101]", 0.90, 0.07, "right", "bottom"),
+    ]
+    for text, x, y, ha, va in label_specs:
+        Axes.text(
+            ax,
+            x,
+            y,
+            text,
+            transform=ax.transAxes,
+            ha=ha,
+            va=va,
+            fontsize=label_fontsize,
+            fontweight="normal",
+            color="#111111",
+            clip_on=True,
+        )
 
 
 def _proper_sym_ops_wxyz(sym_class) -> np.ndarray:
@@ -189,7 +343,7 @@ def render_sr_hr_side_by_side(
     )
 
     def _imshow(ax, img, title):
-        ax.imshow(img)
+        ax.imshow(img, interpolation="nearest", resample=False)
         ax.set_aspect("equal", adjustable="box")
         ax.set_title(title, fontsize=10)
         ax.axis("off")
@@ -211,8 +365,7 @@ def render_sr_hr_side_by_side(
     # -------------------------------------------------------------------------
     if include_key:
         ax_key = fig.add_subplot(gs[:, -1], projection="ipf", symmetry=sym_class.laue)
-        ax_key.plot_ipf_color_key()
-        ax_key.set_title("")
+        _style_simple_ipf_key(ax_key, title="IPF Key", title_fontsize=10.0, label_fontsize=8.0)
 
     # -------------------------------------------------------------------------
     # Save figure
@@ -239,6 +392,7 @@ def render_sr_hr_lr_side_by_side(
     overwrite: bool = False,
     format_input: bool = True,
     dpi: int = 300,
+    pixels_per_image_pixel: int = 1,
 ):
     """
     Render LR (Low-Resolution), SR (Super-Resolution), and HR (High-Resolution)
@@ -301,65 +455,155 @@ def render_sr_hr_lr_side_by_side(
     lr_rgb = render_ipf_rgb(lr_q_arr, sym_class, ref_dir=ref_dir)
 
     multi_ref = isinstance(sr_rgb, list)
+
+    if multi_ref:
+        lr_rgb = [
+            _upsample_lr_rgb_to_hr_nearest(img, (lr_h, lr_w), (hr_h, hr_w))
+            for img in lr_rgb
+        ]
+    else:
+        lr_rgb = _upsample_lr_rgb_to_hr_nearest(lr_rgb, (lr_h, lr_w), (hr_h, hr_w))
+
+    target_h = max(int(hr_h), int(sr_h))
+    target_w = max(int(hr_w), int(sr_w))
+
+    if multi_ref:
+        lr_rgb = [_pad_rgb_to_canvas(img, (target_h, target_w)) for img in lr_rgb]
+        sr_rgb = [_pad_rgb_to_canvas(img, (target_h, target_w)) for img in sr_rgb]
+        hr_rgb = [_pad_rgb_to_canvas(img, (target_h, target_w)) for img in hr_rgb]
+    else:
+        lr_rgb = _pad_rgb_to_canvas(lr_rgb, (target_h, target_w))
+        sr_rgb = _pad_rgb_to_canvas(sr_rgb, (target_h, target_w))
+        hr_rgb = _pad_rgb_to_canvas(hr_rgb, (target_h, target_w))
+
     ncols = 3 if multi_ref else 1
+    label_cols = 1
     key_cols = 1 if include_key else 0
-    total_cols = ncols + key_cols
+    total_cols = label_cols + ncols + key_cols
     total_rows = 3  # LR, SR, HR
 
     # -------------------------------------------------------------------------
-    # Figure setup — LR row is physically smaller in proportion to its resolution
+    # Figure setup
     # -------------------------------------------------------------------------
-    lr_scale = hr_h / lr_h  # e.g. 4.0 for 4× upsampling
-    row_h = 4.5
-    base_w = 5.0
-    key_w = 2.6 if include_key else 0
-    fig_w = base_w * ncols + key_w
-    fig_h = row_h * (2 + 1.0 / lr_scale)
-    fig = plt.figure(figsize=(fig_w, fig_h))
+    scale = max(1, int(pixels_per_image_pixel))
+    panel_h = int(target_h) * scale
+    panel_w = int(target_w) * scale
+    label_w = int(round(0.90 * panel_w))
+    key_w = int(round(1.15 * panel_w)) if include_key else 0
+    fig_px_w = label_w + panel_w * ncols + key_w
+    fig_px_h = panel_h * total_rows
+    fig = plt.figure(
+        figsize=(fig_px_w / float(dpi), fig_px_h / float(dpi)),
+        dpi=dpi,
+        facecolor="white",
+    )
     gs = fig.add_gridspec(
         total_rows,
         total_cols,
-        width_ratios=[1] * ncols + ([0.9] if include_key else []),
-        height_ratios=[1.0 / lr_scale, 1, 1],
-        hspace=0.3,
-        wspace=0.25,
+        width_ratios=[label_w] + [panel_w] * ncols + ([key_w] if include_key else []),
+        height_ratios=[panel_h, panel_h, panel_h],
+        hspace=0.015,
+        wspace=0.015,
     )
+    fig.subplots_adjust(left=0.01, right=0.995, bottom=0.01, top=0.995, wspace=0.015, hspace=0.015)
 
-    def _imshow(ax, img, title):
-        ax.imshow(img)
+    def _imshow(ax, img):
+        ax.imshow(img, interpolation="nearest", resample=False)
         ax.set_aspect("equal", adjustable="box")
-        ax.set_title(title, fontsize=10)
         ax.axis("off")
+
+    # Dedicated label panel on white background to keep text off the image content.
+    ax_labels = fig.add_subplot(gs[:, 0])
+    ax_labels.set_facecolor("white")
+    ax_labels.set_xlim(0.0, 1.0)
+    ax_labels.set_ylim(0.0, 1.0)
+    ax_labels.axis("off")
+
+    # Convert desired pixel-sized typography to points so text remains stable at high DPI.
+    pt_per_px = 72.0 / float(max(int(dpi), 1))
+    row_title_fs = float(np.clip(0.090 * panel_h, 16.0, 26.0) * pt_per_px)
+    row_detail_fs = float(np.clip(0.060 * panel_h, 10.0, 16.0) * pt_per_px)
+    col_title_fs = float(np.clip(0.060 * panel_h, 11.0, 16.0) * pt_per_px)
+
+    row_labels = [
+        ("LR", f"display upsampled\n{lr_h}x{lr_w} -> {hr_h}x{hr_w}"),
+        ("SR", f"{sr_h}x{sr_w}"),
+        ("HR", f"{hr_h}x{hr_w}"),
+    ]
+    row_y = [5.0 / 6.0, 0.5, 1.0 / 6.0]
+
+    for y, (title, detail) in zip(row_y, row_labels):
+        ax_labels.text(
+            0.06,
+            y + 0.055,
+            title,
+            fontsize=row_title_fs,
+            fontweight="bold",
+            color="#111111",
+            ha="left",
+            va="center",
+        )
+        ax_labels.text(
+            0.06,
+            y - 0.020,
+            detail,
+            fontsize=row_detail_fs,
+            fontweight="normal",
+            color="#4a4a4a",
+            ha="left",
+            va="center",
+            linespacing=1.12,
+        )
+
+    def _set_panel_title(ax, title: str) -> None:
+        ax.set_title(
+            title,
+            fontsize=col_title_fs,
+            fontweight="semibold",
+            color="#111111",
+            pad=6,
+        )
 
     # -------------------------------------------------------------------------
     # Plot LR (row 0), SR (row 1), HR (row 2)
     # -------------------------------------------------------------------------
     if multi_ref:
         for j, (name, img) in enumerate(zip(("X", "Y", "Z"), lr_rgb)):
-            _imshow(fig.add_subplot(gs[0, j]), img, f"LR IPF-{name} ({lr_h}×{lr_w} px)")
+            ax = fig.add_subplot(gs[0, j + 1])
+            _imshow(ax, img)
+            _set_panel_title(ax, f"IPF-{name}")
         for j, (name, img) in enumerate(zip(("X", "Y", "Z"), sr_rgb)):
-            _imshow(fig.add_subplot(gs[1, j]), img, f"SR IPF-{name} ({sr_h}×{sr_w} px)")
+            _imshow(fig.add_subplot(gs[1, j + 1]), img)
         for j, (name, img) in enumerate(zip(("X", "Y", "Z"), hr_rgb)):
-            _imshow(fig.add_subplot(gs[2, j]), img, f"HR IPF-{name} ({hr_h}×{hr_w} px)")
+            _imshow(fig.add_subplot(gs[2, j + 1]), img)
     else:
-        _imshow(fig.add_subplot(gs[0, 0]), lr_rgb, f"LR IPF-{ref_dir.upper()} ({lr_h}×{lr_w} px)")
-        _imshow(fig.add_subplot(gs[1, 0]), sr_rgb, f"SR IPF-{ref_dir.upper()} ({sr_h}×{sr_w} px)")
-        _imshow(fig.add_subplot(gs[2, 0]), hr_rgb, f"HR IPF-{ref_dir.upper()} ({hr_h}×{hr_w} px)")
+        ax = fig.add_subplot(gs[0, 1])
+        _imshow(ax, lr_rgb)
+        _set_panel_title(ax, f"IPF-{ref_dir.upper()}")
+        _imshow(fig.add_subplot(gs[1, 1]), sr_rgb)
+        _imshow(fig.add_subplot(gs[2, 1]), hr_rgb)
 
     # -------------------------------------------------------------------------
     # IPF color key
     # -------------------------------------------------------------------------
     if include_key:
-        ax_key = fig.add_subplot(gs[:, -1], projection="ipf", symmetry=sym_class.laue)
-        ax_key.plot_ipf_color_key()
-        ax_key.set_title("")
+        # Keep the key centered and avoid over-expansion by placing it in the middle row.
+        ax_key = fig.add_subplot(gs[1, ncols + 1], projection="ipf", symmetry=sym_class.laue)
+        key_title_fs = float(np.clip(0.070 * panel_h, 11.0, 18.0) * pt_per_px)
+        key_label_fs = float(np.clip(0.055 * panel_h, 9.0, 14.0) * pt_per_px)
+        _style_simple_ipf_key(
+            ax_key,
+            title="IPF Key",
+            title_fontsize=key_title_fs,
+            label_fontsize=key_label_fs,
+        )
 
     # -------------------------------------------------------------------------
     # Save figure
     # -------------------------------------------------------------------------
     if out_png:
         os.makedirs(os.path.dirname(out_png) or ".", exist_ok=True)
-        fig.savefig(out_png, bbox_inches="tight", dpi=dpi)
+        fig.savefig(out_png, dpi=dpi, facecolor=fig.get_facecolor())
         plt.close(fig)
         print(f"Saved SR-HR-LR comparison to: {out_png}")
         return out_png
@@ -480,7 +724,7 @@ def render_input_output_side_by_side(
     )
 
     def _imshow(ax, img, title):
-        ax.imshow(img)
+        ax.imshow(img, interpolation="nearest", resample=False)
         ax.set_aspect("equal", adjustable="box")
         ax.set_title(title, fontsize=10)
         ax.axis("off")
@@ -502,8 +746,7 @@ def render_input_output_side_by_side(
     # -------------------------------------------------------------------------
     if include_key:
         ax_key = fig.add_subplot(gs[:, -1], projection="ipf", symmetry=sym_class.laue)
-        ax_key.plot_ipf_color_key()
-        ax_key.set_title("")
+        _style_simple_ipf_key(ax_key, title="IPF Key", title_fontsize=10.0, label_fontsize=8.0)
 
     # -------------------------------------------------------------------------
     # Save figure

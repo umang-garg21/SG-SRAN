@@ -1,9 +1,11 @@
 # -*- coding:utf-8 -*-
 """
-Train IsoEmbeddingSRAttn with local-iso feature-space SR loss.
+Train quaternion SR models with local-iso feature-space SR loss.
 
-This trainer is specialized for models.SR_double_conv_SRattn.IsoEmbeddingSRAttn
-and optimizes model.feature_loss_sr(...) directly.
+This trainer is shared across the repo's SR variants and optimizes each
+model's `feature_loss_sr(...)` directly. The concrete model class is resolved
+from the config's `model.model_module` / `model.model_class` fields or from
+the CLI overrides.
 """
 
 from __future__ import annotations
@@ -32,7 +34,7 @@ from utils.symmetry_utils import resolve_symmetry
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Train IsoEmbeddingSRAttn")
+    parser = argparse.ArgumentParser(description="Train quaternion SR model")
     parser.add_argument(
         "--exp_dir",
         required=True,
@@ -125,6 +127,59 @@ def _get_take_first(cfg, split: str):
 
 def _unwrap_model(model: torch.nn.Module) -> torch.nn.Module:
     return model.module if hasattr(model, "module") else model
+
+
+def _sync_module_device_attrs(model: torch.nn.Module, device: torch.device) -> None:
+    """Best-effort sync of custom `.device` attrs used by some model components."""
+    dev = torch.device(device)
+    for module in model.modules():
+        if hasattr(module, "device"):
+            try:
+                setattr(module, "device", dev)
+            except Exception:
+                # Some modules may expose read-only attributes.
+                pass
+
+
+def _module_param_rows(model: torch.nn.Module) -> list[tuple[str, str, int, int]]:
+    model_core = _unwrap_model(model)
+    rows: list[tuple[str, str, int, int]] = []
+    for module_name, module in model_core.named_modules():
+        params = list(module.parameters(recurse=False))
+        direct_total = sum(p.numel() for p in params)
+        direct_trainable = sum(p.numel() for p in params if p.requires_grad)
+        if module_name and direct_total == 0:
+            continue
+        display_name = "<root>" if not module_name else module_name
+        rows.append((display_name, module.__class__.__name__, direct_total, direct_trainable))
+    return rows
+
+
+def _print_model_summary(model: torch.nn.Module, max_rows: int | None = None) -> None:
+    model_core = _unwrap_model(model)
+    print("Model architecture:")
+    print(model_core)
+
+    rows = _module_param_rows(model_core)
+    total_params = sum(p.numel() for p in model_core.parameters())
+    trainable_params = sum(p.numel() for p in model_core.parameters() if p.requires_grad)
+
+    print("Layer parameter summary (direct params per module):")
+    print(f"{'module':<72} {'type':<28} {'params':>12} {'trainable':>12}")
+    print("-" * 130)
+
+    rows_to_show = rows
+    if max_rows is not None and max_rows > 0:
+        rows_to_show = rows[:max_rows]
+
+    for name, cls_name, n_params, n_trainable in rows_to_show:
+        print(f"{name:<72} {cls_name:<28} {n_params:>12,} {n_trainable:>12,}")
+
+    if len(rows_to_show) < len(rows):
+        hidden = len(rows) - len(rows_to_show)
+        print(f"... {hidden} more modules omitted (set model_summary_max_rows to a larger value to show all)")
+
+    print(f"Model parameters: {total_params:,} total, {trainable_params:,} trainable")
 
 
 def _save_history(history_path: Path, history: dict) -> None:
@@ -263,6 +318,54 @@ def _save_loss_plot(plot_path: Path, history: dict, exp_name: str) -> None:
 
 
 @torch.no_grad()
+def _get_boundary_context_from_lr_map(
+    model_core: torch.nn.Module,
+    lr_boundary_map_2d: torch.Tensor,
+    lr_shape: tuple[int, int],
+    device: torch.device,
+    dtype: torch.dtype,
+) -> dict[str, torch.Tensor] | None:
+    """
+    Resolve boundary context from an LR boundary map across model API variants.
+
+    Preferred API:
+      - _prepare_boundary_context_from_lr_boundary_map(...)
+
+    Backward-compatible API:
+      - _prepare_boundary_context(lr_boundary_map=...)
+    """
+    fn_from_map = getattr(model_core, "_prepare_boundary_context_from_lr_boundary_map", None)
+    if callable(fn_from_map):
+        return fn_from_map(
+            lr_boundary_map=lr_boundary_map_2d,
+            lr_shape=lr_shape,
+            batch_size=1,
+            device=device,
+            dtype=dtype,
+        )
+
+    fn_prepare = getattr(model_core, "_prepare_boundary_context", None)
+    if not callable(fn_prepare):
+        return None
+
+    try:
+        params = inspect.signature(fn_prepare).parameters
+    except (TypeError, ValueError):
+        return None
+
+    if "lr_boundary_map" not in params:
+        return None
+
+    return fn_prepare(
+        lr_boundary_map=lr_boundary_map_2d,
+        lr_shape=lr_shape,
+        batch_size=1,
+        device=device,
+        dtype=dtype,
+    )
+
+
+@torch.no_grad()
 def _derive_boundary_debug_maps(
     model_core: torch.nn.Module,
     lr_boundary_map_2d: torch.Tensor,
@@ -275,14 +378,14 @@ def _derive_boundary_debug_maps(
       LR boundary -> LR 1px -> HR 1px.
     Returns (lr_boundary_2d, hr_cleaned_boundary_2d, threshold) on CPU.
     """
-    if hasattr(model_core, "_prepare_boundary_context"):
-        ctx = model_core._prepare_boundary_context(
-            lr_boundary_map=lr_boundary_map_2d,
-            lr_shape=lr_shape,
-            batch_size=1,
-            device=device,
-            dtype=dtype,
-        )
+    ctx = _get_boundary_context_from_lr_map(
+        model_core=model_core,
+        lr_boundary_map_2d=lr_boundary_map_2d,
+        lr_shape=lr_shape,
+        device=device,
+        dtype=dtype,
+    )
+    if ctx is not None:
         return (
             ctx["boundary_lr_1px"][0, 0].detach().cpu(),
             ctx["boundary_hr_1px"][0, 0].detach().cpu(),
@@ -352,14 +455,14 @@ def _derive_boundary_grain_context(
       - hr_to_lr_map: (Hr,Wr), -1 on HR boundary/unmapped
     """
     # Preferred path: model-level boundary context pipeline.
-    if hasattr(model_core, "_prepare_boundary_context"):
-        ctx = model_core._prepare_boundary_context(
-            lr_boundary_map=lr_boundary_map_2d,
-            lr_shape=lr_shape,
-            batch_size=1,
-            device=device,
-            dtype=dtype,
-        )
+    ctx = _get_boundary_context_from_lr_map(
+        model_core=model_core,
+        lr_boundary_map_2d=lr_boundary_map_2d,
+        lr_shape=lr_shape,
+        device=device,
+        dtype=dtype,
+    )
+    if ctx is not None:
         need = ("boundary_lr_1px", "boundary_hr_1px", "lr_labels", "hr_to_lr_map")
         if all((k in ctx) and (ctx[k] is not None) for k in need):
             return {
@@ -889,15 +992,231 @@ def _validate_one_epoch(
     return total_loss / max(1, n_steps), avg_metrics
 
 
+def _render_probe_stage_viz(
+    model_core: torch.nn.Module,
+    sym_class,
+    out_dir: Path,
+    lr_hwc: torch.Tensor,
+    hr_hwc: torch.Tensor,
+    sr_flat: torch.Tensor,
+    sr_shape: tuple[int, int],
+    aux: dict | None,
+) -> bool:
+    """Render probe-stage galleries when aux contains decoded probe stages."""
+    if not isinstance(aux, dict):
+        return False
+
+    probe_stages = aux.get("probe_stages")
+    if not isinstance(probe_stages, list) or len(probe_stages) == 0:
+        return False
+
+    try:
+        from utils.stage_probe_utils import (
+            decode_probe_stages,
+            extract_scalar_probe_maps,
+            render_decoded_probe_gallery,
+            render_scalar_probe_gallery,
+        )
+    except Exception as exc:
+        print(f"[warning] Probe-stage utilities unavailable (import failed): {exc}")
+        return False
+
+    expected_dim = getattr(model_core, "feature_dim_a1", None)
+    expected_dim = int(expected_dim) if expected_dim is not None else None
+
+    decodable_stages: list[dict] = []
+    skipped_stages: list[dict[str, object]] = []
+    highdim_scalar_maps: list[dict[str, object]] = []
+
+    for stage in probe_stages:
+        name = str(stage.get("name", "unknown_stage"))
+        feat = stage.get("feat", None)
+        hw = tuple(stage.get("shape", ()))
+        if not isinstance(feat, torch.Tensor) or len(hw) != 2:
+            skipped_stages.append({"name": name, "reason": "missing_or_invalid_feat_or_shape"})
+            continue
+
+        if feat.dim() == 3:
+            feat_single = feat[0]
+        elif feat.dim() == 2:
+            feat_single = feat
+        else:
+            skipped_stages.append({"name": name, "reason": f"unsupported_feat_rank_{int(feat.dim())}"})
+            continue
+
+        if feat_single.dim() != 2:
+            skipped_stages.append({"name": name, "reason": "expected_flat_feat_rank2"})
+            continue
+
+        c_dim = int(feat_single.shape[-1])
+        n_dim = int(feat_single.shape[0])
+        if expected_dim is not None and c_dim != expected_dim:
+            skipped_stages.append(
+                {
+                    "name": name,
+                    "reason": "feature_dim_mismatch",
+                    "feature_dim": c_dim,
+                    "expected_dim": expected_dim,
+                }
+            )
+            if n_dim == int(hw[0]) * int(hw[1]):
+                chan_norm = feat_single.detach().float().norm(dim=-1).reshape(int(hw[0]), int(hw[1])).cpu().numpy()
+                highdim_scalar_maps.append(
+                    {
+                        "name": f"{name}_chan_norm",
+                        "array": chan_norm,
+                        "cmap": "magma",
+                    }
+                )
+            continue
+
+        decodable_stages.append(stage)
+
+    decoded_stages: list[dict[str, object]] = []
+    if decodable_stages:
+        try:
+            with torch.enable_grad():
+                decoded_stages = decode_probe_stages(model_core, decodable_stages, sample_index=0)
+        except Exception as exc:
+            print(f"[warning] Failed to decode probe stages during viz: {exc}")
+            decoded_stages = []
+
+    sr_h, sr_w = int(sr_shape[0]), int(sr_shape[1])
+    sr_hwc = sr_flat.reshape(sr_h, sr_w, 4).detach().cpu()
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    decoded_gallery_path = None
+    if decoded_stages:
+        context_rows = [
+            {
+                "name": "lr_input",
+                "shape": tuple(lr_hwc.shape[:2]),
+                "quat_hwc": lr_hwc.detach().cpu(),
+                "hr_target_hwc": hr_hwc.detach().cpu(),
+            },
+            *[
+                {
+                    "name": item["name"],
+                    "shape": item["shape"],
+                    "quat_hwc": item["quat_hwc"],
+                    "hr_target_hwc": hr_hwc.detach().cpu(),
+                }
+                for item in decoded_stages
+            ],
+            {
+                "name": "sr_output",
+                "shape": (sr_h, sr_w),
+                "quat_hwc": sr_hwc,
+                "hr_target_hwc": hr_hwc.detach().cpu(),
+            },
+            {
+                "name": "hr_target",
+                "shape": tuple(hr_hwc.shape[:2]),
+                "quat_hwc": hr_hwc.detach().cpu(),
+                "hr_target_hwc": hr_hwc.detach().cpu(),
+            },
+        ]
+        decoded_gallery_path = render_decoded_probe_gallery(
+            context_rows,
+            sym_class=sym_class,
+            out_png=out_dir / "probe_decoded_gallery.png",
+        )
+
+    stage_by_name = {str(item["name"]).strip(): item for item in decoded_stages}
+    detailed_upsampler_order = (
+        "grain_attention_out",
+        "upsample_center_hr",
+        "upsample_plus_hr",
+        "upsample_minus_hr",
+        "upsample_shifted_mix_hr",
+    )
+    detailed_rows = []
+    for name in detailed_upsampler_order:
+        if name in stage_by_name:
+            row = stage_by_name[name]
+            detailed_rows.append(
+                {
+                    "name": row["name"],
+                    "shape": row["shape"],
+                    "quat_hwc": row["quat_hwc"],
+                    "hr_target_hwc": hr_hwc.detach().cpu(),
+                }
+            )
+
+    upsampler_gallery_path = None
+    if detailed_rows:
+        upsampler_rows = [
+            {
+                "name": "lr_input",
+                "shape": tuple(lr_hwc.shape[:2]),
+                "quat_hwc": lr_hwc.detach().cpu(),
+                "hr_target_hwc": hr_hwc.detach().cpu(),
+            },
+            *detailed_rows,
+            {
+                "name": "sr_output",
+                "shape": (sr_h, sr_w),
+                "quat_hwc": sr_hwc,
+                "hr_target_hwc": hr_hwc.detach().cpu(),
+            },
+            {
+                "name": "hr_target",
+                "shape": tuple(hr_hwc.shape[:2]),
+                "quat_hwc": hr_hwc.detach().cpu(),
+                "hr_target_hwc": hr_hwc.detach().cpu(),
+            },
+        ]
+        upsampler_gallery_path = render_decoded_probe_gallery(
+            upsampler_rows,
+            sym_class=sym_class,
+            out_png=out_dir / "probe_upsampler_detail_gallery.png",
+        )
+
+    scalar_maps = extract_scalar_probe_maps(aux, sample_index=0)
+    scalar_maps.extend(highdim_scalar_maps)
+    scalar_gallery_path = None
+    if scalar_maps:
+        scalar_gallery_path = render_scalar_probe_gallery(
+            scalar_maps,
+            out_png=out_dir / "probe_scalar_gallery.png",
+        )
+
+    metadata = {
+        "probe_stage_names": [str(item["name"]) for item in decoded_stages],
+        "skipped_probe_stages": skipped_stages,
+        "requested_upsampler_stage_names": list(detailed_upsampler_order),
+        "available_upsampler_stage_names": [row["name"] for row in detailed_rows],
+        "decoded_gallery": str(decoded_gallery_path) if decoded_gallery_path is not None else None,
+        "upsampler_detail_gallery": str(upsampler_gallery_path) if upsampler_gallery_path is not None else None,
+        "scalar_gallery": str(scalar_gallery_path) if scalar_gallery_path is not None else None,
+    }
+    with open(out_dir / "probe_stage_metadata.json", "w", encoding="utf-8") as f:
+        json.dump(metadata, f, indent=2)
+
+    if decoded_gallery_path is not None:
+        print(f"Saved probe decoded gallery: {decoded_gallery_path}")
+    elif skipped_stages:
+        print("[warning] No decodable probe stages for quaternion decode; wrote scalar probe maps and metadata.")
+    if upsampler_gallery_path is not None:
+        print(f"Saved detailed upsampler gallery: {upsampler_gallery_path}")
+    if scalar_gallery_path is not None:
+        print(f"Saved probe scalar gallery: {scalar_gallery_path}")
+    return True
+
+
 def _render_sr_hr_lr_ipf(
     model_core: torch.nn.Module,
     data_loader,
     sym_class,
     out_png: Path,
     ref_dir: str = "ALL",
+    enable_probe_stage_viz: bool = True,
+    sample_index: int = 0,
+    force_cpu: bool = False,
+    allow_cpu_fallback: bool = True,
 ) -> bool:
     """
-    Render LR/SR/HR IPF comparison from the first sample in data_loader.
+    Render LR/SR/HR IPF comparison from one selected sample in the first batch.
     """
     try:
         from visualization.visualize_sr_results import render_sr_hr_lr_side_by_side
@@ -915,51 +1234,96 @@ def _render_sr_hr_lr_ipf(
         print("[warning] Skipping visualization: empty LR/HR batch.")
         return False
 
+    original_device = next(model_core.parameters()).device
+    moved_for_viz = False
     try:
         model_was_training = model_core.training
         model_core.eval()
 
-        device = next(model_core.parameters()).device
-        lr0 = _to_hwc_quat_single(lr[0].to(device=device, dtype=torch.float32))
-        hr0 = _to_hwc_quat_single(hr[0].to(device=device, dtype=torch.float32))
-        lr_h, lr_w = int(lr0.shape[0]), int(lr0.shape[1])
-        hr_h, hr_w = int(hr0.shape[0]), int(hr0.shape[1])
-        lr_boundary0 = None
-        if lr_boundary_map is not None:
-            lr_boundary0 = lr_boundary_map[0].to(device=device, dtype=torch.float32)
+        if force_cpu and original_device.type != "cpu":
+            model_core.to("cpu")
+            _sync_module_device_attrs(model_core, torch.device("cpu"))
+            moved_for_viz = True
+        else:
+            _sync_module_device_attrs(model_core, next(model_core.parameters()).device)
 
-        lr_flat = lr0.reshape(-1, 4)
-        _forward_sr_params = inspect.signature(model_core.forward_sr).parameters
-        _supports_lr_boundary = "lr_boundary_map" in _forward_sr_params
-        _requires_lr_boundary = (
-            _supports_lr_boundary
-            and _forward_sr_params["lr_boundary_map"].default is inspect._empty
-        )
-        forward_kwargs = {
-            "lr_shape": (lr_h, lr_w),
-            "normalize_input": True,
-        }
-        if _supports_lr_boundary:
-            if lr_boundary0 is None and _requires_lr_boundary:
-                raise ValueError(
-                    "Model forward_sr requires lr_boundary_map but visualization batch did not include it."
+        if torch.cuda.is_available() and not force_cpu:
+            torch.cuda.empty_cache()
+
+        # Decoder backend may run gradient-based optimization, so visualization
+        # forward pass cannot be wrapped in inference/no-grad mode.
+        with torch.enable_grad():
+            device = next(model_core.parameters()).device
+            chosen_idx = int(max(0, min(int(sample_index), int(lr.shape[0]) - 1)))
+            if chosen_idx != int(sample_index):
+                print(
+                    f"[warning] viz_sample_index={sample_index} out of range for batch size={int(lr.shape[0])}; "
+                    f"using sample_index={chosen_idx}."
                 )
-            if lr_boundary0 is not None:
-                forward_kwargs["lr_boundary_map"] = lr_boundary0
 
-        q_sr_flat = model_core.forward_sr(
-            lr_flat,
-            **forward_kwargs,
-        )
+            lr0 = _to_hwc_quat_single(lr[chosen_idx].to(device=device, dtype=torch.float32))
+            hr0 = _to_hwc_quat_single(hr[chosen_idx].to(device=device, dtype=torch.float32))
+            lr_h, lr_w = int(lr0.shape[0]), int(lr0.shape[1])
+            hr_h, hr_w = int(hr0.shape[0]), int(hr0.shape[1])
+            lr_boundary0 = None
+            if lr_boundary_map is not None:
+                lr_boundary0 = lr_boundary_map[chosen_idx].to(device=device, dtype=torch.float32)
 
-        if int(q_sr_flat.shape[0]) != hr_h * hr_w:
-            raise ValueError(
-                f"SR output size mismatch: got N={int(q_sr_flat.shape[0])}, expected {hr_h * hr_w}"
+            lr_flat = lr0.reshape(-1, 4)
+            _forward_sr_params = inspect.signature(model_core.forward_sr).parameters
+            _supports_lr_boundary = "lr_boundary_map" in _forward_sr_params
+            _requires_lr_boundary = (
+                _supports_lr_boundary
+                and _forward_sr_params["lr_boundary_map"].default is inspect._empty
             )
+            forward_kwargs = {
+                "lr_shape": (lr_h, lr_w),
+                "normalize_input": True,
+            }
+            if _supports_lr_boundary:
+                if lr_boundary0 is None and _requires_lr_boundary:
+                    raise ValueError(
+                        "Model forward_sr requires lr_boundary_map but visualization batch did not include it."
+                    )
+                if lr_boundary0 is not None:
+                    forward_kwargs["lr_boundary_map"] = lr_boundary0
 
-        lr_np = lr0.detach().cpu().numpy()
-        hr_np = hr0.detach().cpu().numpy()
-        sr_np = q_sr_flat.reshape(hr_h, hr_w, 4).detach().cpu().numpy()
+            _supports_return_aux = "return_aux" in _forward_sr_params
+            _supports_return_probe = "return_probe" in _forward_sr_params
+            aux = None
+            need_aux = bool(enable_probe_stage_viz)
+
+            if _supports_return_aux and need_aux:
+                probe_kwargs = dict(forward_kwargs)
+                probe_kwargs["return_aux"] = True
+                if _supports_return_probe:
+                    probe_kwargs["return_probe"] = bool(enable_probe_stage_viz)
+                sr_output = model_core.forward_sr(
+                    lr_flat,
+                    **probe_kwargs,
+                )
+                if (
+                    isinstance(sr_output, tuple)
+                    and len(sr_output) == 2
+                    and isinstance(sr_output[1], dict)
+                ):
+                    q_sr_flat, aux = sr_output
+                else:
+                    q_sr_flat = sr_output
+            else:
+                q_sr_flat = model_core.forward_sr(
+                    lr_flat,
+                    **forward_kwargs,
+                )
+
+            if int(q_sr_flat.shape[0]) != hr_h * hr_w:
+                raise ValueError(
+                    f"SR output size mismatch: got N={int(q_sr_flat.shape[0])}, expected {hr_h * hr_w}"
+                )
+
+            lr_np = lr0.detach().cpu().numpy()
+            hr_np = hr0.detach().cpu().numpy()
+            sr_np = q_sr_flat.reshape(hr_h, hr_w, 4).detach().cpu().numpy()
 
         out_png.parent.mkdir(parents=True, exist_ok=True)
         render_sr_hr_lr_side_by_side(
@@ -975,6 +1339,18 @@ def _render_sr_hr_lr_ipf(
             dpi=300,
         )
         print(f"Saved LR/SR/HR IPF visualization: {out_png}")
+
+        if enable_probe_stage_viz:
+            _render_probe_stage_viz(
+                model_core=model_core,
+                sym_class=sym_class,
+                out_dir=out_png.parent,
+                lr_hwc=lr0,
+                hr_hwc=hr0,
+                sr_flat=q_sr_flat,
+                sr_shape=(hr_h, hr_w),
+                aux=aux,
+            )
 
         # Boundary debug visualization in eval mode (when boundary map is available).
         if lr_boundary0 is not None:
@@ -1012,9 +1388,30 @@ def _render_sr_hr_lr_ipf(
                 )
         return True
     except Exception as exc:
+        msg = str(exc).lower()
+        if allow_cpu_fallback and (not force_cpu) and ("out of memory" in msg):
+            print("[warning] GPU visualization OOM; retrying visualization on CPU.")
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            return _render_sr_hr_lr_ipf(
+                model_core=model_core,
+                data_loader=data_loader,
+                sym_class=sym_class,
+                out_png=out_png,
+                ref_dir=ref_dir,
+                enable_probe_stage_viz=enable_probe_stage_viz,
+                sample_index=sample_index,
+                force_cpu=True,
+                allow_cpu_fallback=False,
+            )
         print(f"[warning] Failed to render LR/SR/HR IPF visualization: {exc}")
         return False
     finally:
+        if moved_for_viz:
+            model_core.to(original_device)
+            _sync_module_device_attrs(model_core, original_device)
+            if original_device.type == "cuda":
+                torch.cuda.empty_cache()
         if "model_was_training" in locals() and model_was_training:
             model_core.train()
 
@@ -1062,6 +1459,15 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     cfg.device = str(device)
     print(f"Using device: {device}")
+    allow_tf32 = bool(getattr(cfg, "allow_tf32", True))
+    cudnn_benchmark = bool(getattr(cfg, "cudnn_benchmark", False))
+    if device.type == "cuda":
+        torch.backends.cuda.matmul.allow_tf32 = allow_tf32
+        torch.backends.cudnn.allow_tf32 = allow_tf32
+        torch.backends.cudnn.benchmark = cudnn_benchmark
+        print(
+            f"CUDA math settings: allow_tf32={allow_tf32}, cudnn_benchmark={cudnn_benchmark}"
+        )
     if device.type == "cuda":
         free_bytes, total_bytes = torch.cuda.mem_get_info(device=device)
         free_gb = float(free_bytes) / (1024**3)
@@ -1101,6 +1507,8 @@ def main() -> None:
                 preload=bool(cfg.preload),
                 preload_torch=bool(cfg.preload_torch),
                 pin_memory=bool(cfg.pin_memory),
+                persistent_workers=bool(getattr(cfg, "persistent_workers", False)),
+                prefetch_factor=int(getattr(cfg, "prefetch_factor", 2)),
                 shuffle=(split == "train"),
                 drop_last=(split == "train"),
                 take_first=_get_take_first(cfg, split),
@@ -1158,6 +1566,22 @@ def main() -> None:
         "focal_gamma": float(getattr(cfg, "focal_gamma", 2.0)),
         "side_correct_band_kernel": getattr(cfg, "side_correct_band_kernel", (3, 3)),
         "side_correct_rel_gap": float(getattr(cfg, "side_correct_rel_gap", 0.05)),
+        "attention_num_heads": int(getattr(cfg, "attention_num_heads", 8)),
+        "attention_head_dim": int(getattr(cfg, "attention_head_dim", 32)),
+        "attention_num_layers": int(getattr(cfg, "attention_num_blocks", getattr(cfg, "attention_num_layers", 4))),
+        "attention_mlp_ratio": float(getattr(cfg, "attention_mlp_ratio", 2.0)),
+        "attention_pos_hidden_dim": int(getattr(cfg, "attention_pos_hidden_dim", 64)),
+        "attention_dropout": float(getattr(cfg, "attention_dropout", 0.0)),
+        "attention_query_chunk_size": int(getattr(cfg, "attention_query_chunk_size", 2048)),
+        "attention_lr_patch_size": getattr(cfg, "attention_lr_patch_size", (2, 2)),
+        "seed_mode": str(getattr(cfg, "seed_mode", "bilinear")),
+        "seed_num_candidates": int(getattr(cfg, "seed_num_candidates", 4)),
+        "seed_lr_self_attn_layers": int(getattr(cfg, "seed_lr_self_attn_layers", 1)),
+        "seed_lr_self_attn_heads": int(getattr(cfg, "seed_lr_self_attn_heads", 3)),
+        "seed_lr_block_size": getattr(cfg, "seed_lr_block_size", (8, 8)),
+        "seed_gm_iters": int(getattr(cfg, "seed_gm_iters", 3)),
+        "seed_use_hr_median_pool": bool(getattr(cfg, "seed_use_hr_median_pool", False)),
+        "seed_hr_median_kernel_size": int(getattr(cfg, "seed_hr_median_kernel_size", 3)),
         "use_lr_conv1": bool(getattr(cfg, "use_lr_conv1", True)),
         "use_lr_conv2": bool(getattr(cfg, "use_lr_conv2", True)),
         "use_lr_conv3": bool(getattr(cfg, "use_lr_conv3", False)),
@@ -1166,6 +1590,13 @@ def main() -> None:
         "lr_conv3_kernel_size": int(getattr(cfg, "lr_conv3_kernel_size", 9)),
         "lr_conv3_dilation": int(getattr(cfg, "lr_conv3_dilation", 1)),
         "hr_conv1_kernel_size": int(getattr(cfg, "hr_conv1_kernel_size", 3)),
+        "conv_feature_mask_cosine_threshold": float(
+            getattr(cfg, "conv_feature_mask_cosine_threshold", 0.99)
+        ),
+        "conv_feature_mask_soft": bool(getattr(cfg, "conv_feature_mask_soft", False)),
+        "conv_feature_mask_temperature": float(
+            getattr(cfg, "conv_feature_mask_temperature", 32.0)
+        ),
         "use_residual_lr1": bool(getattr(cfg, "use_residual_lr1", False)),
         "use_residual_lr2": bool(getattr(cfg, "use_residual_lr2", False)),
         "use_residual_lr3": bool(getattr(cfg, "use_residual_lr3", False)),
@@ -1242,14 +1673,38 @@ def main() -> None:
         "decoder_max_table_rows": getattr(cfg, "decoder_max_table_rows", None),
         "decoder_table_cache_dir": getattr(cfg, "decoder_table_cache_dir", "out/decoder_lookup_tables"),
         "decoder_backend": str(getattr(cfg, "decoder_backend", "optimizing")),
+        "feature_irreps": str(getattr(cfg, "feature_irreps", "full")),
+        "window_size": int(getattr(cfg, "window_size", 5)),
+        "kmax_slots": int(getattr(cfg, "kmax_slots", 4)),
+        "cluster_threshold_deg": float(getattr(cfg, "cluster_threshold_deg", 2.0)),
+        "cluster_connectivity": int(getattr(cfg, "cluster_connectivity", 4)),
+        "num_experts": int(getattr(cfg, "num_experts", 12)),
+        "top_k_experts": int(getattr(cfg, "top_k_experts", 2)),
+        "phase_dim": int(getattr(cfg, "phase_dim", 32)),
+        "ocrp_router_hidden_dim": int(getattr(cfg, "ocrp_router_hidden_dim", 128)),
+        "ocrp_router_conv_hidden_dim": int(getattr(cfg, "ocrp_router_conv_hidden_dim", 64)),
+        "ocrp_proposal_hidden_dim": int(getattr(cfg, "ocrp_proposal_hidden_dim", 128)),
+        "ocrp_straight_through": bool(getattr(cfg, "ocrp_straight_through", True)),
+        "rrctp_score_hidden_dim": int(getattr(cfg, "rrctp_score_hidden_dim", 64)),
+        "rrctp_router_hidden_dim": int(getattr(cfg, "rrctp_router_hidden_dim", 128)),
+        "rrctp_query_hidden_dim": int(getattr(cfg, "rrctp_query_hidden_dim", 64)),
+        "rrctp_seed_hidden_dim": int(getattr(cfg, "rrctp_seed_hidden_dim", 128)),
+        "rrctp_token_chunk_size": int(getattr(cfg, "rrctp_token_chunk_size", 1024)),
+        "decoder_eager_init": bool(getattr(cfg, "decoder_eager_init", False)),
     }
 
     model_kwargs = {k: v for k, v in model_kwargs.items() if k in _init_params}
     model = IsoEmbeddingSRAttn(**model_kwargs).to(device)
 
-    total_params = sum(p.numel() for p in model.parameters())
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"Model parameters: {total_params:,} total, {trainable_params:,} trainable")
+    summary_max_rows_cfg = getattr(cfg, "model_summary_max_rows", None)
+    summary_max_rows = int(summary_max_rows_cfg) if summary_max_rows_cfg is not None else None
+    print_model_summary = bool(getattr(cfg, "print_model_summary", True))
+    if print_model_summary:
+        _print_model_summary(model, max_rows=summary_max_rows)
+    else:
+        total_params = sum(p.numel() for p in model.parameters())
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f"Model parameters: {total_params:,} total, {trainable_params:,} trainable")
 
     optimizer = build_optimizer(model, cfg)
     scheduler = build_scheduler(optimizer, cfg)
@@ -1289,6 +1744,9 @@ def main() -> None:
     save_every = int(getattr(cfg, "save_every", 1))
     viz_every = int(getattr(cfg, "viz_every", save_every))
     viz_ref_dir = str(getattr(cfg, "viz_ref_dir", "ALL"))
+    viz_enable_probe_stage_viz = bool(getattr(cfg, "viz_enable_probe_stage_viz", True))
+    viz_sample_index = int(getattr(cfg, "viz_sample_index", 0))
+    viz_force_cpu = bool(getattr(cfg, "viz_force_cpu", False))
     memory_debug_every = int(getattr(cfg, "memory_debug_every", 0))
     cuda_empty_cache_every = int(getattr(cfg, "cuda_empty_cache_every", 0))
     epochs = int(cfg.epochs)
@@ -1319,7 +1777,10 @@ def main() -> None:
         )
 
         if scheduler is not None:
-            scheduler.step()
+            if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                scheduler.step(float(val_loss))
+            else:
+                scheduler.step()
         current_lr = float(optimizer.param_groups[0]["lr"])
 
         history["train"].append(float(train_loss))
@@ -1390,6 +1851,9 @@ def main() -> None:
                 sym_class=sym_class,
                 out_png=viz_dir / "lr_sr_hr_ipf.png",
                 ref_dir=viz_ref_dir,
+                enable_probe_stage_viz=viz_enable_probe_stage_viz,
+                sample_index=viz_sample_index,
+                force_cpu=viz_force_cpu,
             )
 
         _save_history(history_path, history)
@@ -1406,6 +1870,9 @@ def main() -> None:
         sym_class=sym_class,
         out_png=final_viz_dir / "lr_sr_hr_ipf.png",
         ref_dir=viz_ref_dir,
+        enable_probe_stage_viz=viz_enable_probe_stage_viz,
+        sample_index=viz_sample_index,
+        force_cpu=viz_force_cpu,
     )
 
     if writer is not None:
