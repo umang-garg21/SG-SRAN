@@ -1,5 +1,5 @@
 {
-  "dataset_root": "/data/home/umang/Materials/Materials_data_mount/datasets/IN718",
+  "dataset_root": "/data/home/umang/Materials/Materials_data_mount/datasets/IN718_QSR_4x1",
   "epochs": 2,
   "batch_size": 2,
   "num_workers": 2,
@@ -13,8 +13,8 @@
   "min_free_cuda_gb": 0.0,
   "lr": 0.0003,
   "clip": 1.0,
-  "scale": 4,
-  "upsample_factor": 4,
+  "scale": [4, 1],
+  "upsample_factor": [4, 1],
   "symmetry_group": "Oh",
   "crystal": "fcc",
   "d6_convention": "z_axis",
@@ -25,7 +25,7 @@
   "conv_feature_mask_soft": false,
   "conv_feature_mask_temperature": 32.0,
   "use_residual_lr1": true,
-  "window_size": 7,
+  "window_size": 5,
   "kmax_slots": 4,
   "cluster_threshold_deg": 2.0,
   "cluster_connectivity": 8,
@@ -70,7 +70,7 @@
   },
   "model": {
     "type": "iso_embedding_ocrp",
-    "model_module": "models.SR_ocrp",
-    "model_class": "IsoEmbeddingSROCRP"
+    "model_module": "models.SR_4x1_ocrp",
+    "model_class": "IsoEmbedding4x1SROCRP"
   }
 }

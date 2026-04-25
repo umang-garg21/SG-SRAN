@@ -46,6 +46,8 @@ export NUMBA_CACHE_DIR="${NUMBA_CACHE_DIR:-/tmp/numba_cache}"
 mkdir -p "$NUMBA_CACHE_DIR"
 export MPLCONFIGDIR="${MPLCONFIGDIR:-/tmp/matplotlib}"
 mkdir -p "$MPLCONFIGDIR"
+export CUDA_VISIBLE_DEVICES="$GPU_IDS"
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
 python -m training.train_iso_embedding_ocrp \
     --exp_dir "$EXP_DIR" \

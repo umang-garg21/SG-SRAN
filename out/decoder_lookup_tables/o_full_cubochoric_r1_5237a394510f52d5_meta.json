@@ -1,0 +1,12 @@
+{
+  "cache_version": 1,
+  "group_name": "O",
+  "d6_convention": "z_axis",
+  "target_irreps": "full",
+  "target_dim": 14,
+  "irreps_a1": "1x4e",
+  "irreps_full": "1x2e+1x4e",
+  "cubochoric_resolution": 1,
+  "method": "cubochoric",
+  "max_table_rows": null
+}

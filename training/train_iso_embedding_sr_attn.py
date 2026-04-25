@@ -1416,6 +1416,36 @@ def _render_sr_hr_lr_ipf(
             model_core.train()
 
 
+def _render_final_probe_split_viz(
+    model_core: torch.nn.Module,
+    loaders: dict[str, object],
+    sym_class,
+    out_root: Path,
+    ref_dir: str = "ALL",
+    enable_probe_stage_viz: bool = True,
+    force_cpu: bool = False,
+) -> None:
+    """Render end-of-training probe-stage visualizations for val[0] and test[0]."""
+    if not bool(enable_probe_stage_viz):
+        return
+
+    for split_key in ("val", "test"):
+        data_loader = loaders.get(split_key)
+        if data_loader is None:
+            continue
+        split_out_dir = out_root / f"{split_key}_sample0000"
+        _render_sr_hr_lr_ipf(
+            model_core=model_core,
+            data_loader=data_loader,
+            sym_class=sym_class,
+            out_png=split_out_dir / "lr_sr_hr_ipf.png",
+            ref_dir=ref_dir,
+            enable_probe_stage_viz=True,
+            sample_index=0,
+            force_cpu=force_cpu,
+        )
+
+
 def main() -> None: 
     args = parse_args()
     exp_dir = Path(args.exp_dir)
@@ -1685,6 +1715,14 @@ def main() -> None:
         "ocrp_router_conv_hidden_dim": int(getattr(cfg, "ocrp_router_conv_hidden_dim", 64)),
         "ocrp_proposal_hidden_dim": int(getattr(cfg, "ocrp_proposal_hidden_dim", 128)),
         "ocrp_straight_through": bool(getattr(cfg, "ocrp_straight_through", True)),
+        "ocrp_mode": str(getattr(cfg, "ocrp_mode", "pixel_patch")),
+        "macro_lr_tile_size": int(getattr(cfg, "macro_lr_tile_size", 3)),
+        "macro_lr_stride_shape": getattr(cfg, "macro_lr_stride_shape", None),
+        "ocrp_token_conditioned_member_bias": getattr(cfg, "ocrp_token_conditioned_member_bias", None),
+        "ocrp_pool_chunk_size": int(getattr(cfg, "ocrp_pool_chunk_size", 512)),
+        "ocrp_router_chunk_size": int(getattr(cfg, "ocrp_router_chunk_size", 512)),
+        "ocrp_proposal_chunk_size": int(getattr(cfg, "ocrp_proposal_chunk_size", 128)),
+        "ocrp_proposal_token_chunk_size": getattr(cfg, "ocrp_proposal_token_chunk_size", None),
         "rrctp_score_hidden_dim": int(getattr(cfg, "rrctp_score_hidden_dim", 64)),
         "rrctp_router_hidden_dim": int(getattr(cfg, "rrctp_router_hidden_dim", 128)),
         "rrctp_query_hidden_dim": int(getattr(cfg, "rrctp_query_hidden_dim", 64)),
@@ -1872,6 +1910,15 @@ def main() -> None:
         ref_dir=viz_ref_dir,
         enable_probe_stage_viz=viz_enable_probe_stage_viz,
         sample_index=viz_sample_index,
+        force_cpu=viz_force_cpu,
+    )
+    _render_final_probe_split_viz(
+        model_core=_unwrap_model(model),
+        loaders=loaders,
+        sym_class=sym_class,
+        out_root=final_viz_dir,
+        ref_dir=viz_ref_dir,
+        enable_probe_stage_viz=viz_enable_probe_stage_viz,
         force_cpu=viz_force_cpu,
     )
 

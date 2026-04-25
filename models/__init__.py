@@ -7,15 +7,6 @@ __all__ = [
 ]
 
 try:
-    from models.SR_double_conv_SRattn import (
-        AttentionBlock,
-        CubochoricOptimizingLocalIsoDecoder,
-        EquivariantSpatialConv,
-        EquivariantTransposeConv,
-        IsoEmbeddingSRAttn,
-        LearnableA1QuaternionDecoder,
-        LocalIsoCrystalEncoder,
-    )
     from models.local_iso_embedding import (
         LocalIsoCrystalEmbedding,
         build_fcc_syms_mtex,
@@ -36,6 +27,10 @@ try:
         QuaternionBankClusterer,
         SharedTPPatchProposalHead,
         WithinSlotInvariantPool,
+    )
+    from models.SR_4x1_ocrp import (
+        IsoEmbedding4x1SROCRP,
+        OCRP4x1PatchUpsampler,
     )
 except ModuleNotFoundError as exc:
     if exc.name not in {"e3nn", "orix"}:
@@ -67,5 +62,7 @@ else:
             "SharedTPPatchProposalHead",
             "OCRPPatchUpsampler",
             "IsoEmbeddingSROCRP",
+            "OCRP4x1PatchUpsampler",
+            "IsoEmbedding4x1SROCRP",
         ]
     )

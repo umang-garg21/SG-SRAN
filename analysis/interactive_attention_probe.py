@@ -68,7 +68,7 @@ from inference.infer_iso_embedding_sr_attn import (
 )
 from training.config_utils import load_and_prepare_config
 from training.data_loading import build_dataloader
-from utils.stage_probe_utils import InteractiveAttentionProbeFigure
+from utils.stage_probe_utils import InteractiveAttentionProbeFigure, pick_most_free_cuda_gpu
 from utils.symmetry_utils import resolve_symmetry
 
 
@@ -79,7 +79,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoint", type=str, default="best_model.pt", help="Checkpoint filename or absolute path.")
     parser.add_argument("--split", type=str, default="Test", choices=["Train", "Val", "Test"], help="Dataset split.")
     parser.add_argument("--sample_idx", type=int, default=0, help="Dataset sample index.")
-    parser.add_argument("--gpu_ids", type=str, default=_PRE_ARGS.gpu_ids, help="Optional CUDA_VISIBLE_DEVICES value.")
+    parser.add_argument(
+        "--gpu_ids",
+        type=str,
+        default=_PRE_ARGS.gpu_ids,
+        help="Optional CUDA_VISIBLE_DEVICES value. By default the most-free GPU is selected.",
+    )
     parser.add_argument("--backend", type=str, default=_PRE_ARGS.backend, help="Matplotlib interactive backend, e.g. TkAgg or QtAgg.")
     parser.add_argument("--device", type=str, default="auto", choices=["auto", "cpu", "cuda"], help="Execution device.")
     parser.add_argument("--seed", type=int, default=0, help="Seed used for initial/random probe selection.")
@@ -113,6 +118,15 @@ def _default_out_dir(exp_dir: Path, split: str, sample_idx: int) -> Path:
 
 def main() -> None:
     args = parse_args()
+    selected_gpu: int | None = None
+    if args.gpu_ids is not None:
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu_ids)
+        print(f"Using requested GPU(s): {args.gpu_ids}")
+    elif torch.cuda.is_available():
+        selected_gpu = pick_most_free_cuda_gpu()
+        if selected_gpu is not None:
+            print(f"Auto-selected most-free GPU: {selected_gpu}")
+
     backend_name = str(matplotlib.get_backend()).lower()
     interactive_backends = {
         "tkagg",
@@ -134,9 +148,12 @@ def main() -> None:
     if args.device == "cpu":
         device = torch.device("cpu")
     elif args.device == "cuda":
-        device = torch.device("cuda")
+        device = torch.device(f"cuda:{selected_gpu}" if selected_gpu is not None else "cuda")
     else:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if torch.cuda.is_available():
+            device = torch.device(f"cuda:{selected_gpu}" if selected_gpu is not None else "cuda")
+        else:
+            device = torch.device("cpu")
 
     exp_dir = Path(args.exp_dir).resolve()
     config_path = exp_dir / args.config

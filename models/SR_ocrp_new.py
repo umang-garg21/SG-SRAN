@@ -80,45 +80,19 @@ def _irrep_block_slices(irreps: Irreps) -> list[tuple[int, int]]:
     return slices
 
 
-def _as_scale_tuple(scale: int | tuple[int, int] | list[int]) -> tuple[int, int]:
+def _as_isotropic_scale(scale: int | tuple[int, int] | list[int]) -> int:
     if isinstance(scale, (tuple, list)):
         if len(scale) != 2:
-            raise ValueError(f"Expected scale as int or length-2 tuple/list, got {scale}")
+            raise ValueError(f"Expected isotropic scale as int or length-2 tuple/list, got {scale}")
         scale_y = int(scale[0])
         scale_x = int(scale[1])
-    else:
-        scale_y = scale_x = int(scale)
-    if scale_y < 1 or scale_x < 1:
-        raise ValueError(f"scale values must be >= 1, got {(scale_y, scale_x)}")
-    return (scale_y, scale_x)
-
-
-def _as_patch_shape(
-    patch_size: int | tuple[int, int] | list[int],
-    *,
-    name: str,
-) -> tuple[int, int]:
-    if isinstance(patch_size, (tuple, list)):
-        if len(patch_size) != 2:
-            raise ValueError(f"Expected {name} as int or length-2 tuple/list, got {patch_size}")
-        patch_h = int(patch_size[0])
-        patch_w = int(patch_size[1])
-    else:
-        patch_h = patch_w = int(patch_size)
-    if patch_h < 1 or patch_w < 1:
-        raise ValueError(f"{name} must be >= 1 in both dims, got {(patch_h, patch_w)}")
-    return (patch_h, patch_w)
-
-
-def _num_patch_tokens(patch_shape: tuple[int, int]) -> int:
-    return int(patch_shape[0]) * int(patch_shape[1])
-
-
-def _as_isotropic_scale(scale: int | tuple[int, int] | list[int]) -> int:
-    scale_y, scale_x = _as_scale_tuple(scale)
-    if scale_y != scale_x:
-        raise ValueError(f"OCRP currently assumes isotropic SR, got scale={scale}")
-    return int(scale_y)
+        if scale_y != scale_x:
+            raise ValueError(f"OCRP currently assumes isotropic SR, got scale={scale}")
+        scale = scale_y
+    scale_int = int(scale)
+    if scale_int < 1:
+        raise ValueError(f"scale must be >= 1, got {scale_int}")
+    return scale_int
 
 
 def _left_mult_matrix_wxyz_batch(q_syms: torch.Tensor) -> torch.Tensor:
@@ -180,104 +154,6 @@ def _build_local_patch_bank(
     if not batched:
         bank = bank.squeeze(0)
     return bank
-
-
-def _resolve_ocrp_mode(ocrp_mode: str) -> str:
-    mode = str(ocrp_mode).strip().lower()
-    if mode not in {"pixel_patch", "macro_tile"}:
-        raise ValueError(
-            f"ocrp_mode must be 'pixel_patch' or 'macro_tile', got {ocrp_mode}"
-        )
-    return mode
-
-
-def _validate_odd_positive_int(name: str, value: int) -> int:
-    value_int = int(value)
-    if value_int < 1 or value_int % 2 == 0:
-        raise ValueError(f"{name} must be a positive odd integer, got {value}")
-    return value_int
-
-
-def _build_macro_tile_patch_bank(
-    features: torch.Tensor,
-    img_shape: tuple[int, int],
-    window_size: int,
-    tile_size: int,
-) -> tuple[torch.Tensor, dict[str, tuple[int, int]]]:
-    h, w = int(img_shape[0]), int(img_shape[1])
-    tile_size = _validate_odd_positive_int("macro_lr_tile_size", tile_size)
-    batched = features.dim() == 3
-    if not batched:
-        features = features.unsqueeze(0)
-    bsz, n, cdim = features.shape
-    if n != h * w:
-        raise ValueError(f"Expected N={h*w}, got {n}")
-
-    tile_h = (h + tile_size - 1) // tile_size
-    tile_w = (w + tile_size - 1) // tile_size
-    h_pad = tile_h * tile_size
-    w_pad = tile_w * tile_size
-    center = tile_size // 2
-
-    feat_img = features.view(bsz, h, w, cdim).permute(0, 3, 1, 2).contiguous()
-    if h_pad != h or w_pad != w:
-        feat_img = F.pad(
-            feat_img,
-            (0, w_pad - w, 0, h_pad - h),
-            mode="replicate",
-        )
-    pad = int(window_size // 2)
-    feat_pad = F.pad(feat_img, (pad, pad, pad, pad), mode="replicate")
-    sampled = feat_pad[:, :, center:, center:]
-    patches = sampled.unfold(2, window_size, tile_size).unfold(3, window_size, tile_size)
-    if int(patches.shape[2]) != tile_h or int(patches.shape[3]) != tile_w:
-        raise ValueError(
-            "Macro-tile support extraction produced an unexpected grid shape: "
-            f"got {(int(patches.shape[2]), int(patches.shape[3]))}, "
-            f"expected {(tile_h, tile_w)}"
-        )
-
-    bank = (
-        patches.permute(0, 2, 3, 4, 5, 1)
-        .contiguous()
-        .reshape(bsz, tile_h * tile_w, window_size * window_size, cdim)
-    )
-    if not batched:
-        bank = bank.squeeze(0)
-    return bank, {"tile_shape": (tile_h, tile_w), "padded_shape": (h_pad, w_pad)}
-
-
-def _build_patch_token_coords(
-    patch_shape: int | tuple[int, int] | list[int],
-    *,
-    device: torch.device,
-    dtype: torch.dtype,
-) -> torch.Tensor:
-    if isinstance(patch_shape, int):
-        patch_tokens = int(patch_shape)
-        if patch_tokens < 1:
-            raise ValueError(f"patch_tokens must be >= 1, got {patch_tokens}")
-        patch_edge = int(round(float(patch_tokens) ** 0.5))
-        if patch_edge * patch_edge != patch_tokens:
-            raise ValueError(f"patch_tokens must be a perfect square when patch shape is implicit, got {patch_tokens}")
-        patch_h, patch_w = patch_edge, patch_edge
-    else:
-        patch_h, patch_w = _as_patch_shape(patch_shape, name="patch_shape")
-        patch_tokens = _num_patch_tokens((patch_h, patch_w))
-    if patch_h == 1 and patch_w == 1:
-        return torch.zeros((1, 2), device=device, dtype=dtype)
-    coord_y = (
-        torch.zeros((1,), device=device, dtype=dtype)
-        if patch_h == 1
-        else torch.linspace(-1.0, 1.0, steps=patch_h, device=device, dtype=dtype)
-    )
-    coord_x = (
-        torch.zeros((1,), device=device, dtype=dtype)
-        if patch_w == 1
-        else torch.linspace(-1.0, 1.0, steps=patch_w, device=device, dtype=dtype)
-    )
-    yy, xx = torch.meshgrid(coord_y, coord_x, indexing="ij")
-    return torch.stack([yy, xx], dim=-1).reshape(patch_tokens, 2)
 
 
 class CosineMaskedEquivariantSpatialConv(nn.Module):
@@ -695,26 +571,12 @@ class CubochoricOptimizingLocalIsoDecoder(nn.Module):
 
 
 class PhaseEmbeddingGrid(nn.Module):
-    """Learned phase embedding for positions inside one emitted HR patch."""
+    """Learned phase embedding for subpixel positions inside an LR cell."""
 
-    def __init__(
-        self,
-        upsample_factor: int | tuple[int, int] | list[int] = 4,
-        emb_dim: int = 32,
-        patch_size: int | tuple[int, int] | list[int] | None = None,
-    ):
+    def __init__(self, upsample_factor: int | tuple[int, int] | list[int] = 4, emb_dim: int = 32):
         super().__init__()
-        self.upsample_factor = _as_scale_tuple(upsample_factor)
-        self.patch_shape = _as_patch_shape(
-            patch_size if patch_size is not None else self.upsample_factor,
-            name="patch_size",
-        )
-        self.patch_size = (
-            int(self.patch_shape[0])
-            if self.patch_shape[0] == self.patch_shape[1]
-            else self.patch_shape
-        )
-        self.num_phases = _num_patch_tokens(self.patch_shape)
+        self.upsample_factor = _as_isotropic_scale(upsample_factor)
+        self.num_phases = int(self.upsample_factor * self.upsample_factor)
         self.emb = nn.Embedding(self.num_phases, int(emb_dim))
         nn.init.normal_(self.emb.weight, mean=0.0, std=0.02)
 
@@ -1046,7 +908,7 @@ class InvariantSlotSummary(nn.Module):
 
 
 class WithinSlotInvariantPool(nn.Module):
-    """Token-conditioned equivariant within-slot pooling using scalar invariant weights only."""
+    """Token-conditioned equivariant within-slot pooling with learned pair invariants."""
 
     def __init__(
         self,
@@ -1054,72 +916,53 @@ class WithinSlotInvariantPool(nn.Module):
         meta_dim: int,
         phase_dim: int,
         window_size: int = 5,
-        patch_shape: int | tuple[int, int] | list[int] | None = None,
         hidden_dim: int = 96,
-        chunk_size: int = 512,
-        token_conditioned_member_bias: bool = False,
+        chunk_size: int = 128,
     ):
         super().__init__()
         self.irreps_feat = Irreps(irreps_feat)
-        self.summary = InvariantSlotSummary(self.irreps_feat)
+        self.block_slices = _irrep_block_slices(self.irreps_feat)
+        self.num_blocks = int(len(self.block_slices))
         self.phase_dim = int(phase_dim)
         self.window_size = int(window_size)
         self.num_nodes = int(self.window_size * self.window_size)
         self.chunk_size = int(chunk_size)
-        self.patch_shape = (
-            _as_patch_shape(patch_shape, name="patch_shape")
-            if patch_shape is not None
-            else None
-        )
-        self.token_conditioned_member_bias = bool(token_conditioned_member_bias)
         den = float(max(1, self.window_size // 2))
         coords = []
         for y in range(self.window_size):
             for x in range(self.window_size):
                 coords.append(((float(y) - den) / den, (float(x) - den) / den))
         self.register_buffer("coords", torch.tensor(coords, dtype=torch.float32), persistent=False)
-        pair_dim = int(self.summary.out_dim * 3)
-        member_in_dim = pair_dim + int(meta_dim) + 2
-        self.token_geom_dim = 5
-        phase_in_dim = int(meta_dim) + self.phase_dim
-        if self.token_conditioned_member_bias:
-            phase_in_dim += self.token_geom_dim
-        self.member_key = nn.Sequential(
-            nn.Linear(member_in_dim, int(hidden_dim)),
-            nn.GELU(),
-            nn.Linear(int(hidden_dim), int(hidden_dim)),
-        )
-        self.member_bias = (
-            None
-            if self.token_conditioned_member_bias
-            else nn.Linear(int(hidden_dim), 1)
-        )
-        self.phase_query = nn.Sequential(
-            nn.Linear(phase_in_dim, int(hidden_dim)),
-            nn.GELU(),
-            nn.Linear(int(hidden_dim), int(hidden_dim)),
-        )
-        self.token_bias_ctrl = (
-            nn.Sequential(
-                nn.Linear(phase_in_dim, int(hidden_dim)),
-                nn.GELU(),
-                nn.Linear(int(hidden_dim), 6),
-            )
-            if self.token_conditioned_member_bias
-            else None
-        )
-        self.logit_scale = float(max(1, hidden_dim)) ** -0.5
+        ctrl_in_dim = int(meta_dim) + self.phase_dim
+        pair_scalar_dim = max(8, min(32, int(hidden_dim) // 4))
+        self.pair_scalar_irreps = Irreps(f"{pair_scalar_dim}x0e")
+        self.pair_scalar_dim = int(self.pair_scalar_irreps.dim)
 
-    @staticmethod
-    def _token_geom_features(token_coords: torch.Tensor) -> torch.Tensor:
-        if token_coords.dim() != 2 or int(token_coords.shape[-1]) != 2:
-            raise ValueError(
-                "token_coords must have shape (T,2), "
-                f"got {tuple(token_coords.shape)}"
-            )
-        ty = token_coords[:, :1]
-        tx = token_coords[:, 1:2]
-        return torch.cat([ty, tx, ty.square(), tx.square(), ty * tx], dim=-1)
+        self.query_scale_net = nn.Sequential(
+            nn.Linear(ctrl_in_dim, int(hidden_dim)),
+            nn.GELU(),
+            nn.Linear(int(hidden_dim), self.num_blocks),
+        )
+        self.pair_tp = FullyConnectedTensorProduct(
+            self.irreps_feat,
+            self.irreps_feat,
+            self.pair_scalar_irreps,
+            shared_weights=True,
+        )
+        self.attn_net = nn.Sequential(
+            nn.Linear(self.pair_scalar_dim + int(meta_dim) + 2, int(hidden_dim)),
+            nn.GELU(),
+            nn.Linear(int(hidden_dim), int(hidden_dim)),
+            nn.GELU(),
+            nn.Linear(int(hidden_dim), 1),
+        )
+        self.message_member = IrrepsLinear(self.irreps_feat, self.irreps_feat)
+        self.message_tp = FullyConnectedTensorProduct(
+            self.irreps_feat,
+            self.irreps_feat,
+            self.irreps_feat,
+            shared_weights=True,
+        )
 
     def forward(
         self,
@@ -1145,22 +988,10 @@ class WithinSlotInvariantPool(nn.Module):
                 f"got {tuple(phase_grid.shape)}"
             )
         patch_tokens = int(phase.shape[2])
+        if int(phase.shape[-1]) != self.phase_dim:
+            raise ValueError(f"Expected phase dim {self.phase_dim}, got {int(phase.shape[-1])}")
 
         coords = self.coords.to(device=bank_f.device, dtype=slot_meta.dtype)
-        token_coords = None
-        token_geom = None
-        if self.token_conditioned_member_bias:
-            patch_shape = self.patch_shape if self.patch_shape is not None else patch_tokens
-            if self.patch_shape is not None and patch_tokens != _num_patch_tokens(self.patch_shape):
-                raise ValueError(
-                    f"Expected phase patch tokens {_num_patch_tokens(self.patch_shape)}, got {patch_tokens}"
-                )
-            token_coords = _build_patch_token_coords(
-                patch_shape,
-                device=bank_f.device,
-                dtype=slot_meta.dtype,
-            )
-            token_geom = self._token_geom_features(token_coords)
         anchor_flat = slot_anchor_ctx.reshape(bsz * nwin, kmax, cdim)
         meta_flat = slot_meta.reshape(bsz * nwin, kmax, slot_meta.shape[-1])
         bank_flat = bank_f.reshape(bsz * nwin, self.num_nodes, cdim)
@@ -1190,68 +1021,49 @@ class WithinSlotInvariantPool(nn.Module):
             mask_chunk = mask_flat[start:end]
             phase_chunk = phase_flat[start:end]
 
-            bank_exp = bank_chunk.unsqueeze(1).expand(-1, kmax, -1, -1)
-            anchor_exp = anchor_chunk.unsqueeze(2).expand(-1, kmax, self.num_nodes, -1)
-            pair = self.summary.pair_stats(anchor_exp, bank_exp)
-            coord_feat = coords.view(1, 1, self.num_nodes, 2).expand(end - start, kmax, -1, -1)
-            member_meta = meta_chunk.unsqueeze(2).expand(-1, kmax, self.num_nodes, -1)
-            member_key = self.member_key(torch.cat([pair, member_meta, coord_feat], dim=-1))
-
-            phase_meta = meta_chunk.unsqueeze(2).expand(-1, kmax, patch_tokens, -1)
-            phase_input_parts = [
-                phase_meta,
-                phase_chunk.unsqueeze(1).expand(-1, kmax, -1, -1),
-            ]
-            if self.token_conditioned_member_bias:
-                assert token_geom is not None and token_coords is not None
-                token_geom_chunk = token_geom.view(1, 1, patch_tokens, self.token_geom_dim).expand(
-                    end - start,
-                    kmax,
-                    -1,
-                    -1,
-                )
-                phase_input_parts.append(token_geom_chunk)
-            phase_input = torch.cat(phase_input_parts, dim=-1)
-            phase_query = self.phase_query(phase_input)
-
-            if self.token_conditioned_member_bias:
-                assert self.token_bias_ctrl is not None
-                bias_ctrl = self.token_bias_ctrl(phase_input)
-                member_coord = coords.view(1, 1, 1, self.num_nodes, 2)
-                token_coord = token_coords.view(1, 1, patch_tokens, 1, 2)
-                rel_y = member_coord[..., 0] - token_coord[..., 0]
-                rel_x = member_coord[..., 1] - token_coord[..., 1]
-                rel_yy = rel_y.square()
-                rel_xx = rel_x.square()
-                rel_yx = rel_y * rel_x
-                bias_chunk = (
-                    bias_ctrl[..., 0].unsqueeze(-1)
-                    + bias_ctrl[..., 1].unsqueeze(-1) * rel_y
-                    + bias_ctrl[..., 2].unsqueeze(-1) * rel_x
-                    + bias_ctrl[..., 3].unsqueeze(-1) * rel_yy
-                    + bias_ctrl[..., 4].unsqueeze(-1) * rel_xx
-                    + bias_ctrl[..., 5].unsqueeze(-1) * rel_yx
-                )
-            else:
-                assert self.member_bias is not None
-                bias_chunk = self.member_bias(member_key).squeeze(-1).unsqueeze(2)
-
-            logits = bias_chunk + self.logit_scale * torch.einsum(
-                "bkth,bkmh->bktm",
-                phase_query,
-                member_key,
+            ctrl = torch.cat(
+                [
+                    meta_chunk.unsqueeze(2).expand(-1, kmax, patch_tokens, -1),
+                    phase_chunk.unsqueeze(1).expand(-1, kmax, -1, -1),
+                ],
+                dim=-1,
             )
+            query_scale = 1.0 + 0.5 * torch.tanh(self.query_scale_net(ctrl))
+            anchor_exp = anchor_chunk.unsqueeze(2).expand(-1, -1, patch_tokens, -1)
+            query_chunk = torch.zeros_like(anchor_exp)
+            for j, (block_start, block_end) in enumerate(self.block_slices):
+                query_chunk[..., block_start:block_end] = (
+                    query_scale[..., j : j + 1] * anchor_exp[..., block_start:block_end]
+                )
+
+            pair_query = query_chunk.unsqueeze(3).expand(-1, -1, -1, self.num_nodes, -1)
+            pair_member = bank_chunk.unsqueeze(1).unsqueeze(1).expand(-1, kmax, patch_tokens, -1, -1)
+            pair_scalar = self.pair_tp(
+                pair_query.reshape(-1, cdim),
+                pair_member.reshape(-1, cdim),
+            ).reshape(end - start, kmax, patch_tokens, self.num_nodes, self.pair_scalar_dim)
+
+            coord_feat = coords.view(1, 1, 1, self.num_nodes, 2).expand(end - start, kmax, patch_tokens, -1, -1)
+            member_meta = meta_chunk.unsqueeze(2).unsqueeze(3).expand(-1, kmax, patch_tokens, self.num_nodes, -1)
+            logits = self.attn_net(torch.cat([pair_scalar, member_meta, coord_feat], dim=-1)).squeeze(-1)
             logits = logits.masked_fill(~mask_chunk.unsqueeze(2), -1e4)
             alpha_chunk = torch.softmax(logits, dim=-1)
             alpha_chunk = alpha_chunk * mask_chunk.unsqueeze(2).to(dtype=alpha_chunk.dtype)
             alpha_chunk = alpha_chunk / alpha_chunk.sum(dim=-1, keepdim=True).clamp_min(1e-6)
 
-            pooled_chunk = torch.einsum("bktm,bmc->bktc", alpha_chunk, bank_chunk)
+            member_base = self.message_member(bank_chunk.reshape(-1, cdim)).reshape(end - start, self.num_nodes, cdim)
+            member_base = member_base.unsqueeze(1).unsqueeze(1).expand(-1, kmax, patch_tokens, -1, -1)
+            msg_rel = self.message_tp(
+                pair_query.reshape(-1, cdim),
+                pair_member.reshape(-1, cdim),
+            ).reshape(end - start, kmax, patch_tokens, self.num_nodes, cdim)
+            msg_chunk = member_base + msg_rel
+            pooled_chunk = torch.einsum("bktm,bktmc->bktc", alpha_chunk, msg_chunk)
             has_member = mask_chunk.any(dim=-1, keepdim=True).unsqueeze(-1)
             pooled_chunk = torch.where(
                 has_member,
                 pooled_chunk,
-                anchor_chunk.unsqueeze(2).expand(-1, -1, patch_tokens, -1),
+                query_chunk,
             )
             pooled_flat[start:end] = pooled_chunk
             if alpha_flat is not None:
@@ -1275,30 +1087,18 @@ class PatchSlotRouter(nn.Module):
         meta_dim: int,
         kmax_slots: int = 4,
         upsample_factor: int | tuple[int, int] | list[int] = 4,
-        patch_size: int | tuple[int, int] | list[int] | None = None,
         phase_dim: int = 32,
         hidden_dim: int = 128,
         conv_hidden_dim: int = 64,
-        chunk_size: int = 512,
     ):
         super().__init__()
         self.irreps_feat = Irreps(irreps_feat)
         self.kmax_slots = int(kmax_slots)
-        self.upsample_factor = _as_scale_tuple(upsample_factor)
-        self.patch_shape = _as_patch_shape(
-            patch_size if patch_size is not None else self.upsample_factor,
-            name="patch_size",
-        )
-        self.patch_size = (
-            int(self.patch_shape[0])
-            if self.patch_shape[0] == self.patch_shape[1]
-            else self.patch_shape
-        )
-        self.patch_tokens = _num_patch_tokens(self.patch_shape)
+        self.upsample_factor = _as_isotropic_scale(upsample_factor)
+        self.patch_tokens = int(self.upsample_factor * self.upsample_factor)
         self.phase_dim = int(phase_dim)
         self.summary = InvariantSlotSummary(self.irreps_feat)
         self.slot_hidden_dim = int(hidden_dim)
-        self.chunk_size = max(1, int(chunk_size))
 
         in_slot = int(self.summary.out_dim) + int(meta_dim)
         self.slot_proj = nn.Sequential(
@@ -1338,77 +1138,47 @@ class PatchSlotRouter(nn.Module):
         if kmax != self.kmax_slots:
             raise ValueError(f"Expected kmax_slots={self.kmax_slots}, got {kmax}")
 
-        slot_valid = slot_meta[..., ClusterSlotBuilder.META_VALID : ClusterSlotBuilder.META_VALID + 1]
-        slot_mass = slot_meta[..., ClusterSlotBuilder.META_MASS : ClusterSlotBuilder.META_MASS + 1]
-        weights = slot_valid * slot_mass
-        nflat = int(bsz * nwin)
-        slot_meta_flat = slot_meta.reshape(nflat, kmax, slot_meta.shape[-1])
-        weights_flat = weights.reshape(nflat, kmax, 1)
-        slot_valid_flat = slot_valid.reshape(nflat, kmax, 1)
-
-        phase_flat: torch.Tensor | None = None
-        phase_shared: torch.Tensor | None = None
         if phase_grid.dim() == 2:
-            if int(phase_grid.shape[0]) != self.patch_tokens:
-                raise ValueError(
-                    f"Expected phase patch tokens {self.patch_tokens}, got {int(phase_grid.shape[0])}"
-                )
-            phase_shared = self.phase_proj(phase_grid)
+            phase = phase_grid.view(1, 1, self.patch_tokens, self.phase_dim).expand(bsz, nwin, -1, -1)
         elif phase_grid.dim() == 4:
-            if int(phase_grid.shape[2]) != self.patch_tokens:
-                raise ValueError(
-                    f"Expected phase patch tokens {self.patch_tokens}, got {int(phase_grid.shape[2])}"
-                )
-            phase_flat = self.phase_proj(phase_grid).reshape(nflat, self.patch_tokens, self.slot_hidden_dim)
+            phase = phase_grid
         else:
             raise ValueError(
                 "phase_grid must have shape (T,D_phase) or (B,N,T,D_phase), "
                 f"got {tuple(phase_grid.shape)}"
             )
+        if int(phase.shape[2]) != self.patch_tokens:
+            raise ValueError(
+                f"Expected phase patch tokens {self.patch_tokens}, got {int(phase.shape[2])}"
+            )
 
-        logits_flat = torch.empty(
-            (nflat, self.patch_tokens, self.kmax_slots),
-            device=slot_meta.device,
-            dtype=slot_meta.dtype,
-        )
+        slot_valid = slot_meta[..., ClusterSlotBuilder.META_VALID : ClusterSlotBuilder.META_VALID + 1]
+        slot_mass = slot_meta[..., ClusterSlotBuilder.META_MASS : ClusterSlotBuilder.META_MASS + 1]
+        weights = slot_valid * slot_mass
+        phase_desc = self.phase_proj(phase)
+        phase_exp = phase_desc.unsqueeze(2).expand(-1, -1, self.kmax_slots, -1, -1)
 
         if token_ctx is None:
-            slot_inv_flat = self.summary.summarize(slot_ctx).reshape(nflat, kmax, -1)
-            for start in range(0, nflat, self.chunk_size):
-                end = min(start + self.chunk_size, nflat)
-                slot_inv_chunk = slot_inv_flat[start:end]
-                slot_meta_chunk = slot_meta_flat[start:end]
-                weights_chunk = weights_flat[start:end]
-                slot_desc_chunk = self.slot_proj(torch.cat([slot_inv_chunk, slot_meta_chunk], dim=-1))
-                global_desc_chunk = (weights_chunk * slot_desc_chunk).sum(dim=1) / weights_chunk.sum(dim=1).clamp_min(1e-6)
-                slot_desc_exp = slot_desc_chunk.unsqueeze(2).expand(-1, -1, self.patch_tokens, -1)
-                global_exp = global_desc_chunk.unsqueeze(1).unsqueeze(2).expand(-1, self.kmax_slots, self.patch_tokens, -1)
-                phase_chunk = phase_shared.unsqueeze(0).expand(end - start, -1, -1) if phase_shared is not None else phase_flat[start:end]
-                phase_exp = phase_chunk.unsqueeze(1).expand(-1, self.kmax_slots, -1, -1)
-                base_chunk = self.base_logit(torch.cat([slot_desc_exp, global_exp, phase_exp], dim=-1)).squeeze(-1)
-                logits_flat[start:end] = base_chunk.permute(0, 2, 1)
+            slot_inv = self.summary.summarize(slot_ctx)
+            slot_desc = self.slot_proj(torch.cat([slot_inv, slot_meta], dim=-1))
+            global_desc = (weights * slot_desc).sum(dim=2) / weights.sum(dim=2).clamp_min(1e-6)
+            slot_desc_exp = slot_desc.unsqueeze(3).expand(-1, -1, -1, self.patch_tokens, -1)
+            global_exp = global_desc.unsqueeze(2).unsqueeze(3).expand(-1, -1, self.kmax_slots, self.patch_tokens, -1)
         else:
             if patch_tokens_ctx != self.patch_tokens:
                 raise ValueError(
                     f"Expected slot_ctx token dim {self.patch_tokens}, got {patch_tokens_ctx}"
                 )
-            slot_inv_flat = self.summary.summarize(token_ctx).reshape(nflat, kmax, self.patch_tokens, -1)
-            for start in range(0, nflat, self.chunk_size):
-                end = min(start + self.chunk_size, nflat)
-                slot_inv_chunk = slot_inv_flat[start:end]
-                slot_meta_chunk = slot_meta_flat[start:end]
-                weights_chunk = weights_flat[start:end]
-                meta_exp = slot_meta_chunk.unsqueeze(2).expand(-1, -1, self.patch_tokens, -1)
-                slot_desc_chunk = self.slot_proj(torch.cat([slot_inv_chunk, meta_exp], dim=-1))
-                weights_exp = weights_chunk.unsqueeze(2)
-                global_desc_chunk = (weights_exp * slot_desc_chunk).sum(dim=1) / weights_exp.sum(dim=1).clamp_min(1e-6)
-                global_exp = global_desc_chunk.unsqueeze(1).expand(-1, self.kmax_slots, -1, -1)
-                phase_chunk = phase_shared.unsqueeze(0).expand(end - start, -1, -1) if phase_shared is not None else phase_flat[start:end]
-                phase_exp = phase_chunk.unsqueeze(1).expand(-1, self.kmax_slots, -1, -1)
-                base_chunk = self.base_logit(torch.cat([slot_desc_chunk, global_exp, phase_exp], dim=-1)).squeeze(-1)
-                logits_flat[start:end] = base_chunk.permute(0, 2, 1)
+            slot_inv = self.summary.summarize(token_ctx)
+            meta_exp = slot_meta.unsqueeze(3).expand(-1, -1, -1, self.patch_tokens, -1)
+            slot_desc_exp = self.slot_proj(torch.cat([slot_inv, meta_exp], dim=-1))
+            weights_exp = weights.unsqueeze(3)
+            global_desc = (weights_exp * slot_desc_exp).sum(dim=2) / weights_exp.sum(dim=2).clamp_min(1e-6)
+            global_exp = global_desc.unsqueeze(2).expand(-1, -1, self.kmax_slots, -1, -1)
 
-        logits = logits_flat.view(bsz, nwin, self.patch_tokens, self.kmax_slots)
+        base = self.base_logit(torch.cat([slot_desc_exp, global_exp, phase_exp], dim=-1)).squeeze(-1)
+
+        logits = base.permute(0, 1, 3, 2).contiguous()
 
         invalid = slot_valid.squeeze(-1) <= 0.0
         logits = logits.masked_fill(invalid.unsqueeze(2), -1e4)
@@ -1461,10 +1231,7 @@ class SharedTPPatchProposalHead(nn.Module):
         meta_dim: int,
         phase_dim: int,
         upsample_factor: int | tuple[int, int] | list[int] = 4,
-        patch_size: int | tuple[int, int] | list[int] | None = None,
         hidden_dim: int = 128,
-        chunk_size: int = 128,
-        token_chunk_size: int | None = None,
     ):
         super().__init__()
         self.irreps_feat = Irreps(irreps_feat)
@@ -1472,23 +1239,7 @@ class SharedTPPatchProposalHead(nn.Module):
         self.block_slices = _irrep_block_slices(self.irreps_feat)
         self.num_blocks = len(self.block_slices)
         self.phase_dim = int(phase_dim)
-        self.upsample_factor = _as_scale_tuple(upsample_factor)
-        self.patch_shape = _as_patch_shape(
-            patch_size if patch_size is not None else self.upsample_factor,
-            name="patch_size",
-        )
-        self.patch_size = (
-            int(self.patch_shape[0])
-            if self.patch_shape[0] == self.patch_shape[1]
-            else self.patch_shape
-        )
-        self.patch_tokens = _num_patch_tokens(self.patch_shape)
-        self.chunk_size = max(1, int(chunk_size))
-        self.token_chunk_size = (
-            self.patch_tokens
-            if token_chunk_size is None
-            else max(1, min(int(token_chunk_size), self.patch_tokens))
-        )
+        self.patch_tokens = int(_as_isotropic_scale(upsample_factor) ** 2)
 
         self.query_anchor = EquivariantSlotPatchQueryAnchor(
             self.irreps_feat,
@@ -1531,20 +1282,10 @@ class SharedTPPatchProposalHead(nn.Module):
             )
         if cdim != self.feature_dim:
             raise ValueError(f"Expected slot_ctx dim {self.feature_dim}, got {cdim}")
-        phase_flat: torch.Tensor | None = None
-        phase_shared: torch.Tensor | None = None
         if phase_grid.dim() == 2:
-            if int(phase_grid.shape[0]) != self.patch_tokens:
-                raise ValueError(
-                    f"Expected phase patch tokens {self.patch_tokens}, got {int(phase_grid.shape[0])}"
-                )
-            phase_shared = phase_grid
+            phase = phase_grid.view(1, 1, self.patch_tokens, self.phase_dim).expand(bsz, nwin, -1, -1)
         elif phase_grid.dim() == 4:
-            if int(phase_grid.shape[2]) != self.patch_tokens:
-                raise ValueError(
-                    f"Expected phase patch tokens {self.patch_tokens}, got {int(phase_grid.shape[2])}"
-                )
-            phase_flat = phase_grid.reshape(bsz * nwin, self.patch_tokens, self.phase_dim)
+            phase = phase_grid
         else:
             raise ValueError(
                 "phase_grid must have shape (T,D_phase) or (B,N,T,D_phase), "
@@ -1564,85 +1305,39 @@ class SharedTPPatchProposalHead(nn.Module):
                 f"got {tuple(slot_anchor_ctx.shape)}"
             )
 
-        nflat = int(bsz * nwin)
-        slot_meta_flat = slot_meta.reshape(nflat, kmax, slot_meta.shape[-1])
-        slot_anchor_flat = slot_anchor_ctx.reshape(nflat, kmax, cdim)
         if token_ctx is None:
-            ctx_flat = slot_ctx.reshape(nflat, kmax, cdim)
+            ctx = slot_ctx.unsqueeze(3).expand(-1, -1, -1, self.patch_tokens, -1)
         else:
             if patch_tokens_ctx != self.patch_tokens:
                 raise ValueError(
                     f"Expected slot_ctx token dim {self.patch_tokens}, got {patch_tokens_ctx}"
                 )
-            ctx_flat = token_ctx.reshape(nflat, kmax, self.patch_tokens, cdim)
+            ctx = token_ctx
+        anchor_ctx = slot_anchor_ctx.unsqueeze(3).expand(-1, -1, -1, self.patch_tokens, -1)
+        meta = slot_meta.unsqueeze(3).expand(-1, -1, -1, self.patch_tokens, -1)
+        phase_exp = phase.unsqueeze(2).expand(-1, -1, kmax, -1, -1)
 
-        out_flat = torch.empty(
-            (nflat, kmax, self.patch_tokens, self.feature_dim),
-            device=slot_ctx.device,
-            dtype=slot_ctx.dtype,
+        query = self.query_anchor(
+            slot_ctx=anchor_ctx,
+            slot_meta=meta,
+            phase_feat=phase_exp,
         )
 
-        for start in range(0, nflat, self.chunk_size):
-            end = min(start + self.chunk_size, nflat)
-            chunk = end - start
-            slot_meta_chunk = slot_meta_flat[start:end]
-            if phase_shared is not None:
-                phase_chunk = phase_shared.unsqueeze(0).expand(chunk, -1, -1)
-            else:
-                phase_chunk = phase_flat[start:end]
-            anchor_base = slot_anchor_flat[start:end]
-            meta_base = slot_meta_chunk
-            if token_ctx is None:
-                ctx_base = ctx_flat[start:end]
-            else:
-                ctx_base = ctx_flat[start:end]
+        q_flat = self.lin_query(query.reshape(-1, self.feature_dim))
+        c_flat = self.lin_ctx(ctx.reshape(-1, self.feature_dim))
+        tp_flat = self.tp(q_flat, c_flat)
+        tp_out = tp_flat.reshape(bsz, nwin, kmax, self.patch_tokens, self.feature_dim)
 
-            out_chunk = torch.empty(
-                (chunk, kmax, self.patch_tokens, self.feature_dim),
-                device=slot_ctx.device,
-                dtype=slot_ctx.dtype,
-            )
-            for token_start in range(0, self.patch_tokens, self.token_chunk_size):
-                token_end = min(token_start + self.token_chunk_size, self.patch_tokens)
-                token_count = token_end - token_start
-                anchor_chunk = anchor_base.unsqueeze(2).expand(-1, -1, token_count, -1)
-                meta_chunk = meta_base.unsqueeze(2).expand(-1, -1, token_count, -1)
-                phase_chunk_slice = phase_chunk[:, token_start:token_end, :]
-                phase_exp = phase_chunk_slice.unsqueeze(1).expand(-1, kmax, -1, -1)
-                if token_ctx is None:
-                    ctx_chunk = ctx_base.unsqueeze(2).expand(-1, -1, token_count, -1)
-                else:
-                    ctx_chunk = ctx_base[:, :, token_start:token_end, :]
+        coeffs = self.ctrl_net(torch.cat([meta, phase_exp], dim=-1))
+        alpha, beta = coeffs.chunk(2, dim=-1)
+        alpha = 1.0 + 0.5 * torch.tanh(alpha)
+        beta = 0.5 * torch.tanh(beta)
 
-                query_chunk = self.query_anchor(
-                    slot_ctx=anchor_chunk,
-                    slot_meta=meta_chunk,
-                    phase_feat=phase_exp,
-                )
-
-                q_flat = self.lin_query(query_chunk.reshape(-1, self.feature_dim))
-                c_flat = self.lin_ctx(ctx_chunk.reshape(-1, self.feature_dim))
-                tp_flat = self.tp(q_flat, c_flat)
-                tp_out = tp_flat.reshape(chunk, kmax, token_count, self.feature_dim)
-
-                coeffs = self.ctrl_net(torch.cat([meta_chunk, phase_exp], dim=-1))
-                alpha, beta = coeffs.chunk(2, dim=-1)
-                alpha = 1.0 + 0.5 * torch.tanh(alpha)
-                beta = 0.5 * torch.tanh(beta)
-
-                out_token = torch.empty_like(tp_out)
-                for j, (block_start, block_end) in enumerate(self.block_slices):
-                    out_token[..., block_start:block_end] = (
-                        alpha[..., j : j + 1] * tp_out[..., block_start:block_end]
-                    )
-                    out_token[..., block_start:block_end] = (
-                        out_token[..., block_start:block_end]
-                        + beta[..., j : j + 1] * query_chunk[..., block_start:block_end]
-                    )
-                out_chunk[:, :, token_start:token_end, :] = out_token
-            out_flat[start:end] = out_chunk
-
-        return out_flat.view(bsz, nwin, kmax, self.patch_tokens, self.feature_dim)
+        out = torch.zeros_like(tp_out)
+        for j, (start, end) in enumerate(self.block_slices):
+            out[..., start:end] = alpha[..., j : j + 1] * tp_out[..., start:end]
+            out[..., start:end] = out[..., start:end] + beta[..., j : j + 1] * query[..., start:end]
+        return out
 
 
 class OCRPPatchUpsampler(nn.Module):
@@ -1662,50 +1357,18 @@ class OCRPPatchUpsampler(nn.Module):
         router_conv_hidden_dim: int = 64,
         proposal_hidden_dim: int = 128,
         straight_through: bool = True,
-        ocrp_mode: str = "pixel_patch",
-        macro_lr_tile_size: int = 3,
-        token_conditioned_member_bias: bool | None = None,
-        pool_chunk_size: int = 512,
-        router_chunk_size: int = 512,
-        proposal_chunk_size: int = 128,
-        proposal_token_chunk_size: int | None = None,
     ):
         super().__init__()
         self.irreps_feat = Irreps(irreps_feat)
         self.feature_dim = int(self.irreps_feat.dim)
-        self.upsample_factor = _as_scale_tuple(upsample_factor)
+        self.upsample_factor = _as_isotropic_scale(upsample_factor)
         self.window_size = int(window_size)
         self.kmax_slots = int(kmax_slots)
         self.straight_through = bool(straight_through)
-        self.ocrp_mode = _resolve_ocrp_mode(ocrp_mode)
-        self.macro_lr_tile_size = _validate_odd_positive_int(
-            "macro_lr_tile_size",
-            macro_lr_tile_size,
-        )
-        self.hr_patch_shape = (
-            self.upsample_factor
-            if self.ocrp_mode == "pixel_patch"
-            else (
-                int(self.macro_lr_tile_size * self.upsample_factor[0]),
-                int(self.macro_lr_tile_size * self.upsample_factor[1]),
-            )
-        )
-        self.hr_patch_size = (
-            int(self.hr_patch_shape[0])
-            if self.hr_patch_shape[0] == self.hr_patch_shape[1]
-            else self.hr_patch_shape
-        )
-        self.hr_patch_tokens = _num_patch_tokens(self.hr_patch_shape)
-        self.token_conditioned_member_bias = (
-            True
-            if token_conditioned_member_bias is None
-            else bool(token_conditioned_member_bias)
-        )
 
         self.phase_embed = PhaseEmbeddingGrid(
             upsample_factor=self.upsample_factor,
             emb_dim=int(phase_dim),
-            patch_size=self.hr_patch_shape,
         )
         self.clusterer = QuaternionBankClusterer(
             sym_ops_quat=sym_ops_quat,
@@ -1723,77 +1386,32 @@ class OCRPPatchUpsampler(nn.Module):
             meta_dim=ClusterSlotBuilder.META_DIM,
             phase_dim=int(phase_dim),
             window_size=int(window_size),
-            patch_shape=self.hr_patch_shape,
             hidden_dim=max(64, int(proposal_hidden_dim)),
-            chunk_size=int(pool_chunk_size),
-            token_conditioned_member_bias=self.token_conditioned_member_bias,
         )
         self.router = PatchSlotRouter(
             irreps_feat=self.irreps_feat,
             meta_dim=ClusterSlotBuilder.META_DIM,
             kmax_slots=int(kmax_slots),
             upsample_factor=self.upsample_factor,
-            patch_size=self.hr_patch_shape,
             phase_dim=int(phase_dim),
             hidden_dim=int(router_hidden_dim),
             conv_hidden_dim=int(router_conv_hidden_dim),
-            chunk_size=int(router_chunk_size),
         )
         self.proposal_head = SharedTPPatchProposalHead(
             irreps_feat=self.irreps_feat,
             meta_dim=ClusterSlotBuilder.META_DIM,
             phase_dim=int(phase_dim),
             upsample_factor=self.upsample_factor,
-            patch_size=self.hr_patch_shape,
             hidden_dim=int(proposal_hidden_dim),
-            chunk_size=int(proposal_chunk_size),
-            token_chunk_size=proposal_token_chunk_size,
         )
 
     def _phase_grid(self, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
         phase_ids = torch.arange(
-            self.hr_patch_tokens,
+            self.upsample_factor * self.upsample_factor,
             device=device,
             dtype=torch.long,
         )
         return self.phase_embed(phase_ids).to(dtype=dtype)
-
-    def _build_support_banks(
-        self,
-        lr_quats: torch.Tensor,
-        feat_lr: torch.Tensor,
-        lr_shape: tuple[int, int],
-    ) -> tuple[torch.Tensor, torch.Tensor, dict[str, tuple[int, int]]]:
-        if self.ocrp_mode == "pixel_patch":
-            bank_q = _build_local_patch_bank(lr_quats, img_shape=lr_shape, window_size=self.window_size)
-            bank_f = _build_local_patch_bank(feat_lr, img_shape=lr_shape, window_size=self.window_size)
-            support_meta = {
-                "grid_shape": (int(lr_shape[0]), int(lr_shape[1])),
-                "padded_shape": (int(lr_shape[0]), int(lr_shape[1])),
-            }
-            return bank_q, bank_f, support_meta
-
-        bank_q, meta_q = _build_macro_tile_patch_bank(
-            lr_quats,
-            img_shape=lr_shape,
-            window_size=self.window_size,
-            tile_size=self.macro_lr_tile_size,
-        )
-        bank_f, meta_f = _build_macro_tile_patch_bank(
-            feat_lr,
-            img_shape=lr_shape,
-            window_size=self.window_size,
-            tile_size=self.macro_lr_tile_size,
-        )
-        if meta_q != meta_f:
-            raise ValueError(
-                "Quaternion and feature macro-tile banks disagree on support metadata: "
-                f"{meta_q} vs {meta_f}"
-            )
-        return bank_q, bank_f, {
-            "grid_shape": meta_q["tile_shape"],
-            "padded_shape": meta_q["padded_shape"],
-        }
 
     def _assemble_patch_tokens(
         self,
@@ -1804,42 +1422,12 @@ class OCRPPatchUpsampler(nn.Module):
         h_lr, w_lr = int(lr_shape[0]), int(lr_shape[1])
         if nwin != h_lr * w_lr:
             raise ValueError(f"Expected {h_lr*w_lr} patches, got {nwin}")
-        r_h, r_w = self.upsample_factor
-        if patch_tokens != r_h * r_w:
-            raise ValueError(f"Expected patch tokens {r_h * r_w}, got {patch_tokens}")
-        img = patch_out.view(bsz, h_lr, w_lr, r_h, r_w, cdim).permute(0, 1, 3, 2, 4, 5)
-        img = img.reshape(bsz, h_lr * r_h, w_lr * r_w, cdim)
-        return img.reshape(bsz, h_lr * r_h * w_lr * r_w, cdim)
-
-    def _assemble_macro_patch_tokens(
-        self,
-        patch_out: torch.Tensor,
-        grid_shape: tuple[int, int],
-        hr_crop_shape: tuple[int, int],
-    ) -> torch.Tensor:
-        bsz, nwin, patch_tokens, cdim = patch_out.shape
-        grid_h, grid_w = int(grid_shape[0]), int(grid_shape[1])
-        if nwin != grid_h * grid_w:
-            raise ValueError(f"Expected {grid_h*grid_w} macro tiles, got {nwin}")
-        patch_h, patch_w = self.hr_patch_shape
-        if patch_tokens != patch_h * patch_w:
-            raise ValueError(
-                f"Expected patch tokens {patch_h * patch_w}, got {patch_tokens}"
-            )
-
-        img = (
-            patch_out.view(bsz, grid_h, grid_w, patch_h, patch_w, cdim)
-            .permute(0, 1, 3, 2, 4, 5)
-            .reshape(bsz, grid_h * patch_h, grid_w * patch_w, cdim)
-        )
-        crop_h, crop_w = int(hr_crop_shape[0]), int(hr_crop_shape[1])
-        if crop_h > int(img.shape[1]) or crop_w > int(img.shape[2]):
-            raise ValueError(
-                f"Cannot crop macro-tile assembly of shape {tuple(img.shape[1:3])} "
-                f"to requested HR shape {(crop_h, crop_w)}"
-            )
-        img = img[:, :crop_h, :crop_w, :]
-        return img.reshape(bsz, crop_h * crop_w, cdim)
+        r = self.upsample_factor
+        if patch_tokens != r * r:
+            raise ValueError(f"Expected patch tokens {r*r}, got {patch_tokens}")
+        img = patch_out.view(bsz, h_lr, w_lr, r, r, cdim).permute(0, 1, 3, 2, 4, 5)
+        img = img.reshape(bsz, h_lr * r, w_lr * r, cdim)
+        return img.reshape(bsz, h_lr * r * w_lr * r, cdim)
 
     @staticmethod
     def _hard_owner_from_logits(logits: torch.Tensor, straight_through: bool) -> tuple[torch.Tensor, torch.Tensor]:
@@ -1864,11 +1452,8 @@ class OCRPPatchUpsampler(nn.Module):
         if feat_lr.shape[:2] != lr_quats.shape[:2]:
             raise ValueError("lr_quats and feat_lr must agree on batch and LR token count")
 
-        bank_q, bank_f, support_meta = self._build_support_banks(
-            lr_quats=lr_quats,
-            feat_lr=feat_lr,
-            lr_shape=lr_shape,
-        )
+        bank_q = _build_local_patch_bank(lr_quats, img_shape=lr_shape, window_size=self.window_size)
+        bank_f = _build_local_patch_bank(feat_lr, img_shape=lr_shape, window_size=self.window_size)
 
         cluster_ids = self.clusterer(bank_q)
         slot_info = self.slot_builder(cluster_ids)
@@ -1909,25 +1494,13 @@ class OCRPPatchUpsampler(nn.Module):
         )
         owner_mask = owner_onehot.permute(0, 1, 3, 2).unsqueeze(-1)
         patch_out = (owner_mask * patch_prop).sum(dim=2)
-        r_h, r_w = self.upsample_factor
-        hr_shape = (
-            int(lr_shape[0]) * r_h,
-            int(lr_shape[1]) * r_w,
-        )
-        if self.ocrp_mode == "pixel_patch":
-            feat_hr = self._assemble_patch_tokens(patch_out, lr_shape=lr_shape)
-        else:
-            feat_hr = self._assemble_macro_patch_tokens(
-                patch_out,
-                grid_shape=support_meta["grid_shape"],
-                hr_crop_shape=hr_shape,
-            )
+        feat_hr = self._assemble_patch_tokens(patch_out, lr_shape=lr_shape)
 
         if not batched:
             feat_hr = feat_hr.squeeze(0)
 
         if not return_aux:
-            return feat_hr, hr_shape
+            return feat_hr, (int(lr_shape[0]) * self.upsample_factor, int(lr_shape[1]) * self.upsample_factor)
 
         aux = {
             "bank_q": bank_q,
@@ -1944,25 +1517,13 @@ class OCRPPatchUpsampler(nn.Module):
             "owner_idx": owner_idx,
             "patch_prop": patch_prop,
             "patch_out": patch_out,
-            "ocrp_mode": self.ocrp_mode,
-            "macro_lr_tile_size": self.macro_lr_tile_size,
-            "hr_patch_size": self.hr_patch_size,
-            "hr_patch_shape": self.hr_patch_shape,
-            "hr_patch_tokens": self.hr_patch_tokens,
-            "pool_chunk_size": self.slot_pool.chunk_size,
-            "router_chunk_size": self.router.chunk_size,
-            "proposal_chunk_size": self.proposal_head.chunk_size,
-            "proposal_token_chunk_size": self.proposal_head.token_chunk_size,
-            "token_conditioned_member_bias": self.token_conditioned_member_bias,
-            "support_grid_shape": support_meta["grid_shape"],
-            "lr_padded_shape": support_meta["padded_shape"],
         }
         if not batched:
             aux = {
                 key: (val.squeeze(0) if isinstance(val, torch.Tensor) and val.shape[0] == 1 else val)
                 for key, val in aux.items()
             }
-        return feat_hr, hr_shape, aux
+        return feat_hr, (int(lr_shape[0]) * self.upsample_factor, int(lr_shape[1]) * self.upsample_factor), aux
 
 
 class IsoEmbeddingSROCRP(nn.Module):
@@ -1990,13 +1551,6 @@ class IsoEmbeddingSROCRP(nn.Module):
         ocrp_router_conv_hidden_dim: int = 64,
         ocrp_proposal_hidden_dim: int = 128,
         ocrp_straight_through: bool = True,
-        ocrp_mode: str = "pixel_patch",
-        macro_lr_tile_size: int = 3,
-        ocrp_token_conditioned_member_bias: bool | None = None,
-        ocrp_pool_chunk_size: int = 512,
-        ocrp_router_chunk_size: int = 512,
-        ocrp_proposal_chunk_size: int = 128,
-        ocrp_proposal_token_chunk_size: int | None = None,
         use_hr_conv1: bool = True,
         hr_conv1_kernel_size: int = 7,
         use_residual_hr1: bool = True,
@@ -2034,16 +1588,12 @@ class IsoEmbeddingSROCRP(nn.Module):
 
         self.use_lr_conv1 = bool(use_lr_conv1)
         self.use_hr_conv1 = bool(use_hr_conv1)
-        self.upsample_factor = _as_scale_tuple(upsample_factor)
-        # Keep the config args for backward compatibility, but always enable
-        # residual connections inside the cosine-masked OCRP convs.
-        _ = bool(use_residual_lr1)
-        _ = bool(use_residual_hr1)
+        self.upsample_factor = _as_isotropic_scale(upsample_factor)
         self.conv_lr1 = CosineMaskedEquivariantSpatialConv(
             kernel_size=int(lr_conv1_kernel_size),
             irreps_in=self.irreps_feat,
             irreps_out=self.irreps_feat,
-            use_residual=True,
+            use_residual=bool(use_residual_lr1),
             feature_mask_cosine_threshold=float(conv_feature_mask_cosine_threshold),
             feature_mask_soft=bool(conv_feature_mask_soft),
             feature_mask_temperature=float(conv_feature_mask_temperature),
@@ -2061,19 +1611,12 @@ class IsoEmbeddingSROCRP(nn.Module):
             router_conv_hidden_dim=int(ocrp_router_conv_hidden_dim),
             proposal_hidden_dim=int(ocrp_proposal_hidden_dim),
             straight_through=bool(ocrp_straight_through),
-            ocrp_mode=str(ocrp_mode),
-            macro_lr_tile_size=int(macro_lr_tile_size),
-            token_conditioned_member_bias=ocrp_token_conditioned_member_bias,
-            pool_chunk_size=int(ocrp_pool_chunk_size),
-            router_chunk_size=int(ocrp_router_chunk_size),
-            proposal_chunk_size=int(ocrp_proposal_chunk_size),
-            proposal_token_chunk_size=ocrp_proposal_token_chunk_size,
         )
         self.conv_hr1 = CosineMaskedEquivariantSpatialConv(
             kernel_size=int(hr_conv1_kernel_size),
             irreps_in=self.irreps_feat,
             irreps_out=self.irreps_feat,
-            use_residual=True,
+            use_residual=bool(use_residual_hr1),
             feature_mask_cosine_threshold=float(conv_feature_mask_cosine_threshold),
             feature_mask_soft=bool(conv_feature_mask_soft),
             feature_mask_temperature=float(conv_feature_mask_temperature),

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import subprocess
 from typing import Any
 
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
@@ -16,6 +17,38 @@ import numpy as np
 import torch
 
 from visualization.ipf_render import render_ipf_rgb
+
+
+def pick_most_free_cuda_gpu() -> int | None:
+    """Return the physical CUDA GPU index with the most free memory."""
+    try:
+        raw = subprocess.check_output(
+            [
+                "nvidia-smi",
+                "--query-gpu=index,memory.free",
+                "--format=csv,noheader,nounits",
+            ],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        return 0 if torch.cuda.is_available() else None
+
+    best_idx: int | None = None
+    best_free_mib = -1
+    for line in raw.splitlines():
+        parts = [part.strip() for part in line.split(",")]
+        if len(parts) != 2:
+            continue
+        try:
+            gpu_idx = int(parts[0])
+            free_mib = int(parts[1])
+        except ValueError:
+            continue
+        if free_mib > best_free_mib:
+            best_idx = gpu_idx
+            best_free_mib = free_mib
+    return best_idx
 
 
 def sanitize_probe_tensor(x: torch.Tensor) -> torch.Tensor:

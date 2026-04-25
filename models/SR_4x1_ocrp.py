@@ -198,14 +198,24 @@ def _validate_odd_positive_int(name: str, value: int) -> int:
     return value_int
 
 
-def _build_macro_tile_patch_bank(
+def _validate_positive_shape(
+    name: str,
+    value: int | tuple[int, int] | list[int],
+) -> tuple[int, int]:
+    shape = _as_patch_shape(value, name=name)
+    if shape[0] < 1 or shape[1] < 1:
+        raise ValueError(f"{name} must be positive in both dims, got {shape}")
+    return shape
+
+
+def _build_macro_stride_patch_bank(
     features: torch.Tensor,
     img_shape: tuple[int, int],
     window_size: int,
-    tile_size: int,
+    stride_shape: tuple[int, int],
 ) -> tuple[torch.Tensor, dict[str, tuple[int, int]]]:
     h, w = int(img_shape[0]), int(img_shape[1])
-    tile_size = _validate_odd_positive_int("macro_lr_tile_size", tile_size)
+    stride_h, stride_w = _validate_positive_shape("macro_lr_stride_shape", stride_shape)
     batched = features.dim() == 3
     if not batched:
         features = features.unsqueeze(0)
@@ -213,11 +223,12 @@ def _build_macro_tile_patch_bank(
     if n != h * w:
         raise ValueError(f"Expected N={h*w}, got {n}")
 
-    tile_h = (h + tile_size - 1) // tile_size
-    tile_w = (w + tile_size - 1) // tile_size
-    h_pad = tile_h * tile_size
-    w_pad = tile_w * tile_size
-    center = tile_size // 2
+    tile_h = (h + stride_h - 1) // stride_h
+    tile_w = (w + stride_w - 1) // stride_w
+    h_pad = tile_h * stride_h
+    w_pad = tile_w * stride_w
+    center_y = stride_h // 2
+    center_x = stride_w // 2
 
     feat_img = features.view(bsz, h, w, cdim).permute(0, 3, 1, 2).contiguous()
     if h_pad != h or w_pad != w:
@@ -228,11 +239,11 @@ def _build_macro_tile_patch_bank(
         )
     pad = int(window_size // 2)
     feat_pad = F.pad(feat_img, (pad, pad, pad, pad), mode="replicate")
-    sampled = feat_pad[:, :, center:, center:]
-    patches = sampled.unfold(2, window_size, tile_size).unfold(3, window_size, tile_size)
+    sampled = feat_pad[:, :, center_y:, center_x:]
+    patches = sampled.unfold(2, window_size, stride_h).unfold(3, window_size, stride_w)
     if int(patches.shape[2]) != tile_h or int(patches.shape[3]) != tile_w:
         raise ValueError(
-            "Macro-tile support extraction produced an unexpected grid shape: "
+            "Macro-stride support extraction produced an unexpected grid shape: "
             f"got {(int(patches.shape[2]), int(patches.shape[3]))}, "
             f"expected {(tile_h, tile_w)}"
         )
@@ -244,7 +255,12 @@ def _build_macro_tile_patch_bank(
     )
     if not batched:
         bank = bank.squeeze(0)
-    return bank, {"tile_shape": (tile_h, tile_w), "padded_shape": (h_pad, w_pad)}
+    return bank, {
+        "tile_shape": (tile_h, tile_w),
+        "padded_shape": (h_pad, w_pad),
+        "stride_shape": (stride_h, stride_w),
+        "sample_center_offset": (center_y, center_x),
+    }
 
 
 def _build_patch_token_coords(
@@ -1645,8 +1661,8 @@ class SharedTPPatchProposalHead(nn.Module):
         return out_flat.view(bsz, nwin, kmax, self.patch_tokens, self.feature_dim)
 
 
-class OCRPPatchUpsampler(nn.Module):
-    """Orientation-Cluster Routed Patch (OCRP) upsampler."""
+class OCRP4x1PatchUpsampler(nn.Module):
+    """4x1-specialized OCRP upsampler with decoupled macro support and stride."""
 
     def __init__(
         self,
@@ -1664,6 +1680,7 @@ class OCRPPatchUpsampler(nn.Module):
         straight_through: bool = True,
         ocrp_mode: str = "pixel_patch",
         macro_lr_tile_size: int = 3,
+        macro_lr_stride_shape: int | tuple[int, int] | list[int] | None = (1, 4),
         token_conditioned_member_bias: bool | None = None,
         pool_chunk_size: int = 512,
         router_chunk_size: int = 512,
@@ -1678,16 +1695,21 @@ class OCRPPatchUpsampler(nn.Module):
         self.kmax_slots = int(kmax_slots)
         self.straight_through = bool(straight_through)
         self.ocrp_mode = _resolve_ocrp_mode(ocrp_mode)
-        self.macro_lr_tile_size = _validate_odd_positive_int(
-            "macro_lr_tile_size",
-            macro_lr_tile_size,
+        self.macro_lr_stride_shape = _validate_positive_shape(
+            "macro_lr_stride_shape",
+            macro_lr_stride_shape if macro_lr_stride_shape is not None else macro_lr_tile_size,
+        )
+        self.macro_lr_tile_size = (
+            int(self.macro_lr_stride_shape[0])
+            if self.macro_lr_stride_shape[0] == self.macro_lr_stride_shape[1]
+            else self.macro_lr_stride_shape
         )
         self.hr_patch_shape = (
             self.upsample_factor
             if self.ocrp_mode == "pixel_patch"
             else (
-                int(self.macro_lr_tile_size * self.upsample_factor[0]),
-                int(self.macro_lr_tile_size * self.upsample_factor[1]),
+                int(self.macro_lr_stride_shape[0] * self.upsample_factor[0]),
+                int(self.macro_lr_stride_shape[1] * self.upsample_factor[1]),
             )
         )
         self.hr_patch_size = (
@@ -1773,17 +1795,17 @@ class OCRPPatchUpsampler(nn.Module):
             }
             return bank_q, bank_f, support_meta
 
-        bank_q, meta_q = _build_macro_tile_patch_bank(
+        bank_q, meta_q = _build_macro_stride_patch_bank(
             lr_quats,
             img_shape=lr_shape,
             window_size=self.window_size,
-            tile_size=self.macro_lr_tile_size,
+            stride_shape=self.macro_lr_stride_shape,
         )
-        bank_f, meta_f = _build_macro_tile_patch_bank(
+        bank_f, meta_f = _build_macro_stride_patch_bank(
             feat_lr,
             img_shape=lr_shape,
             window_size=self.window_size,
-            tile_size=self.macro_lr_tile_size,
+            stride_shape=self.macro_lr_stride_shape,
         )
         if meta_q != meta_f:
             raise ValueError(
@@ -1946,6 +1968,7 @@ class OCRPPatchUpsampler(nn.Module):
             "patch_out": patch_out,
             "ocrp_mode": self.ocrp_mode,
             "macro_lr_tile_size": self.macro_lr_tile_size,
+            "macro_lr_stride_shape": self.macro_lr_stride_shape,
             "hr_patch_size": self.hr_patch_size,
             "hr_patch_shape": self.hr_patch_shape,
             "hr_patch_tokens": self.hr_patch_tokens,
@@ -1965,8 +1988,8 @@ class OCRPPatchUpsampler(nn.Module):
         return feat_hr, hr_shape, aux
 
 
-class IsoEmbeddingSROCRP(nn.Module):
-    """OCRP SR model: encoder -> OCRP upsampler -> decoder."""
+class IsoEmbedding4x1SROCRP(nn.Module):
+    """4x1-specialized OCRP SR model: encoder -> OCRP upsampler -> decoder."""
 
     def __init__(
         self,
@@ -1980,7 +2003,7 @@ class IsoEmbeddingSROCRP(nn.Module):
         conv_feature_mask_cosine_threshold: float = 0.98,
         conv_feature_mask_soft: bool = False,
         conv_feature_mask_temperature: float = 32.0,
-        upsample_factor: int | tuple[int, int] | list[int] = 4,
+        upsample_factor: int | tuple[int, int] | list[int] = (4, 1),
         window_size: int = 5,
         kmax_slots: int = 4,
         cluster_threshold_deg: float = 2.0,
@@ -1991,7 +2014,8 @@ class IsoEmbeddingSROCRP(nn.Module):
         ocrp_proposal_hidden_dim: int = 128,
         ocrp_straight_through: bool = True,
         ocrp_mode: str = "pixel_patch",
-        macro_lr_tile_size: int = 3,
+        macro_lr_tile_size: int = 4,
+        macro_lr_stride_shape: int | tuple[int, int] | list[int] | None = (1, 4),
         ocrp_token_conditioned_member_bias: bool | None = None,
         ocrp_pool_chunk_size: int = 512,
         ocrp_router_chunk_size: int = 512,
@@ -2048,7 +2072,7 @@ class IsoEmbeddingSROCRP(nn.Module):
             feature_mask_soft=bool(conv_feature_mask_soft),
             feature_mask_temperature=float(conv_feature_mask_temperature),
         )
-        self.ocrp = OCRPPatchUpsampler(
+        self.ocrp = OCRP4x1PatchUpsampler(
             irreps_feat=self.irreps_feat,
             sym_ops_quat=self.encoder.sym_ops,
             upsample_factor=self.upsample_factor,
@@ -2063,6 +2087,7 @@ class IsoEmbeddingSROCRP(nn.Module):
             straight_through=bool(ocrp_straight_through),
             ocrp_mode=str(ocrp_mode),
             macro_lr_tile_size=int(macro_lr_tile_size),
+            macro_lr_stride_shape=macro_lr_stride_shape,
             token_conditioned_member_bias=ocrp_token_conditioned_member_bias,
             pool_chunk_size=int(ocrp_pool_chunk_size),
             router_chunk_size=int(ocrp_router_chunk_size),
@@ -2264,6 +2289,10 @@ class IsoEmbeddingSROCRP(nn.Module):
         return F.mse_loss(feat_hr_pred, feat_hr_tgt)
 
 
+OCRPPatchUpsampler = OCRP4x1PatchUpsampler
+IsoEmbeddingSROCRP = IsoEmbedding4x1SROCRP
+
+
 __all__ = [
     "LocalIsoCrystalEncoder",
     "CubochoricOptimizingLocalIsoDecoder",
@@ -2277,6 +2306,8 @@ __all__ = [
     "PatchSlotRouter",
     "EquivariantSlotPatchQueryAnchor",
     "SharedTPPatchProposalHead",
+    "OCRP4x1PatchUpsampler",
+    "IsoEmbedding4x1SROCRP",
     "OCRPPatchUpsampler",
     "IsoEmbeddingSROCRP",
 ]

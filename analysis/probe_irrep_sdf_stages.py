@@ -39,6 +39,7 @@ from utils.stage_probe_utils import (
     compute_attention_probe_traces,
     decode_probe_stages,
     extract_scalar_probe_maps,
+    pick_most_free_cuda_gpu,
     render_attention_probe_gallery,
     render_decoded_probe_gallery,
     render_sdf_comparison,
@@ -58,7 +59,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--split", type=str, default="Test", choices=["Train", "Val", "Test"], help="Dataset split.")
     parser.add_argument("--sample_idx", type=int, default=0, help="Dataset sample index to visualize.")
     parser.add_argument("--out_dir", type=str, default=None, help="Output directory.")
-    parser.add_argument("--gpu_ids", type=str, default=None, help="Optional CUDA_VISIBLE_DEVICES value.")
+    parser.add_argument(
+        "--gpu_ids",
+        type=str,
+        default=None,
+        help="Optional CUDA_VISIBLE_DEVICES value. By default the most-free GPU is selected.",
+    )
     parser.add_argument("--attn_probe_total", type=int, default=10, help="Number of random attention probe pixels.")
     parser.add_argument("--attn_probe_boundary", type=int, default=3, help="How many attention probe pixels should be on the HR boundary.")
     parser.add_argument("--attn_probe_seed", type=int, default=0, help="Random seed for probe-pixel selection.")
@@ -230,10 +236,19 @@ def _cleanup_existing_probe_runs(target_out_dir: Path, keep_pid: int) -> list[di
 
 def main() -> None:
     args = parse_args()
+    selected_gpu: int | None = None
     if args.gpu_ids is not None:
         os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu_ids)
+        print(f"Using requested GPU(s): {args.gpu_ids}")
+    elif torch.cuda.is_available():
+        selected_gpu = pick_most_free_cuda_gpu()
+        if selected_gpu is not None:
+            print(f"Auto-selected most-free GPU: {selected_gpu}")
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if torch.cuda.is_available():
+        device = torch.device(f"cuda:{selected_gpu}" if selected_gpu is not None else "cuda")
+    else:
+        device = torch.device("cpu")
     exp_dir = Path(args.exp_dir).resolve()
     config_path = exp_dir / args.config
     sample_idx = max(0, int(args.sample_idx))
