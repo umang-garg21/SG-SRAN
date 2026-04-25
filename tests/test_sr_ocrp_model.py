@@ -37,13 +37,13 @@ def test_macro_tile_size_one_matches_pixel_path() -> None:
         **common,
         ocrp_mode="pixel_patch",
         macro_lr_tile_size=3,
-        ocrp_token_conditioned_member_bias=False,
+        ocrp_token_conditioned_member_bias=True,
     ).eval()
     macro = IsoEmbeddingSROCRP(
         **common,
         ocrp_mode="macro_tile",
         macro_lr_tile_size=1,
-        ocrp_token_conditioned_member_bias=False,
+        ocrp_token_conditioned_member_bias=True,
     ).eval()
     macro.load_state_dict(pixel.state_dict(), strict=True)
 

@@ -1616,16 +1616,47 @@ def main() -> None:
         "use_lr_conv2": bool(getattr(cfg, "use_lr_conv2", True)),
         "use_lr_conv3": bool(getattr(cfg, "use_lr_conv3", False)),
         "lr_conv1_kernel_size": int(getattr(cfg, "lr_conv1_kernel_size", 3)),
+        "lr_conv1_residual_weight": float(getattr(cfg, "lr_conv1_residual_weight", 1.0)),
         "lr_conv2_kernel_size": int(getattr(cfg, "lr_conv2_kernel_size", 9)),
         "lr_conv3_kernel_size": int(getattr(cfg, "lr_conv3_kernel_size", 9)),
         "lr_conv3_dilation": int(getattr(cfg, "lr_conv3_dilation", 1)),
         "hr_conv1_kernel_size": int(getattr(cfg, "hr_conv1_kernel_size", 3)),
+        "hr_conv1_residual_weight": float(getattr(cfg, "hr_conv1_residual_weight", 1.0)),
+        "use_hr_conv2": bool(getattr(cfg, "use_hr_conv2", False)),
+        "hr_conv2_kernel_size": getattr(cfg, "hr_conv2_kernel_size", None),
+        "use_residual_hr2": bool(getattr(cfg, "use_residual_hr2", True)),
+        "hr_conv2_residual_weight": float(getattr(cfg, "hr_conv2_residual_weight", 1.0)),
+        "use_hr_conv3": bool(getattr(cfg, "use_hr_conv3", False)),
+        "hr_conv3_kernel_size": getattr(cfg, "hr_conv3_kernel_size", None),
+        "use_residual_hr3": bool(getattr(cfg, "use_residual_hr3", True)),
+        "hr_conv3_residual_weight": float(getattr(cfg, "hr_conv3_residual_weight", 1.0)),
         "conv_feature_mask_cosine_threshold": float(
             getattr(cfg, "conv_feature_mask_cosine_threshold", 0.98)
         ),
         "conv_feature_mask_soft": bool(getattr(cfg, "conv_feature_mask_soft", False)),
         "conv_feature_mask_temperature": float(
             getattr(cfg, "conv_feature_mask_temperature", 32.0)
+        ),
+        "hr_conv_feature_mask_cosine_threshold": getattr(
+            cfg, "hr_conv_feature_mask_cosine_threshold", None
+        ),
+        "hr_conv_feature_mask_soft": getattr(cfg, "hr_conv_feature_mask_soft", None),
+        "hr_conv_feature_mask_temperature": getattr(
+            cfg, "hr_conv_feature_mask_temperature", None
+        ),
+        "hr_conv2_feature_mask_cosine_threshold": getattr(
+            cfg, "hr_conv2_feature_mask_cosine_threshold", None
+        ),
+        "hr_conv2_feature_mask_soft": getattr(cfg, "hr_conv2_feature_mask_soft", None),
+        "hr_conv2_feature_mask_temperature": getattr(
+            cfg, "hr_conv2_feature_mask_temperature", None
+        ),
+        "hr_conv3_feature_mask_cosine_threshold": getattr(
+            cfg, "hr_conv3_feature_mask_cosine_threshold", None
+        ),
+        "hr_conv3_feature_mask_soft": getattr(cfg, "hr_conv3_feature_mask_soft", None),
+        "hr_conv3_feature_mask_temperature": getattr(
+            cfg, "hr_conv3_feature_mask_temperature", None
         ),
         "use_residual_lr1": bool(getattr(cfg, "use_residual_lr1", False)),
         "use_residual_lr2": bool(getattr(cfg, "use_residual_lr2", False)),

@@ -34,6 +34,7 @@
   "ocrp_router_conv_hidden_dim": 64,
   "ocrp_proposal_hidden_dim": 128,
   "ocrp_straight_through": true,
+  "ocrp_token_conditioned_member_bias": true,
   "use_hr_conv1": true,
   "hr_conv1_kernel_size": 7,
   "use_residual_hr1": true,

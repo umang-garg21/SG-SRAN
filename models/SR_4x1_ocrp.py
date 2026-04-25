@@ -311,6 +311,7 @@ class CosineMaskedEquivariantSpatialConv(nn.Module):
         irreps_in: Irreps | str = "1x4e",
         irreps_out: Irreps | str | None = None,
         use_residual: bool = False,
+        residual_weight: float = 1.0,
         dilation: int = 1,
         feature_mask_cosine_threshold: float = 0.99,
         feature_mask_soft: bool = False,
@@ -331,6 +332,7 @@ class CosineMaskedEquivariantSpatialConv(nn.Module):
         self.in_dim = int(self.irreps_in.dim)
         self.out_dim = int(self.irreps_out.dim)
         self.use_residual = bool(use_residual)
+        self.residual_weight = float(residual_weight)
 
         self.tp = FullyConnectedTensorProduct(
             self.irreps_in,
@@ -413,9 +415,9 @@ class CosineMaskedEquivariantSpatialConv(nn.Module):
 
         if self.use_residual:
             if self.residual_proj is None:
-                out = out + feat_flat
+                out = out + self.residual_weight * feat_flat
             else:
-                out = out + self.residual_proj(feat_flat)
+                out = out + self.residual_weight * self.residual_proj(feat_flat)
 
         out = out.reshape(bsz, n, self.out_dim)
         if not batched:
@@ -1073,7 +1075,7 @@ class WithinSlotInvariantPool(nn.Module):
         patch_shape: int | tuple[int, int] | list[int] | None = None,
         hidden_dim: int = 96,
         chunk_size: int = 512,
-        token_conditioned_member_bias: bool = False,
+        token_conditioned_member_bias: bool = True,
     ):
         super().__init__()
         self.irreps_feat = Irreps(irreps_feat)
@@ -2000,6 +2002,7 @@ class IsoEmbedding4x1SROCRP(nn.Module):
         use_lr_conv1: bool = True,
         lr_conv1_kernel_size: int = 5,
         use_residual_lr1: bool = True,
+        lr_conv1_residual_weight: float = 1.0,
         conv_feature_mask_cosine_threshold: float = 0.98,
         conv_feature_mask_soft: bool = False,
         conv_feature_mask_temperature: float = 32.0,
@@ -2024,6 +2027,24 @@ class IsoEmbedding4x1SROCRP(nn.Module):
         use_hr_conv1: bool = True,
         hr_conv1_kernel_size: int = 7,
         use_residual_hr1: bool = True,
+        hr_conv1_residual_weight: float = 1.0,
+        hr_conv_feature_mask_cosine_threshold: float | None = None,
+        hr_conv_feature_mask_soft: bool | None = None,
+        hr_conv_feature_mask_temperature: float | None = None,
+        use_hr_conv2: bool = False,
+        hr_conv2_kernel_size: int | None = None,
+        use_residual_hr2: bool = True,
+        hr_conv2_residual_weight: float = 1.0,
+        hr_conv2_feature_mask_cosine_threshold: float | None = None,
+        hr_conv2_feature_mask_soft: bool | None = None,
+        hr_conv2_feature_mask_temperature: float | None = None,
+        use_hr_conv3: bool = False,
+        hr_conv3_kernel_size: int | None = None,
+        use_residual_hr3: bool = True,
+        hr_conv3_residual_weight: float = 1.0,
+        hr_conv3_feature_mask_cosine_threshold: float | None = None,
+        hr_conv3_feature_mask_soft: bool | None = None,
+        hr_conv3_feature_mask_temperature: float | None = None,
         decoder_cubochoric_resolution: int = 1,
         decoder_num_starts: int = 6,
         decoder_steps: int = 25,
@@ -2058,19 +2079,80 @@ class IsoEmbedding4x1SROCRP(nn.Module):
 
         self.use_lr_conv1 = bool(use_lr_conv1)
         self.use_hr_conv1 = bool(use_hr_conv1)
+        self.use_hr_conv2 = bool(use_hr_conv2)
+        self.use_hr_conv3 = bool(use_hr_conv3)
         self.upsample_factor = _as_scale_tuple(upsample_factor)
-        # Keep the config args for backward compatibility, but always enable
-        # residual connections inside the cosine-masked OCRP convs.
-        _ = bool(use_residual_lr1)
-        _ = bool(use_residual_hr1)
+        self.use_residual_lr1 = bool(use_residual_lr1)
+        self.use_residual_hr1 = bool(use_residual_hr1)
+        self.use_residual_hr2 = bool(use_residual_hr2)
+        self.use_residual_hr3 = bool(use_residual_hr3)
+        self.lr_conv1_residual_weight = float(lr_conv1_residual_weight)
+        self.hr_conv1_residual_weight = float(hr_conv1_residual_weight)
+        self.hr_conv2_residual_weight = float(hr_conv2_residual_weight)
+        self.hr_conv3_residual_weight = float(hr_conv3_residual_weight)
+        self.lr_conv_feature_mask_cosine_threshold = float(conv_feature_mask_cosine_threshold)
+        self.lr_conv_feature_mask_soft = bool(conv_feature_mask_soft)
+        self.lr_conv_feature_mask_temperature = float(conv_feature_mask_temperature)
+        self.hr_conv_feature_mask_cosine_threshold = float(
+            self.lr_conv_feature_mask_cosine_threshold
+            if hr_conv_feature_mask_cosine_threshold is None
+            else hr_conv_feature_mask_cosine_threshold
+        )
+        self.hr_conv_feature_mask_soft = bool(
+            self.lr_conv_feature_mask_soft
+            if hr_conv_feature_mask_soft is None
+            else hr_conv_feature_mask_soft
+        )
+        self.hr_conv_feature_mask_temperature = float(
+            self.lr_conv_feature_mask_temperature
+            if hr_conv_feature_mask_temperature is None
+            else hr_conv_feature_mask_temperature
+        )
+        self.hr_conv2_kernel_size = int(
+            hr_conv1_kernel_size if hr_conv2_kernel_size is None else hr_conv2_kernel_size
+        )
+        self.hr_conv2_feature_mask_cosine_threshold = float(
+            self.hr_conv_feature_mask_cosine_threshold
+            if hr_conv2_feature_mask_cosine_threshold is None
+            else hr_conv2_feature_mask_cosine_threshold
+        )
+        self.hr_conv2_feature_mask_soft = bool(
+            self.hr_conv_feature_mask_soft
+            if hr_conv2_feature_mask_soft is None
+            else hr_conv2_feature_mask_soft
+        )
+        self.hr_conv2_feature_mask_temperature = float(
+            self.hr_conv_feature_mask_temperature
+            if hr_conv2_feature_mask_temperature is None
+            else hr_conv2_feature_mask_temperature
+        )
+        self.hr_conv3_kernel_size = int(
+            hr_conv1_kernel_size if hr_conv3_kernel_size is None else hr_conv3_kernel_size
+        )
+        self.hr_conv3_feature_mask_cosine_threshold = float(
+            self.hr_conv_feature_mask_cosine_threshold
+            if hr_conv3_feature_mask_cosine_threshold is None
+            else hr_conv3_feature_mask_cosine_threshold
+        )
+        self.hr_conv3_feature_mask_soft = bool(
+            self.hr_conv_feature_mask_soft
+            if hr_conv3_feature_mask_soft is None
+            else hr_conv3_feature_mask_soft
+        )
+        self.hr_conv3_feature_mask_temperature = float(
+            self.hr_conv_feature_mask_temperature
+            if hr_conv3_feature_mask_temperature is None
+            else hr_conv3_feature_mask_temperature
+        )
         self.conv_lr1 = CosineMaskedEquivariantSpatialConv(
             kernel_size=int(lr_conv1_kernel_size),
             irreps_in=self.irreps_feat,
             irreps_out=self.irreps_feat,
-            use_residual=True,
-            feature_mask_cosine_threshold=float(conv_feature_mask_cosine_threshold),
-            feature_mask_soft=bool(conv_feature_mask_soft),
-            feature_mask_temperature=float(conv_feature_mask_temperature),
+            use_residual=self.use_residual_lr1,
+            residual_weight=self.lr_conv1_residual_weight,
+            feature_mask_cosine_threshold=self.lr_conv_feature_mask_cosine_threshold,
+            feature_mask_soft=self.lr_conv_feature_mask_soft,
+            feature_mask_temperature=self.lr_conv_feature_mask_temperature,
         )
         self.ocrp = OCRP4x1PatchUpsampler(
             irreps_feat=self.irreps_feat,
@@ -2098,10 +2180,31 @@ class IsoEmbedding4x1SROCRP(nn.Module):
             kernel_size=int(hr_conv1_kernel_size),
             irreps_in=self.irreps_feat,
             irreps_out=self.irreps_feat,
-            use_residual=True,
-            feature_mask_cosine_threshold=float(conv_feature_mask_cosine_threshold),
-            feature_mask_soft=bool(conv_feature_mask_soft),
-            feature_mask_temperature=float(conv_feature_mask_temperature),
+            use_residual=self.use_residual_hr1,
+            residual_weight=self.hr_conv1_residual_weight,
+            feature_mask_cosine_threshold=self.hr_conv_feature_mask_cosine_threshold,
+            feature_mask_soft=self.hr_conv_feature_mask_soft,
+            feature_mask_temperature=self.hr_conv_feature_mask_temperature,
+        )
+        self.conv_hr2 = CosineMaskedEquivariantSpatialConv(
+            kernel_size=self.hr_conv2_kernel_size,
+            irreps_in=self.irreps_feat,
+            irreps_out=self.irreps_feat,
+            use_residual=self.use_residual_hr2,
+            residual_weight=self.hr_conv2_residual_weight,
+            feature_mask_cosine_threshold=self.hr_conv2_feature_mask_cosine_threshold,
+            feature_mask_soft=self.hr_conv2_feature_mask_soft,
+            feature_mask_temperature=self.hr_conv2_feature_mask_temperature,
+        )
+        self.conv_hr3 = CosineMaskedEquivariantSpatialConv(
+            kernel_size=self.hr_conv3_kernel_size,
+            irreps_in=self.irreps_feat,
+            irreps_out=self.irreps_feat,
+            use_residual=self.use_residual_hr3,
+            residual_weight=self.hr_conv3_residual_weight,
+            feature_mask_cosine_threshold=self.hr_conv3_feature_mask_cosine_threshold,
+            feature_mask_soft=self.hr_conv3_feature_mask_soft,
+            feature_mask_temperature=self.hr_conv3_feature_mask_temperature,
         )
 
         self.decoder: CubochoricOptimizingLocalIsoDecoder | None = None
@@ -2191,14 +2294,23 @@ class IsoEmbedding4x1SROCRP(nn.Module):
         else:
             feat_hr, hr_shape = out
 
+        feat_hr_after_conv1 = feat_hr
         if self.use_hr_conv1:
-            feat_hr = self.conv_hr1(feat_hr, hr_shape)
+            feat_hr_after_conv1 = self.conv_hr1(feat_hr_after_conv1, hr_shape)
+        feat_hr_after_conv2 = feat_hr_after_conv1
+        if self.use_hr_conv2:
+            feat_hr_after_conv2 = self.conv_hr2(feat_hr_after_conv2, hr_shape)
+        feat_hr = feat_hr_after_conv2
+        if self.use_hr_conv3:
+            feat_hr = self.conv_hr3(feat_hr, hr_shape)
 
         if not return_aux:
             return feat_hr, hr_shape
 
         aux["feat_lr_pre_ocrp"] = feat_pre
         aux["feat_hr_raw_ocrp"] = feat_hr_raw_ocrp
+        aux["feat_hr_post_hr_conv1"] = feat_hr_after_conv1
+        aux["feat_hr_post_hr_conv2"] = feat_hr_after_conv2
         aux["feat_hr_post_hr_conv"] = feat_hr
         return feat_hr, hr_shape, aux
 

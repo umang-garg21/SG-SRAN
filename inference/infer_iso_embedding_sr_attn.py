@@ -202,10 +202,48 @@ def _load_model_from_checkpoint(
         "use_lr_conv2": bool(getattr(cfg, "use_lr_conv2", True)),
         "use_lr_conv3": bool(getattr(cfg, "use_lr_conv3", False)),
         "lr_conv1_kernel_size": int(getattr(cfg, "lr_conv1_kernel_size", 3)),
+        "lr_conv1_residual_weight": float(getattr(cfg, "lr_conv1_residual_weight", 1.0)),
         "lr_conv2_kernel_size": int(getattr(cfg, "lr_conv2_kernel_size", 9)),
         "lr_conv3_kernel_size": int(getattr(cfg, "lr_conv3_kernel_size", 9)),
         "lr_conv3_dilation": int(getattr(cfg, "lr_conv3_dilation", 1)),
         "hr_conv1_kernel_size": int(getattr(cfg, "hr_conv1_kernel_size", 3)),
+        "hr_conv1_residual_weight": float(getattr(cfg, "hr_conv1_residual_weight", 1.0)),
+        "use_hr_conv2": bool(getattr(cfg, "use_hr_conv2", False)),
+        "hr_conv2_kernel_size": getattr(cfg, "hr_conv2_kernel_size", None),
+        "use_residual_hr2": bool(getattr(cfg, "use_residual_hr2", True)),
+        "hr_conv2_residual_weight": float(getattr(cfg, "hr_conv2_residual_weight", 1.0)),
+        "use_hr_conv3": bool(getattr(cfg, "use_hr_conv3", False)),
+        "hr_conv3_kernel_size": getattr(cfg, "hr_conv3_kernel_size", None),
+        "use_residual_hr3": bool(getattr(cfg, "use_residual_hr3", True)),
+        "hr_conv3_residual_weight": float(getattr(cfg, "hr_conv3_residual_weight", 1.0)),
+        "conv_feature_mask_cosine_threshold": float(
+            getattr(cfg, "conv_feature_mask_cosine_threshold", 0.98)
+        ),
+        "conv_feature_mask_soft": bool(getattr(cfg, "conv_feature_mask_soft", False)),
+        "conv_feature_mask_temperature": float(
+            getattr(cfg, "conv_feature_mask_temperature", 32.0)
+        ),
+        "hr_conv_feature_mask_cosine_threshold": getattr(
+            cfg, "hr_conv_feature_mask_cosine_threshold", None
+        ),
+        "hr_conv_feature_mask_soft": getattr(cfg, "hr_conv_feature_mask_soft", None),
+        "hr_conv_feature_mask_temperature": getattr(
+            cfg, "hr_conv_feature_mask_temperature", None
+        ),
+        "hr_conv2_feature_mask_cosine_threshold": getattr(
+            cfg, "hr_conv2_feature_mask_cosine_threshold", None
+        ),
+        "hr_conv2_feature_mask_soft": getattr(cfg, "hr_conv2_feature_mask_soft", None),
+        "hr_conv2_feature_mask_temperature": getattr(
+            cfg, "hr_conv2_feature_mask_temperature", None
+        ),
+        "hr_conv3_feature_mask_cosine_threshold": getattr(
+            cfg, "hr_conv3_feature_mask_cosine_threshold", None
+        ),
+        "hr_conv3_feature_mask_soft": getattr(cfg, "hr_conv3_feature_mask_soft", None),
+        "hr_conv3_feature_mask_temperature": getattr(
+            cfg, "hr_conv3_feature_mask_temperature", None
+        ),
         "use_residual_lr1": bool(getattr(cfg, "use_residual_lr1", False)),
         "use_residual_lr2": bool(getattr(cfg, "use_residual_lr2", False)),
         "use_residual_lr3": bool(getattr(cfg, "use_residual_lr3", False)),
@@ -282,6 +320,25 @@ def _load_model_from_checkpoint(
         "decoder_max_table_rows": getattr(cfg, "decoder_max_table_rows", None),
         "decoder_table_cache_dir": getattr(cfg, "decoder_table_cache_dir", "out/decoder_lookup_tables"),
         "decoder_backend": str(getattr(cfg, "decoder_backend", "optimizing")),
+        "feature_irreps": str(getattr(cfg, "feature_irreps", "full")),
+        "window_size": int(getattr(cfg, "window_size", 5)),
+        "kmax_slots": int(getattr(cfg, "kmax_slots", 4)),
+        "cluster_threshold_deg": float(getattr(cfg, "cluster_threshold_deg", 2.0)),
+        "cluster_connectivity": int(getattr(cfg, "cluster_connectivity", 8)),
+        "phase_dim": int(getattr(cfg, "phase_dim", 32)),
+        "ocrp_router_hidden_dim": int(getattr(cfg, "ocrp_router_hidden_dim", 128)),
+        "ocrp_router_conv_hidden_dim": int(getattr(cfg, "ocrp_router_conv_hidden_dim", 64)),
+        "ocrp_proposal_hidden_dim": int(getattr(cfg, "ocrp_proposal_hidden_dim", 128)),
+        "ocrp_straight_through": bool(getattr(cfg, "ocrp_straight_through", True)),
+        "ocrp_mode": str(getattr(cfg, "ocrp_mode", "pixel_patch")),
+        "macro_lr_tile_size": int(getattr(cfg, "macro_lr_tile_size", 3)),
+        "macro_lr_stride_shape": getattr(cfg, "macro_lr_stride_shape", None),
+        "ocrp_token_conditioned_member_bias": getattr(cfg, "ocrp_token_conditioned_member_bias", None),
+        "ocrp_pool_chunk_size": int(getattr(cfg, "ocrp_pool_chunk_size", 512)),
+        "ocrp_router_chunk_size": int(getattr(cfg, "ocrp_router_chunk_size", 512)),
+        "ocrp_proposal_chunk_size": int(getattr(cfg, "ocrp_proposal_chunk_size", 128)),
+        "ocrp_proposal_token_chunk_size": getattr(cfg, "ocrp_proposal_token_chunk_size", None),
+        "decoder_eager_init": bool(getattr(cfg, "decoder_eager_init", False)),
     }
     model_kwargs = {k: v for k, v in model_kwargs.items() if k in init_params}
     model = model_cls(**model_kwargs).to(device)
