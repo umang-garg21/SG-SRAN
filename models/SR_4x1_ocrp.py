@@ -135,10 +135,25 @@ def _misorientation_angle_sym(
     q2: torch.Tensor,
     sym_ops: torch.Tensor,
 ) -> torch.Tensor:
-    q2var = torch.einsum("gij,...j->...gi", sym_ops, q2)
-    dots = (q1.unsqueeze(-2) * q2var).sum(dim=-1).abs().clamp(0.0, 1.0)
-    best = dots.max(dim=-1).values
-    return 2.0 * torch.acos(best)
+    lead_shape = q1.shape[:-1]
+    if q2.shape[:-1] != lead_shape or q1.shape[-1] != 4 or q2.shape[-1] != 4:
+        raise ValueError(
+            f"Expected q1 and q2 with matching leading dims and trailing quaternion dim 4, "
+            f"got {tuple(q1.shape)} and {tuple(q2.shape)}"
+        )
+
+    q1_flat = q1.reshape(-1, 4)
+    q2_flat = q2.reshape(-1, 4)
+    max_pairs_per_chunk = 262144
+    out_chunks: list[torch.Tensor] = []
+    for start in range(0, q1_flat.shape[0], max_pairs_per_chunk):
+        end = min(start + max_pairs_per_chunk, q1_flat.shape[0])
+        q1_chunk = q1_flat[start:end]
+        q2_chunk = q2_flat[start:end]
+        dots = torch.einsum("bi,gij,bj->bg", q1_chunk, sym_ops, q2_chunk).abs().clamp(0.0, 1.0)
+        best = dots.max(dim=-1).values
+        out_chunks.append(2.0 * torch.acos(best))
+    return torch.cat(out_chunks, dim=0).view(*lead_shape)
 
 
 def _flat_to_image(features: torch.Tensor, img_shape: tuple[int, int]) -> torch.Tensor:
@@ -836,19 +851,21 @@ class QuaternionBankClusterer(nn.Module):
 class ClusterSlotBuilder(nn.Module):
     """Pack top-ranked clusters into deterministic slots and emit cheap metadata."""
 
-    SLOT_TYPE_DIM = 4
-    META_DIM = 9
+    SLOT_TYPE_DIM = 6
+    META_DIM = 11
     META_VALID = 0
     META_SLOT_TYPE_START = 1
-    META_MASS = 5
-    META_CENTROID_Y = 6
-    META_CENTROID_X = 7
-    META_SPATIAL_DISP = 8
+    META_MASS = 7
+    META_CENTROID_Y = 8
+    META_CENTROID_X = 9
+    META_SPATIAL_DISP = 10
 
-    def __init__(self, kmax_slots: int = 4, window_size: int = 5):
+    def __init__(self, kmax_slots: int = 6, window_size: int = 5):
         super().__init__()
-        if int(kmax_slots) != 4:
-            raise ValueError(f"OCRP currently expects kmax_slots=4, got {kmax_slots}")
+        if int(kmax_slots) < 1 or int(kmax_slots) > self.SLOT_TYPE_DIM:
+            raise ValueError(
+                f"OCRP expects 1 <= kmax_slots <= {self.SLOT_TYPE_DIM}, got {kmax_slots}"
+            )
         if int(window_size) < 3 or int(window_size) % 2 == 0:
             raise ValueError(f"OCRP expects an odd window_size >= 3, got {window_size}")
         self.kmax_slots = int(kmax_slots)
@@ -871,23 +888,37 @@ class ClusterSlotBuilder(nn.Module):
         if nnode != self.num_nodes:
             raise ValueError(f"Expected cluster_ids last dim {self.num_nodes}, got {nnode}")
 
-        labels = cluster_ids.to(dtype=torch.long)
-        label_onehot = F.one_hot(labels.clamp(min=0, max=self.num_nodes - 1), num_classes=self.num_nodes).to(torch.float32)
-        label_mass = label_onehot.mean(dim=2)
-        label_mask = label_onehot.permute(0, 1, 3, 2).contiguous()
-        label_count = label_mask.sum(dim=-1)
-
         coords = self.coords.to(device=cluster_ids.device, dtype=torch.float32)
-        coords_exp = coords.view(1, 1, 1, nnode, 2)
-        label_centroid = (
-            label_mask.unsqueeze(-1) * coords_exp
-        ).sum(dim=-2) / label_count.clamp_min(1.0).unsqueeze(-1)
+        labels = cluster_ids.to(dtype=torch.long)
+        labels_clamped = labels.clamp(min=0, max=self.num_nodes - 1)
+        num_windows = int(bsz * nwin)
+        labels_flat = labels_clamped.view(num_windows, nnode)
+
+        ones = torch.ones((num_windows, nnode), device=cluster_ids.device, dtype=torch.float32)
+        label_count_flat = torch.zeros(
+            (num_windows, self.num_nodes),
+            device=cluster_ids.device,
+            dtype=torch.float32,
+        )
+        label_count_flat.scatter_add_(1, labels_flat, ones)
+        label_count = label_count_flat.view(bsz, nwin, self.num_nodes)
+        label_mass = label_count / float(self.num_nodes)
+
+        label_coord_sum_flat = torch.zeros(
+            (num_windows, self.num_nodes, 2),
+            device=cluster_ids.device,
+            dtype=torch.float32,
+        )
+        scatter_idx = labels_flat.unsqueeze(-1).expand(-1, -1, 2)
+        coord_src = coords.view(1, nnode, 2).expand(num_windows, -1, -1)
+        label_coord_sum_flat.scatter_add_(1, scatter_idx, coord_src)
+        label_centroid = label_coord_sum_flat.view(bsz, nwin, self.num_nodes, 2) / label_count.clamp_min(1.0).unsqueeze(-1)
         # Prefer larger clusters first; use centrality only as a light tie-break.
         centrality = -(label_centroid.pow(2).sum(dim=-1))
         label_idx = torch.arange(self.num_nodes, device=cluster_ids.device, dtype=torch.float32).view(1, 1, -1)
         rank_score = label_mass + 1e-4 * centrality - 1e-6 * label_idx
         rank_score = rank_score.masked_fill(label_mass <= 0.0, float("-inf"))
-        topk = self.kmax_slots - 1
+        topk = self.kmax_slots
         top_score, top_label = torch.topk(rank_score, k=topk, dim=2)
 
         slot_cluster_label = torch.full(
@@ -921,15 +952,13 @@ class ClusterSlotBuilder(nn.Module):
             device=cluster_ids.device,
             dtype=torch.float32,
         )
-        null_type = torch.tensor([0.0, 0.0, 0.0, 1.0], device=cluster_ids.device, dtype=torch.float32)
-        slot_meta[..., self.META_SLOT_TYPE_START : self.META_SLOT_TYPE_START + self.SLOT_TYPE_DIM] = null_type
         slot_type_eye = torch.eye(self.SLOT_TYPE_DIM, device=cluster_ids.device, dtype=torch.float32)
-        for slot_idx in range(self.kmax_slots - 1):
+        for slot_idx in range(self.kmax_slots):
             valid = slot_valid[..., slot_idx].bool().unsqueeze(-1)
             slot_meta[..., slot_idx, self.META_SLOT_TYPE_START : self.META_SLOT_TYPE_START + self.SLOT_TYPE_DIM] = torch.where(
                 valid,
                 slot_type_eye[slot_idx].view(1, 1, -1),
-                null_type.view(1, 1, -1),
+                torch.zeros((1, 1, self.SLOT_TYPE_DIM), device=cluster_ids.device, dtype=torch.float32),
             )
         slot_meta[..., self.META_VALID] = slot_valid
         slot_meta[..., self.META_MASS] = mass * slot_valid
@@ -949,92 +978,6 @@ class ClusterSlotBuilder(nn.Module):
                 for key, val in out.items()
             }
         return out
-
-
-class MedoidSlotContextBuilder(nn.Module):
-    """Build one representative equivariant slot context per slot using medoid selection."""
-
-    def __init__(self, sym_ops_quat: torch.Tensor, chunk_size: int = 1024):
-        super().__init__()
-        sym_ops_mat = _left_mult_matrix_wxyz_batch(_normalize_quaternions(sym_ops_quat.detach().cpu()))
-        self.register_buffer("sym_ops_mat", sym_ops_mat, persistent=False)
-        self.chunk_size = int(chunk_size)
-
-    def forward(
-        self,
-        bank_q: torch.Tensor,
-        bank_f: torch.Tensor,
-        slot_mask: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        batched = bank_q.dim() == 4
-        if not batched:
-            bank_q = bank_q.unsqueeze(0)
-            bank_f = bank_f.unsqueeze(0)
-            slot_mask = slot_mask.unsqueeze(0)
-        bsz, nwin, nnode, qdim = bank_q.shape
-        _, _, _, fdim = bank_f.shape
-        kmax = int(slot_mask.shape[2])
-        if qdim != 4:
-            raise ValueError(f"Expected bank_q last dim 4, got {qdim}")
-        if slot_mask.shape[-1] != nnode:
-            raise ValueError("slot_mask and bank_q disagree on bank size")
-
-        q = _normalize_quaternions(bank_q.to(dtype=torch.float32))
-        sym_ops = self.sym_ops_mat.to(device=bank_f.device, dtype=torch.float32)
-        flat_q = q.reshape(bsz * nwin, nnode, qdim)
-        flat_f = bank_f.reshape(bsz * nwin, nnode, fdim)
-        flat_mask = slot_mask.reshape(bsz * nwin, kmax, nnode)
-
-        medoid_flat = torch.full((bsz * nwin, kmax), -1, device=bank_f.device, dtype=torch.long)
-        slot_ctx_flat = torch.zeros((bsz * nwin, kmax, fdim), device=bank_f.device, dtype=bank_f.dtype)
-
-        for start in range(0, flat_q.shape[0], self.chunk_size):
-            end = min(start + self.chunk_size, flat_q.shape[0])
-            q_chunk = flat_q[start:end]
-            f_chunk = flat_f[start:end]
-            mask_chunk = flat_mask[start:end]
-            active_chunk = mask_chunk.any(dim=-1)
-            if not bool(active_chunk.any().item()):
-                continue
-
-            q_sym = torch.einsum("gij,cmj->cgmi", sym_ops, q_chunk)
-            dots = torch.einsum("cni,cgmi->cgnm", q_chunk, q_sym).abs()
-            best = dots.amax(dim=1).clamp(0.0, 1.0)
-            mis = 2.0 * torch.acos(best)
-
-            mask_f_chunk = mask_chunk.to(dtype=mis.dtype)
-            pair_mask = mask_f_chunk.unsqueeze(-1) * mask_f_chunk.unsqueeze(-2)
-            sum_mis = (mis.unsqueeze(1) * pair_mask).sum(dim=-1)
-            inf = torch.full_like(sum_mis, float("inf"))
-            sum_mis = torch.where(mask_chunk, sum_mis, inf)
-
-            medoid_idx = torch.argmin(sum_mis, dim=-1)
-            medoid_idx = torch.where(
-                active_chunk,
-                medoid_idx,
-                torch.full_like(medoid_idx, -1),
-            )
-            medoid_flat[start:end] = medoid_idx
-
-            gather_idx = medoid_idx.clamp_min(0).unsqueeze(-1).unsqueeze(-1).expand(-1, -1, 1, fdim)
-            gathered = torch.gather(
-                f_chunk.unsqueeze(1).expand(-1, kmax, -1, -1),
-                2,
-                gather_idx,
-            ).squeeze(2)
-            slot_ctx_flat[start:end] = torch.where(
-                active_chunk.unsqueeze(-1),
-                gathered,
-                torch.zeros_like(gathered),
-            )
-
-        slot_ctx = slot_ctx_flat.view(bsz, nwin, kmax, fdim)
-        medoid_bank_idx = medoid_flat.view(bsz, nwin, kmax)
-
-        if not batched:
-            slot_ctx = slot_ctx.squeeze(0)
-            medoid_bank_idx = medoid_bank_idx.squeeze(0)
-        return slot_ctx, medoid_bank_idx
 
 
 class InvariantSlotSummary(nn.Module):
@@ -1061,6 +1004,78 @@ class InvariantSlotSummary(nn.Module):
             outs.append(bb.norm(dim=-1, keepdim=True))
             outs.append((aa * bb).sum(dim=-1, keepdim=True))
         return torch.cat(outs, dim=-1)
+
+
+class LearnedWeightedSlotContextBuilder(nn.Module):
+    """Learn scalar mixing weights over masked slot members to build the anchor."""
+
+    def __init__(
+        self,
+        irreps_feat: Irreps | str,
+        meta_dim: int,
+        window_size: int = 5,
+    ):
+        super().__init__()
+        self.irreps_feat = Irreps(irreps_feat)
+        self.summary = InvariantSlotSummary(self.irreps_feat)
+        self.meta_dim = int(meta_dim)
+        self.window_size = int(window_size)
+        self.num_nodes = int(self.window_size * self.window_size)
+        den = float(max(1, self.window_size // 2))
+        coords = []
+        for y in range(self.window_size):
+            for x in range(self.window_size):
+                coords.append(((float(y) - den) / den, (float(x) - den) / den))
+        self.register_buffer("coords", torch.tensor(coords, dtype=torch.float32), persistent=False)
+        member_in_dim = int(self.summary.out_dim) + self.meta_dim + 2
+        self.anchor_mixer = nn.Linear(member_in_dim, 1)
+        # Start near uniform, but with a tiny symmetry break so the mixer can learn away from mean.
+        nn.init.normal_(self.anchor_mixer.weight, mean=0.0, std=1e-3)
+        nn.init.zeros_(self.anchor_mixer.bias)
+
+    def forward(
+        self,
+        bank_q: torch.Tensor,
+        bank_f: torch.Tensor,
+        slot_mask: torch.Tensor,
+        slot_meta: torch.Tensor,
+        return_alpha: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        del bank_q
+        batched = bank_f.dim() == 4
+        if not batched:
+            bank_f = bank_f.unsqueeze(0)
+            slot_mask = slot_mask.unsqueeze(0)
+            slot_meta = slot_meta.unsqueeze(0)
+        _, _, nnode, _ = bank_f.shape
+        if slot_mask.shape[-1] != nnode:
+            raise ValueError("slot_mask and bank_f disagree on bank size")
+        if slot_meta.shape[:3] != slot_mask.shape[:3]:
+            raise ValueError("slot_meta and slot_mask must agree on (B, N, K)")
+
+        bsz, nwin, kmax, _ = slot_meta.shape
+        member_summary = self.summary.summarize(bank_f).unsqueeze(2).expand(-1, -1, kmax, -1, -1)
+        coord_feat = self.coords.to(device=bank_f.device, dtype=slot_meta.dtype)
+        coord_feat = coord_feat.view(1, 1, 1, self.num_nodes, 2).expand(bsz, nwin, kmax, -1, -1)
+        member_meta = slot_meta.unsqueeze(-2).expand(-1, -1, -1, self.num_nodes, -1)
+        logits = self.anchor_mixer(torch.cat([member_summary, member_meta, coord_feat], dim=-1)).squeeze(-1)
+        logits = logits.masked_fill(~slot_mask.bool(), -1e4)
+
+        alpha = torch.softmax(logits, dim=-1)
+        alpha = alpha * slot_mask.to(dtype=alpha.dtype)
+        alpha = alpha / alpha.sum(dim=-1, keepdim=True).clamp_min(1e-6)
+        slot_ctx = torch.einsum("bnkm,bnmc->bnkc", alpha.to(dtype=bank_f.dtype), bank_f)
+        has_member = slot_mask.any(dim=-1, keepdim=True)
+        slot_ctx = torch.where(has_member, slot_ctx, torch.zeros_like(slot_ctx))
+
+        if not batched:
+            slot_ctx = slot_ctx.squeeze(0)
+            alpha = alpha.squeeze(0)
+        return slot_ctx, (alpha.to(dtype=bank_f.dtype) if return_alpha else None)
+
+
+MeanSlotContextBuilder = LearnedWeightedSlotContextBuilder
+MedoidSlotContextBuilder = LearnedWeightedSlotContextBuilder
 
 
 class WithinSlotInvariantPool(nn.Module):
@@ -1291,13 +1306,15 @@ class PatchSlotRouter(nn.Module):
         self,
         irreps_feat: Irreps | str,
         meta_dim: int,
-        kmax_slots: int = 4,
+        kmax_slots: int = 6,
         upsample_factor: int | tuple[int, int] | list[int] = 4,
         patch_size: int | tuple[int, int] | list[int] | None = None,
         phase_dim: int = 32,
         hidden_dim: int = 128,
         conv_hidden_dim: int = 64,
         chunk_size: int = 512,
+        slot_mass_power: float = 0.25,
+        uniform_slot_mix: float = 0.75,
     ):
         super().__init__()
         self.irreps_feat = Irreps(irreps_feat)
@@ -1317,6 +1334,12 @@ class PatchSlotRouter(nn.Module):
         self.summary = InvariantSlotSummary(self.irreps_feat)
         self.slot_hidden_dim = int(hidden_dim)
         self.chunk_size = max(1, int(chunk_size))
+        self.slot_mass_power = float(slot_mass_power)
+        self.uniform_slot_mix = float(uniform_slot_mix)
+        if self.slot_mass_power < 0.0:
+            raise ValueError(f"slot_mass_power must be >= 0, got {slot_mass_power}")
+        if not (0.0 <= self.uniform_slot_mix <= 1.0):
+            raise ValueError(f"uniform_slot_mix must be in [0,1], got {uniform_slot_mix}")
 
         in_slot = int(self.summary.out_dim) + int(meta_dim)
         self.slot_proj = nn.Sequential(
@@ -1334,6 +1357,33 @@ class PatchSlotRouter(nn.Module):
             nn.GELU(),
             nn.Linear(self.slot_hidden_dim, 1),
         )
+
+    def _router_weight_context(
+        self,
+        slot_meta: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        slot_valid = slot_meta[
+            ..., ClusterSlotBuilder.META_VALID : ClusterSlotBuilder.META_VALID + 1
+        ]
+        raw_mass = slot_meta[
+            ..., ClusterSlotBuilder.META_MASS : ClusterSlotBuilder.META_MASS + 1
+        ].clamp_min(0.0)
+        tempered_mass = torch.where(
+            raw_mass > 0.0,
+            raw_mass.clamp_min(1e-6).pow(self.slot_mass_power),
+            torch.zeros_like(raw_mass),
+        )
+        slot_meta_router = slot_meta.clone()
+        slot_meta_router[
+            ..., ClusterSlotBuilder.META_MASS : ClusterSlotBuilder.META_MASS + 1
+        ] = tempered_mass * slot_valid
+        uniform_weights = slot_valid
+        mass_weights = slot_valid * tempered_mass
+        weights = (
+            self.uniform_slot_mix * uniform_weights
+            + (1.0 - self.uniform_slot_mix) * mass_weights
+        )
+        return slot_valid, slot_meta_router, weights
 
     def forward(
         self,
@@ -1356,13 +1406,10 @@ class PatchSlotRouter(nn.Module):
         if kmax != self.kmax_slots:
             raise ValueError(f"Expected kmax_slots={self.kmax_slots}, got {kmax}")
 
-        slot_valid = slot_meta[..., ClusterSlotBuilder.META_VALID : ClusterSlotBuilder.META_VALID + 1]
-        slot_mass = slot_meta[..., ClusterSlotBuilder.META_MASS : ClusterSlotBuilder.META_MASS + 1]
-        weights = slot_valid * slot_mass
+        slot_valid, slot_meta_router, weights = self._router_weight_context(slot_meta)
         nflat = int(bsz * nwin)
-        slot_meta_flat = slot_meta.reshape(nflat, kmax, slot_meta.shape[-1])
+        slot_meta_flat = slot_meta_router.reshape(nflat, kmax, slot_meta_router.shape[-1])
         weights_flat = weights.reshape(nflat, kmax, 1)
-        slot_valid_flat = slot_valid.reshape(nflat, kmax, 1)
 
         phase_flat: torch.Tensor | None = None
         phase_shared: torch.Tensor | None = None
@@ -1672,12 +1719,14 @@ class OCRP4x1PatchUpsampler(nn.Module):
         sym_ops_quat: torch.Tensor,
         upsample_factor: int | tuple[int, int] | list[int] = 4,
         window_size: int = 5,
-        kmax_slots: int = 4,
+        kmax_slots: int = 6,
         cluster_threshold_deg: float = 2.0,
         cluster_connectivity: int = 8,
         phase_dim: int = 32,
         router_hidden_dim: int = 128,
         router_conv_hidden_dim: int = 64,
+        router_slot_mass_power: float = 0.25,
+        router_uniform_slot_mix: float = 0.75,
         proposal_hidden_dim: int = 128,
         straight_through: bool = True,
         ocrp_mode: str = "pixel_patch",
@@ -1741,7 +1790,11 @@ class OCRP4x1PatchUpsampler(nn.Module):
             kmax_slots=int(kmax_slots),
             window_size=int(window_size),
         )
-        self.context_builder = MedoidSlotContextBuilder(sym_ops_quat=sym_ops_quat)
+        self.context_builder = LearnedWeightedSlotContextBuilder(
+            irreps_feat=self.irreps_feat,
+            meta_dim=ClusterSlotBuilder.META_DIM,
+            window_size=int(window_size),
+        )
         self.slot_pool = WithinSlotInvariantPool(
             irreps_feat=self.irreps_feat,
             meta_dim=ClusterSlotBuilder.META_DIM,
@@ -1762,6 +1815,8 @@ class OCRP4x1PatchUpsampler(nn.Module):
             hidden_dim=int(router_hidden_dim),
             conv_hidden_dim=int(router_conv_hidden_dim),
             chunk_size=int(router_chunk_size),
+            slot_mass_power=float(router_slot_mass_power),
+            uniform_slot_mix=float(router_uniform_slot_mix),
         )
         self.proposal_head = SharedTPPatchProposalHead(
             irreps_feat=self.irreps_feat,
@@ -1900,10 +1955,12 @@ class OCRP4x1PatchUpsampler(nn.Module):
         slot_meta = slot_info["slot_meta"]
         slot_valid = slot_info["slot_valid"]
 
-        slot_ctx, medoid_bank_idx = self.context_builder(
+        slot_ctx, slot_anchor_alpha = self.context_builder(
             bank_q=bank_q,
             bank_f=bank_f,
             slot_mask=slot_mask,
+            slot_meta=slot_meta,
+            return_alpha=return_aux,
         )
         phase_grid = self._phase_grid(device=feat_lr.device, dtype=feat_lr.dtype)
         slot_pooled_ctx, slot_pool_alpha = self.slot_pool(
@@ -1961,9 +2018,9 @@ class OCRP4x1PatchUpsampler(nn.Module):
             "slot_valid": slot_valid,
             "slot_meta": slot_meta,
             "slot_ctx": slot_ctx,
+            "slot_anchor_alpha": slot_anchor_alpha,
             "slot_pooled_ctx": slot_pooled_ctx,
             "slot_pool_alpha": slot_pool_alpha,
-            "medoid_bank_idx": medoid_bank_idx,
             "router_logits": router_logits,
             "owner_idx": owner_idx,
             "patch_prop": patch_prop,
@@ -2008,12 +2065,14 @@ class IsoEmbedding4x1SROCRP(nn.Module):
         conv_feature_mask_temperature: float = 32.0,
         upsample_factor: int | tuple[int, int] | list[int] = (4, 1),
         window_size: int = 5,
-        kmax_slots: int = 4,
+        kmax_slots: int = 6,
         cluster_threshold_deg: float = 2.0,
         cluster_connectivity: int = 8,
         phase_dim: int = 32,
         ocrp_router_hidden_dim: int = 128,
         ocrp_router_conv_hidden_dim: int = 64,
+        ocrp_router_slot_mass_power: float = 0.25,
+        ocrp_router_uniform_slot_mix: float = 0.75,
         ocrp_proposal_hidden_dim: int = 128,
         ocrp_straight_through: bool = True,
         ocrp_mode: str = "pixel_patch",
@@ -2165,6 +2224,8 @@ class IsoEmbedding4x1SROCRP(nn.Module):
             phase_dim=int(phase_dim),
             router_hidden_dim=int(ocrp_router_hidden_dim),
             router_conv_hidden_dim=int(ocrp_router_conv_hidden_dim),
+            router_slot_mass_power=float(ocrp_router_slot_mass_power),
+            router_uniform_slot_mix=float(ocrp_router_uniform_slot_mix),
             proposal_hidden_dim=int(ocrp_proposal_hidden_dim),
             straight_through=bool(ocrp_straight_through),
             ocrp_mode=str(ocrp_mode),
@@ -2196,16 +2257,18 @@ class IsoEmbedding4x1SROCRP(nn.Module):
             feature_mask_soft=self.hr_conv2_feature_mask_soft,
             feature_mask_temperature=self.hr_conv2_feature_mask_temperature,
         )
-        self.conv_hr3 = CosineMaskedEquivariantSpatialConv(
-            kernel_size=self.hr_conv3_kernel_size,
-            irreps_in=self.irreps_feat,
-            irreps_out=self.irreps_feat,
-            use_residual=self.use_residual_hr3,
-            residual_weight=self.hr_conv3_residual_weight,
-            feature_mask_cosine_threshold=self.hr_conv3_feature_mask_cosine_threshold,
-            feature_mask_soft=self.hr_conv3_feature_mask_soft,
-            feature_mask_temperature=self.hr_conv3_feature_mask_temperature,
-        )
+        self.conv_hr3: CosineMaskedEquivariantSpatialConv | None = None
+        if self.use_hr_conv3:
+            self.conv_hr3 = CosineMaskedEquivariantSpatialConv(
+                kernel_size=self.hr_conv3_kernel_size,
+                irreps_in=self.irreps_feat,
+                irreps_out=self.irreps_feat,
+                use_residual=self.use_residual_hr3,
+                residual_weight=self.hr_conv3_residual_weight,
+                feature_mask_cosine_threshold=self.hr_conv3_feature_mask_cosine_threshold,
+                feature_mask_soft=self.hr_conv3_feature_mask_soft,
+                feature_mask_temperature=self.hr_conv3_feature_mask_temperature,
+            )
 
         self.decoder: CubochoricOptimizingLocalIsoDecoder | None = None
         self._decoder_eager_init = bool(decoder_eager_init)
@@ -2230,6 +2293,23 @@ class IsoEmbedding4x1SROCRP(nn.Module):
         if self.decoder is None:
             self.decoder = self._build_decoder()
         return self.decoder
+
+    def _filter_incompatible_state_dict(self, state_dict):
+        filtered_state_dict = dict(state_dict)
+        if self.conv_hr3 is None:
+            legacy_hr3_keys = [key for key in filtered_state_dict.keys() if key.startswith("conv_hr3.")]
+            if legacy_hr3_keys:
+                for key in legacy_hr3_keys:
+                    filtered_state_dict.pop(key, None)
+                warnings.warn(
+                    "Ignoring legacy conv_hr3 weights because use_hr_conv3=False for this 4x1 OCRP model.",
+                    RuntimeWarning,
+                )
+        return filtered_state_dict
+
+    def load_state_dict(self, state_dict, strict: bool = True, assign: bool = False):
+        filtered_state_dict = self._filter_incompatible_state_dict(state_dict)
+        return super().load_state_dict(filtered_state_dict, strict=strict, assign=assign)
 
     @staticmethod
     def quat_mul(q1: torch.Tensor, q2: torch.Tensor) -> torch.Tensor:
@@ -2301,7 +2381,7 @@ class IsoEmbedding4x1SROCRP(nn.Module):
         if self.use_hr_conv2:
             feat_hr_after_conv2 = self.conv_hr2(feat_hr_after_conv2, hr_shape)
         feat_hr = feat_hr_after_conv2
-        if self.use_hr_conv3:
+        if self.conv_hr3 is not None:
             feat_hr = self.conv_hr3(feat_hr, hr_shape)
 
         if not return_aux:
@@ -2412,6 +2492,8 @@ __all__ = [
     "PhaseEmbeddingGrid",
     "QuaternionBankClusterer",
     "ClusterSlotBuilder",
+    "LearnedWeightedSlotContextBuilder",
+    "MeanSlotContextBuilder",
     "MedoidSlotContextBuilder",
     "InvariantSlotSummary",
     "WithinSlotInvariantPool",

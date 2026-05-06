@@ -13,8 +13,14 @@
   "min_free_cuda_gb": 0.0,
   "lr": 0.0003,
   "clip": 1.0,
-  "scale": [4, 1],
-  "upsample_factor": [4, 1],
+  "scale": [
+    4,
+    1
+  ],
+  "upsample_factor": [
+    4,
+    1
+  ],
   "symmetry_group": "Oh",
   "crystal": "fcc",
   "d6_convention": "z_axis",
@@ -36,7 +42,10 @@
   "ocrp_straight_through": true,
   "ocrp_mode": "macro_tile",
   "macro_lr_tile_size": 4,
-  "macro_lr_stride_shape": [1, 4],
+  "macro_lr_stride_shape": [
+    1,
+    4
+  ],
   "ocrp_token_conditioned_member_bias": true,
   "ocrp_pool_chunk_size": 16384,
   "ocrp_router_chunk_size": 16384,
@@ -89,5 +98,6 @@
     "type": "iso_embedding_ocrp",
     "model_module": "models.SR_4x1_ocrp",
     "model_class": "IsoEmbedding4x1SROCRP"
-  }
+  },
+  "viz_sample_key": "x_230"
 }

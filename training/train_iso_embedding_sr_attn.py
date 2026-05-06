@@ -15,6 +15,7 @@ import importlib
 import inspect
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -123,6 +124,55 @@ def _get_take_first(cfg, split: str):
     key = f"{split.lower()}_take_first"
     val = getattr(cfg, key, None)
     return int(val) if val is not None else None
+
+
+_VIZ_SAMPLE_NAME_RE = re.compile(
+    r"^(?P<ds>.+)_(?P<split>train|val|test)_(?P<which>hr|lr)_(?P<axis>[xyz])_block_(?P<id>\d+)\.npy$",
+    re.IGNORECASE,
+)
+
+
+def _sample_pair_key_from_path(path_str: str | os.PathLike[str]) -> str | None:
+    path = Path(path_str)
+    match = _VIZ_SAMPLE_NAME_RE.match(path.name)
+    if match is None:
+        return None
+    return f"{match.group('axis').lower()}_{int(match.group('id'))}"
+
+
+def _resolve_viz_sample_index(
+    data_loader,
+    sample_index: int,
+    sample_key: str | None = None,
+) -> tuple[int, dict[str, object] | None]:
+    resolved_index = max(0, int(sample_index))
+    dataset = getattr(data_loader, "dataset", None)
+    pairs = getattr(dataset, "pairs", None)
+    if sample_key is None or pairs is None:
+        return resolved_index, None
+
+    sample_key_norm = str(sample_key).strip().lower()
+    if not sample_key_norm:
+        return resolved_index, None
+
+    for idx, pair in enumerate(pairs):
+        if not isinstance(pair, (tuple, list)) or len(pair) < 2:
+            continue
+        lr_path = str(pair[0])
+        hr_path = str(pair[1])
+        pair_key = _sample_pair_key_from_path(lr_path) or _sample_pair_key_from_path(hr_path)
+        if pair_key == sample_key_norm:
+            return int(idx), {
+                "pair_key": pair_key,
+                "lr_path": lr_path,
+                "hr_path": hr_path,
+            }
+
+    print(
+        f"[warning] viz_sample_key={sample_key_norm!r} not found in dataset pairs; "
+        f"falling back to viz_sample_index={resolved_index}."
+    )
+    return resolved_index, None
 
 
 def _unwrap_model(model: torch.nn.Module) -> torch.nn.Module:
@@ -803,10 +853,58 @@ def _load_checkpoint(
 ):
     ckpt = torch.load(ckpt_path, map_location=device)
     _unwrap_model(model).load_state_dict(ckpt["model_state_dict"])
-    if ckpt.get("optimizer_state_dict") is not None:
-        optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+    optimizer_state_loaded = False
+    optimizer_state_dict = ckpt.get("optimizer_state_dict")
+    if optimizer_state_dict is not None:
+        try:
+            optimizer.load_state_dict(optimizer_state_dict)
+            optimizer_state_loaded = True
+        except ValueError as exc:
+            current_opt_state = optimizer.state_dict()
+            saved_groups = optimizer_state_dict.get("param_groups", [])
+            current_groups = current_opt_state.get("param_groups", [])
+            pruned_optimizer_state = None
+            if len(saved_groups) == len(current_groups):
+                removed_param_ids: set[int] = set()
+                pruned_groups = []
+                can_prune = True
+                for saved_group, current_group in zip(saved_groups, current_groups):
+                    saved_params = list(saved_group.get("params", []))
+                    current_params = list(current_group.get("params", []))
+                    if len(saved_params) < len(current_params):
+                        can_prune = False
+                        break
+                    group_copy = dict(saved_group)
+                    group_copy["params"] = saved_params[: len(current_params)]
+                    removed_param_ids.update(saved_params[len(current_params) :])
+                    pruned_groups.append(group_copy)
+                if can_prune and removed_param_ids:
+                    pruned_optimizer_state = dict(optimizer_state_dict)
+                    pruned_optimizer_state["param_groups"] = pruned_groups
+                    pruned_optimizer_state["state"] = {
+                        pid: state
+                        for pid, state in optimizer_state_dict.get("state", {}).items()
+                        if pid not in removed_param_ids
+                    }
+            if pruned_optimizer_state is not None:
+                optimizer.load_state_dict(pruned_optimizer_state)
+                optimizer_state_loaded = True
+                print(
+                    "[warning] Pruned legacy optimizer state for removed disabled-module parameters "
+                    f"while loading {ckpt_path.name}."
+                )
+            else:
+                print(
+                    f"[warning] Skipping optimizer state restore from {ckpt_path.name}: {exc}"
+                )
     if scheduler is not None and ckpt.get("scheduler_state_dict") is not None:
-        scheduler.load_state_dict(ckpt["scheduler_state_dict"])
+        if optimizer_state_dict is None or optimizer_state_loaded:
+            scheduler.load_state_dict(ckpt["scheduler_state_dict"])
+        else:
+            print(
+                f"[warning] Skipping scheduler state restore from {ckpt_path.name} because "
+                "optimizer state could not be restored."
+            )
     start_epoch = int(ckpt.get("epoch", -1)) + 1
     best_val_loss = float(ckpt.get("best_val_loss", float("inf")))
     history = _normalize_history(ckpt.get("history"))
@@ -1013,7 +1111,7 @@ def _render_probe_stage_viz(
     try:
         from utils.stage_probe_utils import (
             decode_probe_stages,
-            extract_scalar_probe_maps,
+            extract_explicit_scalar_probe_maps,
             render_decoded_probe_gallery,
             render_scalar_probe_gallery,
         )
@@ -1172,7 +1270,7 @@ def _render_probe_stage_viz(
             out_png=out_dir / "probe_upsampler_detail_gallery.png",
         )
 
-    scalar_maps = extract_scalar_probe_maps(aux, sample_index=0)
+    scalar_maps = extract_explicit_scalar_probe_maps(aux, sample_index=0)
     scalar_maps.extend(highdim_scalar_maps)
     scalar_gallery_path = None
     if scalar_maps:
@@ -1212,11 +1310,16 @@ def _render_sr_hr_lr_ipf(
     ref_dir: str = "ALL",
     enable_probe_stage_viz: bool = True,
     sample_index: int = 0,
+    sample_key: str | None = None,
     force_cpu: bool = False,
     allow_cpu_fallback: bool = True,
 ) -> bool:
     """
-    Render LR/SR/HR IPF comparison from one selected sample in the first batch.
+    Render LR/SR/HR IPF comparison from one selected sample in the loader.
+
+    `sample_index` is interpreted as a global sample index over the loader's
+    deterministic iteration order, not a per-batch offset. When `sample_key`
+    is provided, it takes precedence and resolves against dataset pair names.
     """
     try:
         from visualization.visualize_sr_results import render_sr_hr_lr_side_by_side
@@ -1224,7 +1327,33 @@ def _render_sr_hr_lr_ipf(
         print(f"[warning] Visualization unavailable (import failed): {exc}")
         return False
 
-    batch = next(iter(data_loader), None)
+    target_index, resolved_pair_meta = _resolve_viz_sample_index(
+        data_loader,
+        sample_index=sample_index,
+        sample_key=sample_key,
+    )
+    batch = None
+    batch_base_index = 0
+    last_nonempty_batch = None
+    last_nonempty_base_index = 0
+    seen = 0
+    for maybe_batch in data_loader:
+        lr_tmp, hr_tmp, _ = _unpack_batch(maybe_batch)
+        batch_size_tmp = 0 if lr_tmp is None else int(lr_tmp.shape[0])
+        if batch_size_tmp <= 0:
+            continue
+        last_nonempty_batch = maybe_batch
+        last_nonempty_base_index = seen
+        if target_index < seen + batch_size_tmp:
+            batch = maybe_batch
+            batch_base_index = seen
+            break
+        seen += batch_size_tmp
+
+    if batch is None:
+        batch = last_nonempty_batch
+        batch_base_index = last_nonempty_base_index
+
     if batch is None:
         print("[warning] Skipping visualization: loader is empty.")
         return False
@@ -1254,12 +1383,55 @@ def _render_sr_hr_lr_ipf(
         # forward pass cannot be wrapped in inference/no-grad mode.
         with torch.enable_grad():
             device = next(model_core.parameters()).device
-            chosen_idx = int(max(0, min(int(sample_index), int(lr.shape[0]) - 1)))
-            if chosen_idx != int(sample_index):
+            chosen_idx = int(max(0, min(target_index - batch_base_index, int(lr.shape[0]) - 1)))
+            resolved_index = int(batch_base_index + chosen_idx)
+            if resolved_index != target_index:
                 print(
-                    f"[warning] viz_sample_index={sample_index} out of range for batch size={int(lr.shape[0])}; "
-                    f"using sample_index={chosen_idx}."
+                    f"[warning] viz_sample_index={target_index} out of range for loader; "
+                    f"using sample_index={resolved_index}."
                 )
+            out_png.parent.mkdir(parents=True, exist_ok=True)
+            viz_meta: dict[str, object] = {
+                "requested_sample_index": int(sample_index),
+                "requested_sample_key": None if sample_key is None else str(sample_key),
+                "resolved_sample_index": resolved_index,
+                "resolved_batch_base_index": int(batch_base_index),
+                "resolved_batch_local_index": int(chosen_idx),
+                "ref_dir": str(ref_dir),
+            }
+            if resolved_pair_meta is not None:
+                viz_meta.update(resolved_pair_meta)
+            elif hasattr(data_loader, "dataset") and hasattr(data_loader.dataset, "pairs"):
+                pairs = getattr(data_loader.dataset, "pairs", None)
+                if isinstance(pairs, (tuple, list)) and 0 <= resolved_index < len(pairs):
+                    pair = pairs[resolved_index]
+                    if isinstance(pair, (tuple, list)) and len(pair) >= 2:
+                        lr_path = str(pair[0])
+                        hr_path = str(pair[1])
+                        viz_meta.update(
+                            {
+                                "pair_key": _sample_pair_key_from_path(lr_path)
+                                or _sample_pair_key_from_path(hr_path),
+                                "lr_path": lr_path,
+                                "hr_path": hr_path,
+                            }
+                        )
+            with open(out_png.parent / "selected_sample.json", "w") as f:
+                json.dump(viz_meta, f, indent=2)
+            print(
+                "Visualization sample: "
+                f"index={viz_meta['resolved_sample_index']}"
+                + (
+                    f", key={viz_meta['pair_key']}"
+                    if "pair_key" in viz_meta and viz_meta["pair_key"] is not None
+                    else ""
+                )
+                + (
+                    f", lr={viz_meta['lr_path']}"
+                    if "lr_path" in viz_meta
+                    else ""
+                )
+            )
 
             lr0 = _to_hwc_quat_single(lr[chosen_idx].to(device=device, dtype=torch.float32))
             hr0 = _to_hwc_quat_single(hr[chosen_idx].to(device=device, dtype=torch.float32))
@@ -1325,7 +1497,6 @@ def _render_sr_hr_lr_ipf(
             hr_np = hr0.detach().cpu().numpy()
             sr_np = q_sr_flat.reshape(hr_h, hr_w, 4).detach().cpu().numpy()
 
-        out_png.parent.mkdir(parents=True, exist_ok=True)
         render_sr_hr_lr_side_by_side(
             sr_q_arr=sr_np,
             hr_q_arr=hr_np,
@@ -1423,9 +1594,11 @@ def _render_final_probe_split_viz(
     out_root: Path,
     ref_dir: str = "ALL",
     enable_probe_stage_viz: bool = True,
+    sample_index: int = 0,
+    sample_key: str | None = None,
     force_cpu: bool = False,
 ) -> None:
-    """Render end-of-training probe-stage visualizations for val[0] and test[0]."""
+    """Render end-of-training probe-stage visualizations for a selected val/test sample."""
     if not bool(enable_probe_stage_viz):
         return
 
@@ -1433,7 +1606,12 @@ def _render_final_probe_split_viz(
         data_loader = loaders.get(split_key)
         if data_loader is None:
             continue
-        split_out_dir = out_root / f"{split_key}_sample0000"
+        sample_label = (
+            str(sample_key).strip().lower()
+            if sample_key is not None and str(sample_key).strip()
+            else f"{int(sample_index):04d}"
+        )
+        split_out_dir = out_root / f"{split_key}_sample{sample_label}"
         _render_sr_hr_lr_ipf(
             model_core=model_core,
             data_loader=data_loader,
@@ -1441,7 +1619,8 @@ def _render_final_probe_split_viz(
             out_png=split_out_dir / "lr_sr_hr_ipf.png",
             ref_dir=ref_dir,
             enable_probe_stage_viz=True,
-            sample_index=0,
+            sample_index=sample_index,
+            sample_key=sample_key,
             force_cpu=force_cpu,
         )
 
@@ -1736,7 +1915,7 @@ def main() -> None:
         "decoder_backend": str(getattr(cfg, "decoder_backend", "optimizing")),
         "feature_irreps": str(getattr(cfg, "feature_irreps", "full")),
         "window_size": int(getattr(cfg, "window_size", 5)),
-        "kmax_slots": int(getattr(cfg, "kmax_slots", 4)),
+        "kmax_slots": int(getattr(cfg, "kmax_slots", 6)),
         "cluster_threshold_deg": float(getattr(cfg, "cluster_threshold_deg", 2.0)),
         "cluster_connectivity": int(getattr(cfg, "cluster_connectivity", 8)),
         "num_experts": int(getattr(cfg, "num_experts", 12)),
@@ -1744,7 +1923,15 @@ def main() -> None:
         "phase_dim": int(getattr(cfg, "phase_dim", 32)),
         "ocrp_router_hidden_dim": int(getattr(cfg, "ocrp_router_hidden_dim", 128)),
         "ocrp_router_conv_hidden_dim": int(getattr(cfg, "ocrp_router_conv_hidden_dim", 64)),
+        "ocrp_router_slot_mass_power": float(getattr(cfg, "ocrp_router_slot_mass_power", 0.25)),
+        "ocrp_router_uniform_slot_mix": float(getattr(cfg, "ocrp_router_uniform_slot_mix", 0.75)),
+        "ocrp_router_use_slot_type_meta": bool(getattr(cfg, "ocrp_router_use_slot_type_meta", True)),
+        "ocrp_router_geom_logit_bias": float(getattr(cfg, "ocrp_router_geom_logit_bias", 0.0)),
         "ocrp_proposal_hidden_dim": int(getattr(cfg, "ocrp_proposal_hidden_dim", 128)),
+        "ocrp_slot_ratio_loss_weight": float(getattr(cfg, "ocrp_slot_ratio_loss_weight", 0.0)),
+        "ocrp_router_geom_loss_weight": float(getattr(cfg, "ocrp_router_geom_loss_weight", 0.0)),
+        "ocrp_router_geom_boundary_only": bool(getattr(cfg, "ocrp_router_geom_boundary_only", False)),
+        "ocrp_slot_ratio_temperature": float(getattr(cfg, "ocrp_slot_ratio_temperature", 1.0)),
         "ocrp_straight_through": bool(getattr(cfg, "ocrp_straight_through", True)),
         "ocrp_mode": str(getattr(cfg, "ocrp_mode", "pixel_patch")),
         "macro_lr_tile_size": int(getattr(cfg, "macro_lr_tile_size", 3)),
@@ -1815,6 +2002,12 @@ def main() -> None:
     viz_ref_dir = str(getattr(cfg, "viz_ref_dir", "ALL"))
     viz_enable_probe_stage_viz = bool(getattr(cfg, "viz_enable_probe_stage_viz", True))
     viz_sample_index = int(getattr(cfg, "viz_sample_index", 0))
+    viz_sample_key_cfg = getattr(cfg, "viz_sample_key", None)
+    viz_sample_key = (
+        None
+        if viz_sample_key_cfg is None or not str(viz_sample_key_cfg).strip()
+        else str(viz_sample_key_cfg).strip()
+    )
     viz_force_cpu = bool(getattr(cfg, "viz_force_cpu", False))
     memory_debug_every = int(getattr(cfg, "memory_debug_every", 0))
     cuda_empty_cache_every = int(getattr(cfg, "cuda_empty_cache_every", 0))
@@ -1922,6 +2115,7 @@ def main() -> None:
                 ref_dir=viz_ref_dir,
                 enable_probe_stage_viz=viz_enable_probe_stage_viz,
                 sample_index=viz_sample_index,
+                sample_key=viz_sample_key,
                 force_cpu=viz_force_cpu,
             )
 
@@ -1935,12 +2129,13 @@ def main() -> None:
     final_viz_dir = exp_dir / "visualizations" / "final"
     _render_sr_hr_lr_ipf(
         model_core=_unwrap_model(model),
-        data_loader=loaders["test"] if "test" in loaders else loaders["val"],
+        data_loader=loaders["val"],
         sym_class=sym_class,
         out_png=final_viz_dir / "lr_sr_hr_ipf.png",
         ref_dir=viz_ref_dir,
         enable_probe_stage_viz=viz_enable_probe_stage_viz,
         sample_index=viz_sample_index,
+        sample_key=viz_sample_key,
         force_cpu=viz_force_cpu,
     )
     _render_final_probe_split_viz(
@@ -1950,6 +2145,8 @@ def main() -> None:
         out_root=final_viz_dir,
         ref_dir=viz_ref_dir,
         enable_probe_stage_viz=viz_enable_probe_stage_viz,
+        sample_index=viz_sample_index,
+        sample_key=viz_sample_key,
         force_cpu=viz_force_cpu,
     )
 

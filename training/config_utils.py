@@ -61,6 +61,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "save_every": 5,
     "viz_every": 5,
     "viz_ref_dir": "ALL",
+    "viz_sample_index": 0,
+    "viz_sample_key": None,
     "num_workers": 0,
     "persistent_workers": False,
     "prefetch_factor": 2,

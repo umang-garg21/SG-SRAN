@@ -38,7 +38,7 @@ from training.data_loading import build_dataloader
 from utils.stage_probe_utils import (
     compute_attention_probe_traces,
     decode_probe_stages,
-    extract_scalar_probe_maps,
+    extract_explicit_scalar_probe_maps,
     pick_most_free_cuda_gpu,
     render_attention_probe_gallery,
     render_decoded_probe_gallery,
@@ -441,7 +441,7 @@ def main() -> None:
         except ValueError as exc:
             print(f"Skipping SDF comparison figure: {exc}")
 
-    scalar_maps = extract_scalar_probe_maps(aux, sample_index=0)
+    scalar_maps = extract_explicit_scalar_probe_maps(aux, sample_index=0)
     scalar_gallery_path = None
     if scalar_maps:
         scalar_gallery_path = render_scalar_probe_gallery(

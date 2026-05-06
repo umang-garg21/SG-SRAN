@@ -48,5 +48,6 @@
   "smoke_test": false,
   "model": {
     "type": "iso_embedding_sr_attn"
-  }
+  },
+  "viz_sample_key": "x_230"
 }

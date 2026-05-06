@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Decode and visualize OCRP macro stages for a single dataset sample."""
+"""Decode and visualize OCRP stages for a single dataset sample."""
 
 from __future__ import annotations
 
@@ -28,7 +28,6 @@ from inference.infer_iso_embedding_sr_attn import (  # noqa: E402
     _to_hwc_quat_single,
     _unpack_batch,
 )
-from models.SR_ocrp import IsoEmbeddingSROCRP  # noqa: E402
 from training.config_utils import load_and_prepare_config  # noqa: E402
 from training.data_loading import build_dataloader  # noqa: E402
 from utils.stage_probe_utils import (  # noqa: E402
@@ -42,7 +41,7 @@ from utils.symmetry_utils import resolve_symmetry  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Probe OCRP macro stages for a single sample.")
+    parser = argparse.ArgumentParser(description="Probe OCRP stages for a single sample.")
     parser.add_argument("--exp_dir", required=True, type=str, help="Experiment directory.")
     parser.add_argument(
         "--config",
@@ -68,7 +67,7 @@ def parse_args() -> argparse.Namespace:
         "--out_dir",
         type=str,
         default=None,
-        help="Output directory. Defaults to <exp_dir>/analysis/ocrp_macro_stage_probe/<split>_sampleXXXX.",
+        help="Output directory. Defaults to <exp_dir>/analysis/ocrp_stage_probe/<split>_sampleXXXX.",
     )
     parser.add_argument(
         "--gpu_ids",
@@ -98,7 +97,7 @@ def _resolve_config_path(exp_dir: Path, config_arg: str | None) -> Path:
 
 
 def _default_out_dir(exp_dir: Path, split: str, sample_idx: int) -> Path:
-    return exp_dir / "analysis" / "ocrp_macro_stage_probe" / f"{str(split).lower()}_sample{int(sample_idx):04d}"
+    return exp_dir / "analysis" / "ocrp_stage_probe" / f"{str(split).lower()}_sample{int(sample_idx):04d}"
 
 
 def _as_unbatched(x: Any) -> Any:
@@ -117,20 +116,21 @@ def _build_probe_stage(name: str, feat: torch.Tensor, shape: tuple[int, int]) ->
     }
 
 
-def _assemble_macro_feature_map(
-    model_obj: IsoEmbeddingSROCRP,
-    patch_tensor: torch.Tensor,
-    grid_shape: tuple[int, int],
-    hr_shape: tuple[int, int],
-) -> torch.Tensor:
-    squeeze = patch_tensor.dim() == 3
-    patch_batched = patch_tensor.unsqueeze(0) if squeeze else patch_tensor
-    feat_hr = model_obj.ocrp._assemble_macro_patch_tokens(
-        patch_batched,
-        grid_shape=grid_shape,
-        hr_crop_shape=hr_shape,
-    )
-    return feat_hr.squeeze(0) if squeeze else feat_hr
+def _decode_stage_collection(
+    model,
+    stages: list[dict[str, Any]],
+    hr_target_hwc: torch.Tensor,
+) -> list[dict[str, Any]]:
+    decoded = decode_probe_stages(model, stages, sample_index=0)
+    return [
+        {
+            "name": item["name"],
+            "shape": item["shape"],
+            "quat_hwc": item["quat_hwc"],
+            "hr_target_hwc": hr_target_hwc,
+        }
+        for item in decoded
+    ]
 
 
 def _stage_error_stats(
@@ -171,13 +171,17 @@ def _stage_note(name: str) -> str:
     if name.startswith("support_slot") and name.endswith("_anchor_ctx"):
         return "Current slot anchor feature decoded on the support grid."
     if name.startswith("support_slot") and name.endswith("_pooled_mean"):
-        return "Within-slot pooled summary, averaged over HR patch tokens."
+        return "Token-wise within-slot pooled context, averaged over HR patch tokens."
     if name.startswith("slot") and name.endswith("_proposal_hr"):
         return "Decoded HR patch proposal emitted by this slot before routing selection."
     if name == "selected_patch_out_hr":
-        return "Hard-routed OCRP output before the HR post-conv."
+        return "Hard-routed OCRP output before the HR post-conv stack."
     if name == "hr_conv1_post_ocrp":
-        return "HR post-conv refinement applied after OCRP assembly."
+        return "HR conv 1 output."
+    if name == "hr_conv2_post_ocrp":
+        return "HR conv 2 output."
+    if name == "hr_conv_out":
+        return "Final HR post-conv stack output."
     if name == "sr_output":
         return "Final decoded SR prediction."
     if name == "hr_target":
@@ -239,6 +243,9 @@ def _write_summary_md(
     split: str,
     sample_idx: int,
     device: torch.device,
+    model_name: str,
+    ocrp_mode: str,
+    anchor_builder: str,
     support_grid_shape: tuple[int, int],
     hr_shape: tuple[int, int],
     active_slots: list[int],
@@ -248,13 +255,16 @@ def _write_summary_md(
     metrics_rows: list[dict[str, Any]],
 ) -> None:
     lines: list[str] = []
-    lines.append("# OCRP Macro Stage Probe")
+    lines.append("# OCRP Stage Probe")
     lines.append("")
     lines.append(f"- Experiment: `{exp_dir}`")
     lines.append(f"- Config: `{config_path}`")
     lines.append(f"- Checkpoint: `{checkpoint_path}`")
     lines.append(f"- Split / sample: `{split}` / `{sample_idx}`")
     lines.append(f"- Device: `{device}`")
+    lines.append(f"- Model: `{model_name}`")
+    lines.append(f"- OCRP mode: `{ocrp_mode}`")
+    lines.append(f"- Anchor builder: `{anchor_builder}`")
     lines.append(f"- Support grid: `{support_grid_shape[0]}x{support_grid_shape[1]}`")
     lines.append(f"- HR shape: `{hr_shape[0]}x{hr_shape[1]}`")
     lines.append(f"- Active slots: `{active_slots}`")
@@ -284,21 +294,32 @@ def _write_summary_md(
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def _decode_stage_collection(
-    model: IsoEmbeddingSROCRP,
-    stages: list[dict[str, Any]],
-    hr_target_hwc: torch.Tensor,
-) -> list[dict[str, Any]]:
-    decoded = decode_probe_stages(model, stages, sample_index=0)
-    return [
-        {
-            "name": item["name"],
-            "shape": item["shape"],
-            "quat_hwc": item["quat_hwc"],
-            "hr_target_hwc": hr_target_hwc,
-        }
-        for item in decoded
-    ]
+def _assemble_ocrp_feature_map(
+    model_obj,
+    patch_tensor: torch.Tensor,
+    support_grid_shape: tuple[int, int],
+    hr_shape: tuple[int, int],
+    lr_shape: tuple[int, int],
+) -> torch.Tensor:
+    squeeze = patch_tensor.dim() == 3
+    patch_batched = patch_tensor.unsqueeze(0) if squeeze else patch_tensor
+    if str(model_obj.ocrp.ocrp_mode) == "pixel_patch":
+        feat_hr = model_obj.ocrp._assemble_patch_tokens(patch_batched, lr_shape=lr_shape)
+    else:
+        feat_hr = model_obj.ocrp._assemble_macro_patch_tokens(
+            patch_batched,
+            grid_shape=support_grid_shape,
+            hr_crop_shape=hr_shape,
+        )
+    return feat_hr.squeeze(0) if squeeze else feat_hr
+
+
+def _tensors_differ(a: Any, b: Any) -> bool:
+    if not isinstance(a, torch.Tensor) or not isinstance(b, torch.Tensor):
+        return True
+    if a.shape != b.shape:
+        return True
+    return not torch.equal(a, b)
 
 
 def main() -> None:
@@ -321,16 +342,19 @@ def main() -> None:
     )
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    run_config_path = exp_dir / "logs" / f"ocrp_macro_stage_probe_{str(args.split).lower()}_run_config.json"
-    cfg = load_and_prepare_config(config_path, run_config_path)
-
+    cfg = load_and_prepare_config(config_path, out_dir / "resolved_probe_config.json")
     if torch.cuda.is_available():
         device = torch.device(f"cuda:{selected_gpu}" if selected_gpu is not None else "cuda")
     else:
         device = torch.device("cpu")
+
     checkpoint_path = _resolve_checkpoint(cfg, exp_dir, args.checkpoint)
     if not checkpoint_path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+
+    model = _load_model_from_checkpoint(cfg, checkpoint_path, device=device)
+    if not hasattr(model, "ocrp") or not hasattr(model, "_forward_sr_features"):
+        raise TypeError(f"Expected an OCRP model with _forward_sr_features, got {type(model).__name__}")
 
     loader = build_dataloader(
         dataset_root=cfg.dataset_root,
@@ -345,12 +369,6 @@ def main() -> None:
         seed=int(getattr(cfg, "seed", 42)),
         return_lr_boundary_map=False,
     )
-
-    model = _load_model_from_checkpoint(cfg, checkpoint_path, device=device)
-    if not isinstance(model, IsoEmbeddingSROCRP):
-        raise TypeError(f"Expected IsoEmbeddingSROCRP, got {type(model).__name__}")
-    if str(model.ocrp.ocrp_mode) != "macro_tile":
-        raise ValueError(f"Expected OCRP macro_tile mode, got {model.ocrp.ocrp_mode!r}")
 
     selected_batch = None
     for idx, batch in enumerate(loader):
@@ -379,7 +397,6 @@ def main() -> None:
         sr_flat = model.decode(feat_hr)
 
     aux = {key: _as_unbatched(val) for key, val in aux.items()}
-
     support_grid_shape = tuple(int(v) for v in aux["support_grid_shape"])
     hr_shape = tuple(int(v) for v in hr_shape)
 
@@ -398,16 +415,27 @@ def main() -> None:
         _build_probe_stage("encode_lr", feat_lr, lr_shape),
     ]
     feat_lr_pre_ocrp = aux.get("feat_lr_pre_ocrp")
-    if isinstance(feat_lr_pre_ocrp, torch.Tensor):
+    if isinstance(feat_lr_pre_ocrp, torch.Tensor) and _tensors_differ(feat_lr_pre_ocrp, feat_lr):
         main_probe_stages.append(_build_probe_stage("lr_conv1_pre_ocrp", feat_lr_pre_ocrp, lr_shape))
 
     feat_hr_raw_ocrp = aux.get("feat_hr_raw_ocrp")
     if isinstance(feat_hr_raw_ocrp, torch.Tensor):
         main_probe_stages.append(_build_probe_stage("selected_patch_out_hr", feat_hr_raw_ocrp, hr_shape))
 
-    feat_hr_post = aux.get("feat_hr_post_hr_conv")
-    if isinstance(feat_hr_post, torch.Tensor):
-        main_probe_stages.append(_build_probe_stage("hr_conv1_post_ocrp", feat_hr_post, hr_shape))
+    feat_hr_post_hr_conv1 = aux.get("feat_hr_post_hr_conv1")
+    if isinstance(feat_hr_post_hr_conv1, torch.Tensor) and bool(getattr(model, "use_hr_conv1", False)):
+        main_probe_stages.append(_build_probe_stage("hr_conv1_post_ocrp", feat_hr_post_hr_conv1, hr_shape))
+
+    feat_hr_post_hr_conv2 = aux.get("feat_hr_post_hr_conv2")
+    if isinstance(feat_hr_post_hr_conv2, torch.Tensor) and bool(getattr(model, "use_hr_conv2", False)):
+        main_probe_stages.append(_build_probe_stage("hr_conv2_post_ocrp", feat_hr_post_hr_conv2, hr_shape))
+
+    feat_hr_post_hr_conv = aux.get("feat_hr_post_hr_conv")
+    last_main_feat = main_probe_stages[-1]["feat"] if main_probe_stages else None
+    if isinstance(feat_hr_post_hr_conv, torch.Tensor) and (
+        last_main_feat is None or _tensors_differ(feat_hr_post_hr_conv, last_main_feat)
+    ):
+        main_probe_stages.append(_build_probe_stage("hr_conv_out", feat_hr_post_hr_conv, hr_shape))
 
     support_probe_stages: list[dict[str, Any]] = []
     slot_ctx = aux.get("slot_ctx")
@@ -436,11 +464,12 @@ def main() -> None:
     patch_prop = aux.get("patch_prop")
     if isinstance(patch_prop, torch.Tensor):
         for slot_idx in active_slots:
-            proposal_feat_hr = _assemble_macro_feature_map(
+            proposal_feat_hr = _assemble_ocrp_feature_map(
                 model,
                 patch_prop[:, slot_idx, :, :],
-                grid_shape=support_grid_shape,
+                support_grid_shape=support_grid_shape,
                 hr_shape=hr_shape,
+                lr_shape=lr_shape,
             )
             proposal_probe_stages.append(
                 _build_probe_stage(
@@ -455,7 +484,6 @@ def main() -> None:
     proposal_decoded_rows = _decode_stage_collection(model, proposal_probe_stages, hr_hwc)
 
     sr_hwc = sr_flat.reshape(hr_shape[0], hr_shape[1], 4).detach().cpu()
-
     lr_row = {
         "name": "lr_input",
         "shape": tuple(int(v) for v in lr_hwc.shape[:2]),
@@ -474,28 +502,32 @@ def main() -> None:
         "quat_hwc": hr_hwc,
         "hr_target_hwc": hr_hwc,
     }
-
     sym_class = resolve_symmetry(getattr(cfg, "symmetry_group", "O"))
 
     main_gallery_rows = [lr_row, *main_decoded_rows, sr_row, hr_row]
-    support_gallery_rows = [lr_row, *support_decoded_rows, hr_row]
-    proposal_gallery_rows = [lr_row, *proposal_decoded_rows, *main_decoded_rows[-2:], sr_row, hr_row]
-
     main_gallery_path = render_decoded_probe_gallery(
         main_gallery_rows,
         sym_class=sym_class,
         out_png=out_dir / "decoded_main_gallery.png",
     )
-    support_gallery_path = render_decoded_probe_gallery(
-        support_gallery_rows,
-        sym_class=sym_class,
-        out_png=out_dir / "decoded_support_context_gallery.png",
-    )
-    proposal_gallery_path = render_decoded_probe_gallery(
-        proposal_gallery_rows,
-        sym_class=sym_class,
-        out_png=out_dir / "decoded_slot_proposal_gallery.png",
-    )
+
+    support_gallery_path = None
+    if support_decoded_rows:
+        support_gallery_rows = [lr_row, *support_decoded_rows, hr_row]
+        support_gallery_path = render_decoded_probe_gallery(
+            support_gallery_rows,
+            sym_class=sym_class,
+            out_png=out_dir / "decoded_support_context_gallery.png",
+        )
+
+    proposal_gallery_path = None
+    if proposal_decoded_rows:
+        proposal_gallery_rows = [lr_row, *proposal_decoded_rows, sr_row, hr_row]
+        proposal_gallery_path = render_decoded_probe_gallery(
+            proposal_gallery_rows,
+            sym_class=sym_class,
+            out_png=out_dir / "decoded_slot_proposal_gallery.png",
+        )
 
     unique_metric_rows: list[dict[str, Any]] = []
     seen_names: set[str] = set()
@@ -511,9 +543,14 @@ def main() -> None:
         out_csv=out_dir / "stage_metrics.csv",
     )
 
+    anchor_builder = type(model.ocrp.context_builder).__name__
+    ocrp_mode = str(model.ocrp.ocrp_mode)
     bundle = {
         "split": str(args.split),
         "sample_idx": int(args.sample_idx),
+        "model_name": f"{model.__class__.__module__}.{model.__class__.__name__}",
+        "ocrp_mode": ocrp_mode,
+        "anchor_builder": anchor_builder,
         "support_grid_shape": support_grid_shape,
         "hr_shape": hr_shape,
         "active_slots": active_slots,
@@ -543,6 +580,9 @@ def main() -> None:
         split=str(args.split),
         sample_idx=int(args.sample_idx),
         device=device,
+        model_name=f"{model.__class__.__module__}.{model.__class__.__name__}",
+        ocrp_mode=ocrp_mode,
+        anchor_builder=anchor_builder,
         support_grid_shape=support_grid_shape,
         hr_shape=hr_shape,
         active_slots=active_slots,
@@ -558,7 +598,9 @@ def main() -> None:
         "checkpoint": str(checkpoint_path),
         "split": str(args.split),
         "sample_idx": int(args.sample_idx),
-        "device": str(device),
+        "model_name": f"{model.__class__.__module__}.{model.__class__.__name__}",
+        "ocrp_mode": ocrp_mode,
+        "anchor_builder": anchor_builder,
         "support_grid_shape": list(support_grid_shape),
         "hr_shape": list(hr_shape),
         "active_slots": active_slots,
@@ -568,8 +610,8 @@ def main() -> None:
         "support_probe_stage_names": [item["name"] for item in support_probe_stages],
         "proposal_probe_stage_names": [item["name"] for item in proposal_probe_stages],
         "decoded_main_gallery": str(main_gallery_path),
-        "decoded_support_context_gallery": str(support_gallery_path),
-        "decoded_slot_proposal_gallery": str(proposal_gallery_path),
+        "decoded_support_context_gallery": str(support_gallery_path) if support_gallery_path is not None else None,
+        "decoded_slot_proposal_gallery": str(proposal_gallery_path) if proposal_gallery_path is not None else None,
         "stage_metrics_csv": str(out_dir / "stage_metrics.csv"),
         "summary_md": str(out_dir / "summary.md"),
         "probe_bundle": str(out_dir / "probe_bundle.pt"),
@@ -578,11 +620,13 @@ def main() -> None:
         json.dump(metadata, f, indent=2)
 
     print(f"Saved main decoded gallery: {main_gallery_path}")
-    print(f"Saved support-context gallery: {support_gallery_path}")
-    print(f"Saved slot-proposal gallery: {proposal_gallery_path}")
+    if support_gallery_path is not None:
+        print(f"Saved support-context gallery: {support_gallery_path}")
+    if proposal_gallery_path is not None:
+        print(f"Saved slot-proposal gallery: {proposal_gallery_path}")
     print(f"Saved stage metrics: {out_dir / 'stage_metrics.csv'}")
     print(f"Saved summary: {out_dir / 'summary.md'}")
-    print(f"Saved bundle: {out_dir / 'probe_bundle.pt'}")
+    print(f"Saved metadata: {out_dir / 'probe_metadata.json'}")
 
 
 if __name__ == "__main__":

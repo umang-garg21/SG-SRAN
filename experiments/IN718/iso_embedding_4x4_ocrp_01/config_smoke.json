@@ -26,12 +26,14 @@
   "conv_feature_mask_temperature": 32.0,
   "use_residual_lr1": true,
   "window_size": 5,
-  "kmax_slots": 4,
+  "kmax_slots": 6,
   "cluster_threshold_deg": 2.0,
   "cluster_connectivity": 8,
   "phase_dim": 32,
   "ocrp_router_hidden_dim": 128,
   "ocrp_router_conv_hidden_dim": 64,
+  "ocrp_router_slot_mass_power": 0.25,
+  "ocrp_router_uniform_slot_mix": 0.75,
   "ocrp_proposal_hidden_dim": 128,
   "ocrp_straight_through": true,
   "ocrp_token_conditioned_member_bias": true,
@@ -48,7 +50,7 @@
   "use_hr_conv3": true,
   "hr_conv3_kernel_size": 7,
   "hr_conv3_residual_weight": 0.3,
-  "hr_conv_feature_mask_soft": true,
+  "hr_conv_feature_mask_soft": false,
   "use_residual_hr1": true,
   "use_residual_hr2": true,
   "use_residual_hr3": true,
@@ -87,5 +89,6 @@
     "type": "iso_embedding_ocrp",
     "model_module": "models.SR_ocrp",
     "model_class": "IsoEmbeddingSROCRP"
-  }
+  },
+  "viz_sample_key": "x_230"
 }

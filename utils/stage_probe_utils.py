@@ -178,65 +178,45 @@ def _pick_aux_tensor(x: Any, sample_index: int = 0) -> torch.Tensor | None:
     return None
 
 
-def extract_scalar_probe_maps(
+def extract_explicit_scalar_probe_maps(
     aux: dict[str, Any],
     sample_index: int = 0,
 ) -> list[dict[str, Any]]:
-    """Collect scalar diagnostics from the modified one-sided model aux dict."""
+    """Collect scalar probe maps explicitly supplied by the model or caller."""
+
+    raw_maps = aux.get("scalar_probe_maps")
+    if not isinstance(raw_maps, (list, tuple)):
+        return []
 
     maps: list[dict[str, Any]] = []
-
-    evidence = aux.get("tensor")
-    ev = _pick_aux_tensor(evidence, sample_index=sample_index)
-    if ev is not None:
-        if ev.dim() == 3:
-            ev_mean = ev.mean(dim=0)
+    for idx, item in enumerate(raw_maps):
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name", f"scalar_probe_{idx}"))
+        array_obj = item.get("array")
+        if isinstance(array_obj, torch.Tensor):
+            picked = _pick_aux_tensor(array_obj, sample_index=sample_index)
+            if picked is None:
+                continue
+            array_np = picked.detach().cpu().numpy()
+        elif isinstance(array_obj, np.ndarray):
+            array_np = array_obj
         else:
-            ev_mean = ev
-        maps.append({"name": "evidence_mean", "array": ev_mean.numpy(), "cmap": "inferno"})
-
-    for key, cmap in (
-        ("boundary_lr_1px", "gray"),
-        ("boundary_hr_1px", "gray"),
-        ("center_valid_hr", "gray"),
-    ):
-        arr = _pick_aux_tensor(aux.get(key), sample_index=sample_index)
-        if arr is not None:
-            maps.append({"name": key, "array": arr.squeeze().numpy(), "cmap": cmap, "vmin": 0.0, "vmax": 1.0})
-
-    owner = _pick_aux_tensor(aux.get("hr_to_lr_owner"), sample_index=sample_index)
-    if owner is not None:
-        maps.append({"name": "hr_to_lr_owner", "array": owner.numpy(), "cmap": "nipy_spectral"})
-
-    boundary_prob = _pick_aux_tensor(aux.get("boundary_prob_hr"), sample_index=sample_index)
-    if boundary_prob is not None:
-        maps.append({"name": "boundary_prob_hr", "array": boundary_prob.squeeze().numpy(), "cmap": "magma", "vmin": 0.0, "vmax": 1.0})
-
-    boundary_logits_hr_refined = _pick_aux_tensor(aux.get("boundary_logits_hr_refined"), sample_index=sample_index)
-    if boundary_logits_hr_refined is not None:
+            try:
+                array_np = np.asarray(array_obj)
+            except Exception:
+                continue
+        if array_np.size == 0:
+            continue
         maps.append(
             {
-                "name": "boundary_prob_hr_refined",
-                "array": torch.sigmoid(boundary_logits_hr_refined).squeeze().numpy(),
-                "cmap": "magma",
-                "vmin": 0.0,
-                "vmax": 1.0,
+                "name": name,
+                "array": array_np,
+                "cmap": item.get("cmap", "viridis"),
+                "vmin": item.get("vmin", None),
+                "vmax": item.get("vmax", None),
             }
         )
-
-    for key, cmap in (
-        ("sdf_hr", "viridis"),
-        ("boundary_band_hr", "inferno"),
-    ):
-        arr = _pick_aux_tensor(aux.get(key), sample_index=sample_index)
-        if arr is not None:
-            maps.append({"name": key, "array": arr.squeeze().numpy(), "cmap": cmap})
-
-    side_probs = _pick_aux_tensor(aux.get("side_probs_hr"), sample_index=sample_index)
-    if side_probs is not None and side_probs.dim() == 3 and side_probs.shape[0] == 2:
-        maps.append({"name": "side_prob_plus", "array": side_probs[0].numpy(), "cmap": "cividis", "vmin": 0.0, "vmax": 1.0})
-        maps.append({"name": "side_prob_minus", "array": side_probs[1].numpy(), "cmap": "cividis", "vmin": 0.0, "vmax": 1.0})
-
     return maps
 
 

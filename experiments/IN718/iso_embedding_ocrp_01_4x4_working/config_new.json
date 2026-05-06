@@ -72,5 +72,6 @@
     "type": "iso_embedding_ocrp",
     "model_module": "models.SR_ocrp",
     "model_class": "IsoEmbeddingSROCRP"
-  }
+  },
+  "viz_sample_key": "x_230"
 }
