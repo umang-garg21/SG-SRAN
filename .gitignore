@@ -241,11 +241,10 @@ checkpoint_*/*.npy
 *.bin
 *.model
 *.weights
-
+*.png
 out/tmp_hcp_export.csv
 
 # Generated figures and diagnostics
-*.png
 diagnostics/
 outputs/
 analysis/_dataset_comparison_tmp/

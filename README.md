@@ -1,21 +1,20 @@
 # Reynolds-QSR: OCRP 4x4 Repository
 
 ![OCRP 4x4 task overview](assets/image.png)
-Task: recover high-resolution crystalline orientation fields from low-resolution
-EBSD quaternion maps. OCRP is the network used to address symmetry-crossings and
-grain-boundary aberrations that arise in naive SR architectures:
+**Task overview.** Recover high-resolution crystalline orientation fields from
+low-resolution EBSD quaternion maps. OCRP (Orientation-Cluster Routed Patches)
+addresses key failure modes in baseline SR:
 - Symmetry boundary crossings: interpolate across symmetry zones via irreps.
 - Grain boundary interpolation: preserve discontinuities with masking.
-- Limited learnability from local context: use routed slots to capture broader
+- Limited learnability from local context: route slots to capture broader
   material statistics.
-- Interpretability gaps in learnable SR: expose slot usage and routing signals.
-The figure summarizes the problem setting and the qualitative gains.
+- Interpretability gaps in learned SR: expose slot usage and routing signals.
 
 ![OCRP 4x4 qualitative results](Q-RBSA/images/qual_results.jpg)
-Results overview comparing LR, SR, and HR orientation reconstructions.
+**Qualitative results.** LR, SR, and HR orientation reconstructions.
 
 ![3D EBSD projection](Q-RBSA/images/3D_EBSD_framework.jpg)
-3D EBSD projection used to contextualize the super-resolution targets.
+**3D EBSD projection.** Context for the super-resolution targets.
 
 This repository focuses on OCRP 4x4 quaternion super-resolution for crystalline
 orientation fields. The core workflow is:
