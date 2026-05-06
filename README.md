@@ -1,6 +1,6 @@
 # Reynolds-QSR: OCRP 4x4 Repository
 
-![OCRP 4x4 task overview](image.png)
+![OCRP 4x4 task overview](assets/image.png)
 Task: recover high-resolution crystalline orientation fields from low-resolution
 EBSD quaternion maps. OCRP is the network used to address symmetry-crossings and
 grain-boundary aberrations that arise in naive SR architectures:
@@ -148,54 +148,3 @@ python analysis/probe_ocrp_macro_stages.py \
 The diagram highlights the OCRP routing block: local patch banks form clustered
 orientation slots, the router assigns HR patch tokens, and the assembled HR
 features are refined before decoding back to quaternions.
-\mathcal{L}_{\mathrm{SR}} &= \frac{1}{BN_{\mathrm{HR}}}
-\sum_{b,n}
-\left\|
-\widehat{\mathbf{z}}_{\mathrm{HR},b,n}
--
-\mathbf{z}_{\mathrm{HR},b,n}
-\right\|_2^2.
-\end{align}
-\(E_{a1}\) targets are computed without gradient flow (detached).
-
-\section{Inference}
-\[
-\widehat{\mathbf{Q}}_{\mathrm{SR}}=
-\mathrm{Decode}_{a1}\!\left(
-P_{\mathrm{full}\to a1}\!\left(
-\mathrm{Attention}\!\left(
-\mathrm{Conv}_{\mathrm{HR1}}\!\left(
-\mathrm{UpConv}\!\left(
-\mathrm{Conv}_{\mathrm{LR2}}\!\left(
-\mathrm{Conv}_{\mathrm{LR1}}\!\left(
-E_{a1}(\mathbf{Q}_{\mathrm{LR}})
-\right)\right)\right)\right)\right)\right)\right).
-\]
-
-\begin{algorithm}[H]
-\caption{One Training Iteration}
-\begin{algorithmic}[1]
-\State Input batch: \(\mathbf{Q}_{\mathrm{LR}},\mathbf{Q}_{\mathrm{HR}}\)
-\State Normalize quaternions
-\State \(\mathbf{z}_{\mathrm{LR}}\gets E_{a1}(\mathbf{Q}_{\mathrm{LR}})\) (detach)
-\State \(\mathbf{z}_{\mathrm{HR}}\gets E_{a1}(\mathbf{Q}_{\mathrm{HR}})\) (detach)
-\State \(\widehat{\mathbf{z}}_{\mathrm{HR}}\gets F_{\mathrm{SR}}(\mathbf{z}_{\mathrm{LR}})\)
-\State \(\mathcal{L}\gets \mathrm{MSE}(\widehat{\mathbf{z}}_{\mathrm{HR}},\mathbf{z}_{\mathrm{HR}})\)
-\State Backpropagate \(\mathcal{L}\), gradient-clip, optimizer step
-\end{algorithmic}
-\end{algorithm}
-
-\begin{algorithm}[H]
-\caption{Inference (LR \(\to\) SR Quaternion Map)}
-\begin{algorithmic}[1]
-\State Input \(\mathbf{Q}_{\mathrm{LR}}\), shape \((H,W)\)
-\State \(\mathbf{z}_{\mathrm{LR}}\gets E_{a1}(\mathbf{Q}_{\mathrm{LR}})\)
-\State \(\widehat{\mathbf{z}}_{\mathrm{HR}}\gets F_{\mathrm{SR}}(\mathbf{z}_{\mathrm{LR}})\)
-\State \(\widehat{\mathbf{Q}}_{\mathrm{raw}}\gets \mathrm{Decoder}_{a1}(\widehat{\mathbf{z}}_{\mathrm{HR}})\)
-\State \(\widehat{\mathbf{Q}}_{\mathrm{SR}}\gets \mathrm{ReduceToFZ}(\widehat{\mathbf{Q}}_{\mathrm{raw}})\)
-\State Return \(\widehat{\mathbf{Q}}_{\mathrm{SR}}\)
-\end{algorithmic}
-\end{algorithm}
-
-\end{document}
-```
