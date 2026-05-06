@@ -32,6 +32,14 @@ features, routes HR patch tokens through clustered orientation slots, and
 refines HR features with masked equivariant convolutions before decoding back
 to quaternions via cubochoric sampling.
 
+## Architecture Diagram
+
+![OCRP 4x4 Overview](assets/ocrp_4x4_architecture.svg)
+
+The diagram highlights the OCRP routing block: local patch banks form clustered
+orientation slots, the router assigns HR patch tokens, and the assembled HR
+features are refined before decoding back to quaternions.
+
 ## Core Files
 
 - `models/SR_ocrp.py`
@@ -141,10 +149,3 @@ python analysis/probe_ocrp_macro_stages.py \
   --sample_idx 0
 ```
 
-## Architecture Diagram
-
-![OCRP 4x4 Overview](assets/ocrp_4x4_architecture.svg)
-
-The diagram highlights the OCRP routing block: local patch banks form clustered
-orientation slots, the router assigns HR patch tokens, and the assembled HR
-features are refined before decoding back to quaternions.
