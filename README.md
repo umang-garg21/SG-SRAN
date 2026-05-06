@@ -1,6 +1,8 @@
 # Reynolds-QSR: OCRP 4x4 Repository
 
 ![OCRP 4x4 task overview](assets/image.png)
+
+
 **Task overview.** Recover high-resolution crystalline orientation fields from
 low-resolution EBSD quaternion maps. OCRP (Orientation-Cluster Routed Patches)
 addresses key failure modes in baseline SR:
