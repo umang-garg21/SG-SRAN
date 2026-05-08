@@ -26,6 +26,7 @@ from tqdm import tqdm
 # Make project imports robust when run as a script.
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from models.SR_ocrp import resolve_ocrp_upsample_residual_weight
 from training.config_utils import load_and_prepare_config
 from training.data_loading import build_dataloader
 from training.optimizer_utils import build_optimizer
@@ -243,6 +244,7 @@ def _init_history() -> dict:
         "train": [],
         "val": [],
         "lr": [],
+        "ocrp_upsample_residual_weight": [],
         "train_terms": {},
         "val_terms": {},
     }
@@ -256,6 +258,9 @@ def _normalize_history(history: dict | None) -> dict:
     base["train"] = list(history.get("train", []))
     base["val"] = list(history.get("val", []))
     base["lr"] = list(history.get("lr", []))
+    base["ocrp_upsample_residual_weight"] = list(
+        history.get("ocrp_upsample_residual_weight", [])
+    )
     base["train_terms"] = {
         str(k): list(v) for k, v in dict(history.get("train_terms", {})).items()
     }
@@ -263,6 +268,40 @@ def _normalize_history(history: dict | None) -> dict:
         str(k): list(v) for k, v in dict(history.get("val_terms", {})).items()
     }
     return base
+
+
+def _apply_ocrp_upsample_residual_schedule(
+    model_core: torch.nn.Module,
+    cfg,
+    *,
+    epoch: int,
+    total_epochs: int,
+) -> float | None:
+    if not bool(getattr(cfg, "ocrp_upsample_residual", False)):
+        return None
+    if not hasattr(model_core, "ocrp"):
+        return None
+
+    weight = float(
+        resolve_ocrp_upsample_residual_weight(
+            cfg,
+            epoch=epoch,
+            total_epochs=total_epochs,
+            for_training=True,
+        )
+    )
+    if hasattr(model_core, "set_ocrp_upsample_residual_weight"):
+        model_core.set_ocrp_upsample_residual_weight(weight)
+        return weight
+
+    ocrp_module = getattr(model_core, "ocrp", None)
+    if hasattr(ocrp_module, "set_upsample_residual_weight"):
+        ocrp_module.set_upsample_residual_weight(weight)
+        return weight
+    if ocrp_module is not None and hasattr(ocrp_module, "upsample_residual_weight"):
+        ocrp_module.upsample_residual_weight = weight
+        return weight
+    return None
 
 
 def _append_metric_history(metric_history: dict[str, list], metrics: dict[str, float], prior_len: int) -> None:
@@ -1915,7 +1954,7 @@ def main() -> None:
         "decoder_backend": str(getattr(cfg, "decoder_backend", "optimizing")),
         "feature_irreps": str(getattr(cfg, "feature_irreps", "full")),
         "window_size": int(getattr(cfg, "window_size", 5)),
-        "kmax_slots": int(getattr(cfg, "kmax_slots", 6)),
+        "kmax_slots": int(getattr(cfg, "kmax_slots", 10)),
         "cluster_threshold_deg": float(getattr(cfg, "cluster_threshold_deg", 2.0)),
         "cluster_connectivity": int(getattr(cfg, "cluster_connectivity", 8)),
         "num_experts": int(getattr(cfg, "num_experts", 12)),
@@ -1937,6 +1976,8 @@ def main() -> None:
         "macro_lr_tile_size": int(getattr(cfg, "macro_lr_tile_size", 3)),
         "macro_lr_stride_shape": getattr(cfg, "macro_lr_stride_shape", None),
         "ocrp_token_conditioned_member_bias": getattr(cfg, "ocrp_token_conditioned_member_bias", None),
+        "ocrp_upsample_residual": bool(getattr(cfg, "ocrp_upsample_residual", False)),
+        "ocrp_upsample_residual_weight": float(getattr(cfg, "ocrp_upsample_residual_weight", 1.0)),
         "ocrp_pool_chunk_size": int(getattr(cfg, "ocrp_pool_chunk_size", 512)),
         "ocrp_router_chunk_size": int(getattr(cfg, "ocrp_router_chunk_size", 512)),
         "ocrp_proposal_chunk_size": int(getattr(cfg, "ocrp_proposal_chunk_size", 128)),
@@ -2016,6 +2057,12 @@ def main() -> None:
 
     for epoch in range(start_epoch, epochs):
         model_core = _unwrap_model(model)
+        current_ocrp_residual_weight = _apply_ocrp_upsample_residual_schedule(
+            model_core,
+            cfg,
+            epoch=epoch,
+            total_epochs=epochs,
+        )
         train_loss, train_metrics = _train_one_epoch(
             model_core,
             loaders["train"],
@@ -2048,6 +2095,10 @@ def main() -> None:
         history["train"].append(float(train_loss))
         history["val"].append(float(val_loss))
         history["lr"].append(current_lr)
+        if current_ocrp_residual_weight is not None:
+            history["ocrp_upsample_residual_weight"].append(
+                float(current_ocrp_residual_weight)
+            )
         _append_metric_history(history["train_terms"], train_metrics, len(history["train"]) - 1)
         _append_metric_history(history["val_terms"], val_metrics, len(history["val"]) - 1)
 
@@ -2055,6 +2106,12 @@ def main() -> None:
             writer.add_scalar("Loss/Train", float(train_loss), epoch)
             writer.add_scalar("Loss/Val", float(val_loss), epoch)
             writer.add_scalar("LR", current_lr, epoch)
+            if current_ocrp_residual_weight is not None:
+                writer.add_scalar(
+                    "OCRP/UpsampleResidualWeight",
+                    float(current_ocrp_residual_weight),
+                    epoch,
+                )
             for key, value in train_metrics.items():
                 writer.add_scalar(f"LossTerms/Train/{key}", float(value), epoch)
             for key, value in val_metrics.items():
@@ -2068,6 +2125,11 @@ def main() -> None:
         print(
             f"Epoch {epoch + 1}/{epochs} | "
             f"train={train_loss:.6e} val={val_loss:.6e} lr={current_lr:.2e}"
+            + (
+                f" | ocrp_residual={current_ocrp_residual_weight:.3f}"
+                if current_ocrp_residual_weight is not None
+                else ""
+            )
             + (f" | {' '.join(metric_bits)}" if metric_bits else "")
         )
 

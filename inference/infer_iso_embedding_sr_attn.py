@@ -18,6 +18,7 @@ from tqdm import tqdm
 # Make project imports robust when run as a script.
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from models.SR_ocrp import resolve_ocrp_upsample_residual_weight
 from training.config_utils import load_and_prepare_config
 from training.data_loading import build_dataloader
 from utils.symmetry_utils import resolve_symmetry
@@ -322,7 +323,7 @@ def _load_model_from_checkpoint(
         "decoder_backend": str(getattr(cfg, "decoder_backend", "optimizing")),
         "feature_irreps": str(getattr(cfg, "feature_irreps", "full")),
         "window_size": int(getattr(cfg, "window_size", 5)),
-        "kmax_slots": int(getattr(cfg, "kmax_slots", 6)),
+        "kmax_slots": int(getattr(cfg, "kmax_slots", 10)),
         "cluster_threshold_deg": float(getattr(cfg, "cluster_threshold_deg", 2.0)),
         "cluster_connectivity": int(getattr(cfg, "cluster_connectivity", 8)),
         "phase_dim": int(getattr(cfg, "phase_dim", 32)),
@@ -342,6 +343,10 @@ def _load_model_from_checkpoint(
         "macro_lr_tile_size": int(getattr(cfg, "macro_lr_tile_size", 3)),
         "macro_lr_stride_shape": getattr(cfg, "macro_lr_stride_shape", None),
         "ocrp_token_conditioned_member_bias": getattr(cfg, "ocrp_token_conditioned_member_bias", None),
+        "ocrp_upsample_residual": bool(getattr(cfg, "ocrp_upsample_residual", False)),
+        "ocrp_upsample_residual_weight": float(
+            resolve_ocrp_upsample_residual_weight(cfg, for_training=False)
+        ),
         "ocrp_pool_chunk_size": int(getattr(cfg, "ocrp_pool_chunk_size", 512)),
         "ocrp_router_chunk_size": int(getattr(cfg, "ocrp_router_chunk_size", 512)),
         "ocrp_proposal_chunk_size": int(getattr(cfg, "ocrp_proposal_chunk_size", 128)),

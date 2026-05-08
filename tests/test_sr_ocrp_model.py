@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 import torch
 
@@ -10,6 +12,7 @@ from models.SR_ocrp import (
     IsoEmbeddingSROCRP,
     WithinSlotInvariantPool,
     _build_patch_token_coords,
+    resolve_ocrp_upsample_residual_weight,
 )
 
 
@@ -164,6 +167,80 @@ def test_patch_token_coords_support_rectangular_patch() -> None:
     assert coords.shape == (4, 2)
     assert torch.allclose(coords[0], torch.tensor([-1.0, 0.0], dtype=torch.float32))
     assert torch.allclose(coords[-1], torch.tensor([1.0, 0.0], dtype=torch.float32))
+
+
+def test_ocrp_upsample_residual_is_additive_at_lr_anchor_sites() -> None:
+    common = dict(
+        crystal="fcc",
+        device="cpu",
+        upsample_factor=(4, 1),
+        window_size=5,
+        cluster_connectivity=8,
+        use_lr_conv1=False,
+        use_hr_conv1=False,
+        decoder_cubochoric_resolution=1,
+        decoder_num_starts=1,
+        decoder_steps=0,
+        decoder_lr=0.05,
+    )
+    base = IsoEmbeddingSROCRP(
+        **common,
+        ocrp_upsample_residual=False,
+    ).eval()
+    residual = IsoEmbeddingSROCRP(
+        **common,
+        ocrp_upsample_residual=True,
+        ocrp_upsample_residual_weight=0.75,
+    ).eval()
+    residual.load_state_dict(base.state_dict(), strict=True)
+
+    lr_shape = (3, 4)
+    q_lr = _random_unit_quats(lr_shape[0] * lr_shape[1], seed=31)
+
+    with torch.no_grad():
+        feat_lr_base = base.encode(q_lr)
+        feat_hr_base, hr_shape = base._forward_sr_features(
+            q_lr,
+            feat_lr_base,
+            lr_shape=lr_shape,
+            return_aux=False,
+        )
+        feat_lr_res = residual.encode(q_lr)
+        feat_hr_res, hr_shape_res = residual._forward_sr_features(
+            q_lr,
+            feat_lr_res,
+            lr_shape=lr_shape,
+            return_aux=False,
+        )
+
+    assert hr_shape == hr_shape_res
+    hr_base_img = feat_hr_base.view(hr_shape[0], hr_shape[1], -1)
+    hr_res_img = feat_hr_res.view(hr_shape[0], hr_shape[1], -1)
+    lr_img = feat_lr_base.view(lr_shape[0], lr_shape[1], -1)
+
+    assert torch.allclose(hr_res_img[0::4, 0::1, :], hr_base_img[0::4, 0::1, :] + 0.75 * lr_img)
+    non_anchor_mask = torch.ones(hr_shape, dtype=torch.bool)
+    non_anchor_mask[0::4, 0::1] = False
+    assert torch.allclose(hr_res_img[non_anchor_mask], hr_base_img[non_anchor_mask])
+
+
+def test_resolve_ocrp_upsample_residual_weight_schedule() -> None:
+    cfg = SimpleNamespace(
+        ocrp_upsample_residual_weight=1.0,
+        ocrp_upsample_residual_weight_final=0.1,
+        ocrp_upsample_residual_weight_schedule="linear",
+    )
+
+    assert resolve_ocrp_upsample_residual_weight(cfg, for_training=False) == pytest.approx(0.1)
+    assert resolve_ocrp_upsample_residual_weight(
+        cfg, epoch=0, total_epochs=10, for_training=True
+    ) == pytest.approx(1.0)
+    assert resolve_ocrp_upsample_residual_weight(
+        cfg, epoch=5, total_epochs=10, for_training=True
+    ) == pytest.approx(0.5)
+    assert resolve_ocrp_upsample_residual_weight(
+        cfg, epoch=9, total_epochs=10, for_training=True
+    ) == pytest.approx(0.1)
 
 
 def test_within_slot_pool_geometry_bias_varies_across_hr_tokens() -> None:

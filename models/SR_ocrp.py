@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import warnings
 from pathlib import Path
 
@@ -78,6 +79,51 @@ def _irrep_block_slices(irreps: Irreps) -> list[tuple[int, int]]:
         slices.append((start, start + width))
         start += width
     return slices
+
+
+def resolve_ocrp_upsample_residual_weight(
+    cfg,
+    *,
+    epoch: int | None = None,
+    total_epochs: int | None = None,
+    for_training: bool = False,
+) -> float:
+    """Resolve the OCRP LR-anchor residual weight from config and training progress."""
+    start = float(getattr(cfg, "ocrp_upsample_residual_weight", 1.0))
+    final_cfg = getattr(cfg, "ocrp_upsample_residual_weight_final", None)
+    final = start if final_cfg is None else float(final_cfg)
+    schedule = str(
+        getattr(cfg, "ocrp_upsample_residual_weight_schedule", "constant")
+    ).strip().lower()
+
+    if start < 0.0 or final < 0.0:
+        raise ValueError(
+            "OCRP upsample residual weights must be >= 0, "
+            f"got start={start} final={final}"
+        )
+
+    if schedule in {"", "constant", "none", "off"}:
+        return start
+
+    if schedule not in {"linear", "cosine"}:
+        raise ValueError(
+            "ocrp_upsample_residual_weight_schedule must be one of "
+            f"['constant', 'linear', 'cosine'], got {schedule!r}"
+        )
+
+    if not for_training:
+        return final
+
+    if epoch is None or total_epochs is None or int(total_epochs) <= 1:
+        return start
+
+    denom = max(1, int(total_epochs) - 1)
+    progress = min(max(float(epoch) / float(denom), 0.0), 1.0)
+    if schedule == "cosine":
+        mix = 0.5 * (1.0 - math.cos(math.pi * progress))
+    else:
+        mix = progress
+    return (1.0 - mix) * start + mix * final
 
 
 def _as_scale_tuple(scale: int | tuple[int, int] | list[int]) -> tuple[int, int]:
@@ -799,14 +845,23 @@ class QuaternionBankClusterer(nn.Module):
 
         # Vectorized connected-components by repeated minimum-label propagation.
         for _ in range(nnode - 1):
+            new_labels = labels_flat.clone()
+            
+            # First propagation: edge_a <- edge_b
             la = labels_flat.gather(1, edge_a)
             lb = labels_flat.gather(1, edge_b)
             edge_min = torch.minimum(la, lb)
-            masked_min = torch.where(keep_edges, edge_min, inactive_label)
-
-            new_labels = labels_flat.clone()
-            new_labels.scatter_reduce_(1, edge_a, masked_min, reduce="amin", include_self=True)
-            new_labels.scatter_reduce_(1, edge_b, masked_min, reduce="amin", include_self=True)
+            masked_min_a = torch.where(keep_edges, edge_min, inactive_label)
+            new_labels.scatter_reduce_(1, edge_a, masked_min_a, reduce="amin", include_self=True)
+            
+            # Second propagation: edge_b <- updated edge_a
+            # Recompute masked_min using UPDATED labels from first propagation
+            la_updated = new_labels.gather(1, edge_a)  # UPDATED labels
+            lb = labels_flat.gather(1, edge_b)
+            edge_min_b = torch.minimum(la_updated, lb)
+            masked_min_b = torch.where(keep_edges, edge_min_b, inactive_label)
+            new_labels.scatter_reduce_(1, edge_b, masked_min_b, reduce="amin", include_self=True)
+            
             if torch.equal(new_labels, labels_flat):
                 break
             labels_flat = new_labels
@@ -820,8 +875,9 @@ class QuaternionBankClusterer(nn.Module):
 class ClusterSlotBuilder(nn.Module):
     """Pack top-ranked clusters into deterministic slots and emit cheap metadata."""
 
-    SLOT_TYPE_DIM = 6
-    META_DIM = 11
+    SLOT_TYPE_DIM = 10
+    MAX_SLOTS = 10
+    META_DIM = 25
     META_VALID = 0
     META_SLOT_TYPE_START = 1
     META_MASS = 7
@@ -829,11 +885,11 @@ class ClusterSlotBuilder(nn.Module):
     META_CENTROID_X = 9
     META_SPATIAL_DISP = 10
 
-    def __init__(self, kmax_slots: int = 6, window_size: int = 5):
+    def __init__(self, kmax_slots: int = 10, window_size: int = 5):
         super().__init__()
-        if int(kmax_slots) < 1 or int(kmax_slots) > self.SLOT_TYPE_DIM:
+        if int(kmax_slots) < 1 or int(kmax_slots) > self.MAX_SLOTS:
             raise ValueError(
-                f"OCRP expects 1 <= kmax_slots <= {self.SLOT_TYPE_DIM}, got {kmax_slots}"
+                f"OCRP expects 1 <= kmax_slots <= {self.MAX_SLOTS}, got {kmax_slots}"
             )
         if int(window_size) < 3 or int(window_size) % 2 == 0:
             raise ValueError(f"OCRP expects an odd window_size >= 3, got {window_size}")
@@ -1261,7 +1317,7 @@ class PatchSlotRouter(nn.Module):
         self,
         irreps_feat: Irreps | str,
         meta_dim: int,
-        kmax_slots: int = 6,
+        kmax_slots: int = 10,
         upsample_factor: int | tuple[int, int] | list[int] = 4,
         patch_size: int | tuple[int, int] | list[int] | None = None,
         phase_dim: int = 32,
@@ -1310,7 +1366,7 @@ class PatchSlotRouter(nn.Module):
             nn.Linear(self.slot_hidden_dim, self.slot_hidden_dim),
         )
         self.base_logit = nn.Sequential(
-            nn.Linear(3 * self.slot_hidden_dim, self.slot_hidden_dim),
+            nn.Linear(2 * self.slot_hidden_dim, self.slot_hidden_dim),
             nn.GELU(),
             nn.Linear(self.slot_hidden_dim, 1),
         )
@@ -1318,7 +1374,7 @@ class PatchSlotRouter(nn.Module):
     def _router_weight_context(
         self,
         slot_meta: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         slot_valid = slot_meta[
             ..., ClusterSlotBuilder.META_VALID : ClusterSlotBuilder.META_VALID + 1
         ]
@@ -1341,13 +1397,7 @@ class PatchSlotRouter(nn.Module):
                     ClusterSlotBuilder.META_SLOT_TYPE_START + ClusterSlotBuilder.SLOT_TYPE_DIM
                 ),
             ] = 0.0
-        uniform_weights = slot_valid
-        mass_weights = slot_valid * tempered_mass
-        weights = (
-            self.uniform_slot_mix * uniform_weights
-            + (1.0 - self.uniform_slot_mix) * mass_weights
-        )
-        return slot_valid, slot_meta_router, weights
+        return slot_valid, slot_meta_router
 
     def forward(
         self,
@@ -1370,10 +1420,9 @@ class PatchSlotRouter(nn.Module):
         if kmax != self.kmax_slots:
             raise ValueError(f"Expected kmax_slots={self.kmax_slots}, got {kmax}")
 
-        slot_valid, slot_meta_router, weights = self._router_weight_context(slot_meta)
+        slot_valid, slot_meta_router = self._router_weight_context(slot_meta)
         nflat = int(bsz * nwin)
         slot_meta_flat = slot_meta_router.reshape(nflat, kmax, slot_meta_router.shape[-1])
-        weights_flat = weights.reshape(nflat, kmax, 1)
 
         phase_flat: torch.Tensor | None = None
         phase_shared: torch.Tensor | None = None
@@ -1407,14 +1456,11 @@ class PatchSlotRouter(nn.Module):
                 end = min(start + self.chunk_size, nflat)
                 slot_inv_chunk = slot_inv_flat[start:end]
                 slot_meta_chunk = slot_meta_flat[start:end]
-                weights_chunk = weights_flat[start:end]
                 slot_desc_chunk = self.slot_proj(torch.cat([slot_inv_chunk, slot_meta_chunk], dim=-1))
-                global_desc_chunk = (weights_chunk * slot_desc_chunk).sum(dim=1) / weights_chunk.sum(dim=1).clamp_min(1e-6)
                 slot_desc_exp = slot_desc_chunk.unsqueeze(2).expand(-1, -1, self.patch_tokens, -1)
-                global_exp = global_desc_chunk.unsqueeze(1).unsqueeze(2).expand(-1, self.kmax_slots, self.patch_tokens, -1)
                 phase_chunk = phase_shared.unsqueeze(0).expand(end - start, -1, -1) if phase_shared is not None else phase_flat[start:end]
                 phase_exp = phase_chunk.unsqueeze(1).expand(-1, self.kmax_slots, -1, -1)
-                base_chunk = self.base_logit(torch.cat([slot_desc_exp, global_exp, phase_exp], dim=-1)).squeeze(-1)
+                base_chunk = self.base_logit(torch.cat([slot_desc_exp, phase_exp], dim=-1)).squeeze(-1)
                 logits_flat[start:end] = base_chunk.permute(0, 2, 1)
         else:
             if patch_tokens_ctx != self.patch_tokens:
@@ -1426,15 +1472,11 @@ class PatchSlotRouter(nn.Module):
                 end = min(start + self.chunk_size, nflat)
                 slot_inv_chunk = slot_inv_flat[start:end]
                 slot_meta_chunk = slot_meta_flat[start:end]
-                weights_chunk = weights_flat[start:end]
                 meta_exp = slot_meta_chunk.unsqueeze(2).expand(-1, -1, self.patch_tokens, -1)
                 slot_desc_chunk = self.slot_proj(torch.cat([slot_inv_chunk, meta_exp], dim=-1))
-                weights_exp = weights_chunk.unsqueeze(2)
-                global_desc_chunk = (weights_exp * slot_desc_chunk).sum(dim=1) / weights_exp.sum(dim=1).clamp_min(1e-6)
-                global_exp = global_desc_chunk.unsqueeze(1).expand(-1, self.kmax_slots, -1, -1)
                 phase_chunk = phase_shared.unsqueeze(0).expand(end - start, -1, -1) if phase_shared is not None else phase_flat[start:end]
                 phase_exp = phase_chunk.unsqueeze(1).expand(-1, self.kmax_slots, -1, -1)
-                base_chunk = self.base_logit(torch.cat([slot_desc_chunk, global_exp, phase_exp], dim=-1)).squeeze(-1)
+                base_chunk = self.base_logit(torch.cat([slot_desc_chunk, phase_exp], dim=-1)).squeeze(-1)
                 logits_flat[start:end] = base_chunk.permute(0, 2, 1)
 
         logits = logits_flat.view(bsz, nwin, self.patch_tokens, self.kmax_slots)
@@ -1683,7 +1725,7 @@ class OCRPPatchUpsampler(nn.Module):
         sym_ops_quat: torch.Tensor,
         upsample_factor: int | tuple[int, int] | list[int] = 4,
         window_size: int = 5,
-        kmax_slots: int = 6,
+        kmax_slots: int = 10,
         cluster_threshold_deg: float = 2.0,
         cluster_connectivity: int = 8,
         phase_dim: int = 32,
@@ -1702,6 +1744,8 @@ class OCRPPatchUpsampler(nn.Module):
         router_chunk_size: int = 512,
         proposal_chunk_size: int = 128,
         proposal_token_chunk_size: int | None = None,
+        use_upsample_residual: bool = False,
+        upsample_residual_weight: float = 1.0,
     ):
         super().__init__()
         self.irreps_feat = Irreps(irreps_feat)
@@ -1739,6 +1783,8 @@ class OCRPPatchUpsampler(nn.Module):
             raise ValueError(
                 f"router_geom_logit_bias must be >= 0, got {router_geom_logit_bias}"
             )
+        self.use_upsample_residual = bool(use_upsample_residual)
+        self.set_upsample_residual_weight(float(upsample_residual_weight))
 
         self.phase_embed = PhaseEmbeddingGrid(
             upsample_factor=self.upsample_factor,
@@ -1800,6 +1846,12 @@ class OCRPPatchUpsampler(nn.Module):
             token_support_index,
             persistent=False,
         )
+
+    def set_upsample_residual_weight(self, weight: float) -> None:
+        weight = float(weight)
+        if weight < 0.0:
+            raise ValueError(f"upsample_residual_weight must be >= 0, got {weight}")
+        self.upsample_residual_weight = weight
 
     def _phase_grid(self, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
         phase_ids = torch.arange(
@@ -1920,6 +1972,7 @@ class OCRPPatchUpsampler(nn.Module):
         img = img[:, :crop_h, :crop_w, :]
         return img.reshape(bsz, crop_h * crop_w, cdim)
 
+    
     @staticmethod
     def _hard_owner_from_logits(logits: torch.Tensor, straight_through: bool) -> tuple[torch.Tensor, torch.Tensor]:
         owner_idx = torch.argmax(logits, dim=-1)
@@ -2017,6 +2070,15 @@ class OCRPPatchUpsampler(nn.Module):
                 hr_crop_shape=hr_shape,
             )
 
+        if self.use_upsample_residual:
+            bsz = feat_lr.shape[0]
+            h_lr, w_lr = int(lr_shape[0]), int(lr_shape[1])
+            cdim = feat_hr.shape[-1]
+            feat_hr_img = feat_hr.view(bsz, int(hr_shape[0]), int(hr_shape[1]), cdim)
+            lr_img = feat_lr.view(bsz, h_lr, w_lr, cdim)
+            feat_hr_img[:, 0::r_h, 0::r_w, :] += self.upsample_residual_weight * lr_img
+            feat_hr = feat_hr_img.reshape(bsz, int(hr_shape[0]) * int(hr_shape[1]), cdim)
+
         if not batched:
             feat_hr = feat_hr.squeeze(0)
 
@@ -2079,7 +2141,7 @@ class IsoEmbeddingSROCRP(nn.Module):
         conv_feature_mask_temperature: float = 32.0,
         upsample_factor: int | tuple[int, int] | list[int] = 4,
         window_size: int = 5,
-        kmax_slots: int = 6,
+        kmax_slots: int = 10,
         cluster_threshold_deg: float = 2.0,
         cluster_connectivity: int = 8,
         phase_dim: int = 32,
@@ -2098,6 +2160,8 @@ class IsoEmbeddingSROCRP(nn.Module):
         ocrp_mode: str = "pixel_patch",
         macro_lr_tile_size: int = 3,
         ocrp_token_conditioned_member_bias: bool | None = None,
+        ocrp_upsample_residual: bool = False,
+        ocrp_upsample_residual_weight: float = 1.0,
         ocrp_pool_chunk_size: int = 512,
         ocrp_router_chunk_size: int = 512,
         ocrp_proposal_chunk_size: int = 128,
@@ -2271,6 +2335,8 @@ class IsoEmbeddingSROCRP(nn.Module):
             ocrp_mode=str(ocrp_mode),
             macro_lr_tile_size=int(macro_lr_tile_size),
             token_conditioned_member_bias=ocrp_token_conditioned_member_bias,
+            use_upsample_residual=bool(ocrp_upsample_residual),
+            upsample_residual_weight=float(ocrp_upsample_residual_weight),
             pool_chunk_size=int(ocrp_pool_chunk_size),
             router_chunk_size=int(ocrp_router_chunk_size),
             proposal_chunk_size=int(ocrp_proposal_chunk_size),
@@ -2349,6 +2415,12 @@ class IsoEmbeddingSROCRP(nn.Module):
     def load_state_dict(self, state_dict, strict: bool = True, assign: bool = False):
         filtered_state_dict = self._filter_incompatible_state_dict(state_dict)
         return super().load_state_dict(filtered_state_dict, strict=strict, assign=assign)
+
+    def set_ocrp_upsample_residual_weight(self, weight: float) -> None:
+        self.ocrp.set_upsample_residual_weight(weight)
+
+    def get_ocrp_upsample_residual_weight(self) -> float:
+        return float(self.ocrp.upsample_residual_weight)
 
     @staticmethod
     def quat_mul(q1: torch.Tensor, q2: torch.Tensor) -> torch.Tensor:
