@@ -220,12 +220,18 @@ def _load_model_from_checkpoint(
         "conv_feature_mask_cosine_threshold": float(
             getattr(cfg, "conv_feature_mask_cosine_threshold", 0.98)
         ),
+        "conv_feature_mask_l2_threshold": getattr(
+            cfg, "conv_feature_mask_l2_threshold", None
+        ),
         "conv_feature_mask_soft": bool(getattr(cfg, "conv_feature_mask_soft", False)),
         "conv_feature_mask_temperature": float(
             getattr(cfg, "conv_feature_mask_temperature", 32.0)
         ),
         "hr_conv_feature_mask_cosine_threshold": getattr(
             cfg, "hr_conv_feature_mask_cosine_threshold", None
+        ),
+        "hr_conv_feature_mask_l2_threshold": getattr(
+            cfg, "hr_conv_feature_mask_l2_threshold", None
         ),
         "hr_conv_feature_mask_soft": getattr(cfg, "hr_conv_feature_mask_soft", None),
         "hr_conv_feature_mask_temperature": getattr(
@@ -234,12 +240,18 @@ def _load_model_from_checkpoint(
         "hr_conv2_feature_mask_cosine_threshold": getattr(
             cfg, "hr_conv2_feature_mask_cosine_threshold", None
         ),
+        "hr_conv2_feature_mask_l2_threshold": getattr(
+            cfg, "hr_conv2_feature_mask_l2_threshold", None
+        ),
         "hr_conv2_feature_mask_soft": getattr(cfg, "hr_conv2_feature_mask_soft", None),
         "hr_conv2_feature_mask_temperature": getattr(
             cfg, "hr_conv2_feature_mask_temperature", None
         ),
         "hr_conv3_feature_mask_cosine_threshold": getattr(
             cfg, "hr_conv3_feature_mask_cosine_threshold", None
+        ),
+        "hr_conv3_feature_mask_l2_threshold": getattr(
+            cfg, "hr_conv3_feature_mask_l2_threshold", None
         ),
         "hr_conv3_feature_mask_soft": getattr(cfg, "hr_conv3_feature_mask_soft", None),
         "hr_conv3_feature_mask_temperature": getattr(
@@ -325,6 +337,7 @@ def _load_model_from_checkpoint(
         "window_size": int(getattr(cfg, "window_size", 5)),
         "kmax_slots": int(getattr(cfg, "kmax_slots", 10)),
         "cluster_threshold_deg": float(getattr(cfg, "cluster_threshold_deg", 2.0)),
+        "cluster_feature_l2_threshold": getattr(cfg, "cluster_feature_l2_threshold", None),
         "cluster_connectivity": int(getattr(cfg, "cluster_connectivity", 8)),
         "phase_dim": int(getattr(cfg, "phase_dim", 32)),
         "ocrp_router_hidden_dim": int(getattr(cfg, "ocrp_router_hidden_dim", 128)),

@@ -126,6 +126,44 @@ def resolve_ocrp_upsample_residual_weight(
     return (1.0 - mix) * start + mix * final
 
 
+def _approx_l2_threshold_from_legacy_cosine_threshold(cosine_threshold: float) -> float:
+    """
+    Approximate an embedding-space L2 cutoff from the earlier cosine-based OCRP mask.
+
+    This uses the measured FCC local-iso correspondence between cosine thresholds
+    and misorientation angles, then maps angle to radians because the embedding is
+    close to isometric in L2.
+    """
+    cos_points = np.array([0.80, 0.85, 0.90, 0.95, 0.97, 0.98, 0.99, 0.995], dtype=np.float64)
+    deg_points = np.array([15.0, 13.0, 11.0, 8.0, 6.0, 5.0, 4.0, 3.0], dtype=np.float64)
+    cos_clamped = float(np.clip(float(cosine_threshold), float(cos_points[0]), float(cos_points[-1])))
+    approx_deg = float(np.interp(cos_clamped, cos_points, deg_points))
+    return float(math.radians(approx_deg))
+
+
+def _resolve_feature_l2_threshold(
+    *,
+    explicit_l2_threshold: float | None,
+    legacy_cosine_threshold: float | None,
+    default_l2_threshold: float,
+) -> float:
+    if explicit_l2_threshold is not None:
+        return float(explicit_l2_threshold)
+    if legacy_cosine_threshold is not None:
+        return _approx_l2_threshold_from_legacy_cosine_threshold(float(legacy_cosine_threshold))
+    return float(default_l2_threshold)
+
+
+def _resolve_cluster_feature_l2_threshold(
+    *,
+    cluster_feature_l2_threshold: float | None,
+    legacy_cluster_threshold_deg: float,
+) -> float:
+    if cluster_feature_l2_threshold is not None:
+        return float(cluster_feature_l2_threshold)
+    return float(math.radians(float(legacy_cluster_threshold_deg)))
+
+
 def _as_scale_tuple(scale: int | tuple[int, int] | list[int]) -> tuple[int, int]:
     if isinstance(scale, (tuple, list)):
         if len(scale) != 2:
@@ -326,13 +364,13 @@ def _build_patch_token_coords(
     return torch.stack([yy, xx], dim=-1).reshape(patch_tokens, 2)
 
 
-class CosineMaskedEquivariantSpatialConv(nn.Module):
+class FeatureDistanceMaskedEquivariantSpatialConv(nn.Module):
     """
-    Equivariant local convolution with a cosine-similarity neighbor mask.
+    Equivariant local convolution with a feature-space Euclidean-distance mask.
 
     The local context stays a weighted average over existing nearby orientation
-    features, but neighbors whose embedding cosine to the center falls below
-    the configured threshold are excluded before renormalization.
+    features, but neighbors whose embedding L2 distance to the center rises
+    above the configured threshold are excluded before renormalization.
     """
 
     def __init__(
@@ -343,7 +381,8 @@ class CosineMaskedEquivariantSpatialConv(nn.Module):
         use_residual: bool = False,
         residual_weight: float = 1.0,
         dilation: int = 1,
-        feature_mask_cosine_threshold: float = 0.99,
+        feature_mask_l2_threshold: float | None = None,
+        feature_mask_cosine_threshold: float | None = None,
         feature_mask_soft: bool = False,
         feature_mask_temperature: float = 32.0,
         eps: float = 1e-8,
@@ -352,7 +391,14 @@ class CosineMaskedEquivariantSpatialConv(nn.Module):
         self.kernel_size = int(kernel_size)
         self.dilation = int(dilation)
         self.padding = (self.kernel_size // 2) * self.dilation
-        self.feature_mask_cosine_threshold = float(feature_mask_cosine_threshold)
+        self.feature_mask_l2_threshold = _resolve_feature_l2_threshold(
+            explicit_l2_threshold=feature_mask_l2_threshold,
+            legacy_cosine_threshold=feature_mask_cosine_threshold,
+            default_l2_threshold=math.radians(5.0),
+        )
+        self.feature_mask_cosine_threshold = (
+            None if feature_mask_cosine_threshold is None else float(feature_mask_cosine_threshold)
+        )
         self.feature_mask_soft = bool(feature_mask_soft)
         self.feature_mask_temperature = float(feature_mask_temperature)
         self.eps = float(eps)
@@ -401,17 +447,17 @@ class CosineMaskedEquivariantSpatialConv(nn.Module):
             .reshape(bsz, cdim, h, w, self.kernel_size, self.kernel_size)
         )
 
-    def _masked_spatial_weights(self, cosine: torch.Tensor) -> torch.Tensor:
+    def _masked_spatial_weights(self, l2_dist: torch.Tensor) -> torch.Tensor:
         base_w = F.softmax(self.spatial_logits.reshape(-1), dim=0).view(
             1, 1, 1, self.kernel_size, self.kernel_size
         )
         if self.feature_mask_soft:
             mask = torch.sigmoid(
-                self.feature_mask_temperature * (cosine - self.feature_mask_cosine_threshold)
+                self.feature_mask_temperature * (self.feature_mask_l2_threshold - l2_dist)
             )
             mask = torch.where(self.center_mask, torch.ones_like(mask), mask)
         else:
-            mask = (cosine >= self.feature_mask_cosine_threshold)
+            mask = (l2_dist <= self.feature_mask_l2_threshold)
             mask = torch.logical_or(mask, self.center_mask).to(base_w.dtype)
         return base_w * mask
 
@@ -429,13 +475,8 @@ class CosineMaskedEquivariantSpatialConv(nn.Module):
         feat_img = features.view(bsz, h, w, cdim).permute(0, 3, 1, 2).contiguous()
         patches = self._extract_patches(feat_img)
         center = feat_img.unsqueeze(-1).unsqueeze(-1)
-
-        dot = (patches * center).sum(dim=1)
-        patch_norm = patches.pow(2).sum(dim=1).clamp_min(self.eps).sqrt()
-        center_norm = feat_img.pow(2).sum(dim=1).clamp_min(self.eps).sqrt().unsqueeze(-1).unsqueeze(-1)
-        cosine = (dot / (patch_norm * center_norm).clamp_min(self.eps)).clamp(-1.0, 1.0)
-
-        masked_w = self._masked_spatial_weights(cosine)
+        l2_dist = (patches - center).pow(2).sum(dim=1).clamp_min(self.eps).sqrt()
+        masked_w = self._masked_spatial_weights(l2_dist)
         denom = masked_w.sum(dim=(-1, -2)).clamp_min(self.eps)
         neigh = (patches * masked_w.unsqueeze(1)).sum(dim=(-1, -2)) / denom.unsqueeze(1)
 
@@ -453,6 +494,9 @@ class CosineMaskedEquivariantSpatialConv(nn.Module):
         if not batched:
             out = out.squeeze(0)
         return out
+
+
+CosineMaskedEquivariantSpatialConv = FeatureDistanceMaskedEquivariantSpatialConv
 
 
 class LocalIsoCrystalEncoder(nn.Module):
@@ -872,6 +916,101 @@ class QuaternionBankClusterer(nn.Module):
         return labels
 
 
+class FeatureBankClusterer(nn.Module):
+    """Cluster a local LR feature bank into connected components using pairwise L2 edges."""
+
+    def __init__(
+        self,
+        threshold_l2: float = 0.035,
+        connectivity: int = 8,
+        window_size: int = 5,
+        eps: float = 1e-8,
+    ):
+        super().__init__()
+        if int(window_size) < 3 or int(window_size) % 2 == 0:
+            raise ValueError(f"OCRP expects an odd window_size >= 3, got {window_size}")
+        if int(connectivity) not in (4, 8):
+            raise ValueError(f"OCRP currently expects 4- or 8-neighbor clustering, got {connectivity}")
+        self.threshold_l2 = float(threshold_l2)
+        self.connectivity = int(connectivity)
+        self.window_size = int(window_size)
+        self.num_nodes = int(self.window_size * self.window_size)
+        self.eps = float(eps)
+
+        edges: list[tuple[int, int]] = []
+        for y in range(self.window_size):
+            for x in range(self.window_size):
+                idx = y * self.window_size + x
+                if x + 1 < self.window_size:
+                    edges.append((idx, idx + 1))
+                if y + 1 < self.window_size:
+                    edges.append((idx, idx + self.window_size))
+                if self.connectivity == 8 and y + 1 < self.window_size:
+                    if x + 1 < self.window_size:
+                        edges.append((idx, idx + self.window_size + 1))
+                    if x - 1 >= 0:
+                        edges.append((idx, idx + self.window_size - 1))
+        edge_idx_a = torch.tensor([a for a, _ in edges], dtype=torch.long)
+        edge_idx_b = torch.tensor([b for _, b in edges], dtype=torch.long)
+        self.register_buffer("edge_idx_a", edge_idx_a, persistent=False)
+        self.register_buffer("edge_idx_b", edge_idx_b, persistent=False)
+
+    def forward(self, bank_f: torch.Tensor) -> torch.Tensor:
+        batched = bank_f.dim() == 4
+        if not batched:
+            bank_f = bank_f.unsqueeze(0)
+        bsz, nwin, nnode, cdim = bank_f.shape
+        if nnode != self.num_nodes:
+            raise ValueError(
+                f"Expected bank_f shape (B,N,{self.num_nodes},C), got {tuple(bank_f.shape)}"
+            )
+        if cdim < 1:
+            raise ValueError(f"Expected bank_f feature dim >= 1, got {cdim}")
+
+        flat = bank_f.to(dtype=torch.float32).reshape(bsz * nwin, nnode, cdim)
+        idx_a = self.edge_idx_a.to(device=flat.device)
+        idx_b = self.edge_idx_b.to(device=flat.device)
+        f1 = flat.index_select(1, idx_a)
+        f2 = flat.index_select(1, idx_b)
+        l2 = (f1 - f2).pow(2).sum(dim=-1).clamp_min(self.eps).sqrt()
+        keep_edges = l2 <= self.threshold_l2
+
+        num_windows = int(flat.shape[0])
+        labels_flat = (
+            torch.arange(nnode, device=flat.device, dtype=torch.long)
+            .view(1, nnode)
+            .expand(num_windows, -1)
+            .clone()
+        )
+        edge_a = idx_a.view(1, -1).expand(num_windows, -1)
+        edge_b = idx_b.view(1, -1).expand(num_windows, -1)
+        inactive_label = torch.full_like(edge_a, fill_value=nnode)
+
+        for _ in range(nnode - 1):
+            new_labels = labels_flat.clone()
+
+            la = labels_flat.gather(1, edge_a)
+            lb = labels_flat.gather(1, edge_b)
+            edge_min = torch.minimum(la, lb)
+            masked_min_a = torch.where(keep_edges, edge_min, inactive_label)
+            new_labels.scatter_reduce_(1, edge_a, masked_min_a, reduce="amin", include_self=True)
+
+            la_updated = new_labels.gather(1, edge_a)
+            lb = labels_flat.gather(1, edge_b)
+            edge_min_b = torch.minimum(la_updated, lb)
+            masked_min_b = torch.where(keep_edges, edge_min_b, inactive_label)
+            new_labels.scatter_reduce_(1, edge_b, masked_min_b, reduce="amin", include_self=True)
+
+            if torch.equal(new_labels, labels_flat):
+                break
+            labels_flat = new_labels
+
+        labels = labels_flat.view(bsz, nwin, nnode)
+        if not batched:
+            labels = labels.squeeze(0)
+        return labels
+
+
 class ClusterSlotBuilder(nn.Module):
     """Pack top-ranked clusters into deterministic slots and emit cheap metadata."""
 
@@ -1046,13 +1185,11 @@ class LearnedWeightedSlotContextBuilder(nn.Module):
 
     def forward(
         self,
-        bank_q: torch.Tensor,
         bank_f: torch.Tensor,
         slot_mask: torch.Tensor,
         slot_meta: torch.Tensor,
         return_alpha: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        del bank_q
         batched = bank_f.dim() == 4
         if not batched:
             bank_f = bank_f.unsqueeze(0)
@@ -1727,6 +1864,7 @@ class OCRPPatchUpsampler(nn.Module):
         window_size: int = 5,
         kmax_slots: int = 10,
         cluster_threshold_deg: float = 2.0,
+        cluster_feature_l2_threshold: float | None = None,
         cluster_connectivity: int = 8,
         phase_dim: int = 32,
         router_hidden_dim: int = 128,
@@ -1753,6 +1891,10 @@ class OCRPPatchUpsampler(nn.Module):
         self.upsample_factor = _as_scale_tuple(upsample_factor)
         self.window_size = int(window_size)
         self.kmax_slots = int(kmax_slots)
+        self.cluster_feature_l2_threshold = _resolve_cluster_feature_l2_threshold(
+            cluster_feature_l2_threshold=cluster_feature_l2_threshold,
+            legacy_cluster_threshold_deg=cluster_threshold_deg,
+        )
         self.straight_through = bool(straight_through)
         self.ocrp_mode = _resolve_ocrp_mode(ocrp_mode)
         self.macro_lr_tile_size = _validate_odd_positive_int(
@@ -1791,9 +1933,9 @@ class OCRPPatchUpsampler(nn.Module):
             emb_dim=int(phase_dim),
             patch_size=self.hr_patch_shape,
         )
-        self.clusterer = QuaternionBankClusterer(
-            sym_ops_quat=sym_ops_quat,
-            threshold_deg=float(cluster_threshold_deg),
+        del sym_ops_quat
+        self.clusterer = FeatureBankClusterer(
+            threshold_l2=self.cluster_feature_l2_threshold,
             connectivity=int(cluster_connectivity),
             window_size=int(window_size),
         )
@@ -1894,9 +2036,14 @@ class OCRPPatchUpsampler(nn.Module):
         lr_quats: torch.Tensor,
         feat_lr: torch.Tensor,
         lr_shape: tuple[int, int],
+        need_quat_bank: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor, dict[str, tuple[int, int]]]:
         if self.ocrp_mode == "pixel_patch":
-            bank_q = _build_local_patch_bank(lr_quats, img_shape=lr_shape, window_size=self.window_size)
+            bank_q = (
+                _build_local_patch_bank(lr_quats, img_shape=lr_shape, window_size=self.window_size)
+                if need_quat_bank
+                else None
+            )
             bank_f = _build_local_patch_bank(feat_lr, img_shape=lr_shape, window_size=self.window_size)
             support_meta = {
                 "grid_shape": (int(lr_shape[0]), int(lr_shape[1])),
@@ -1904,26 +2051,28 @@ class OCRPPatchUpsampler(nn.Module):
             }
             return bank_q, bank_f, support_meta
 
-        bank_q, meta_q = _build_macro_tile_patch_bank(
-            lr_quats,
-            img_shape=lr_shape,
-            window_size=self.window_size,
-            tile_size=self.macro_lr_tile_size,
-        )
+        bank_q = None
         bank_f, meta_f = _build_macro_tile_patch_bank(
             feat_lr,
             img_shape=lr_shape,
             window_size=self.window_size,
             tile_size=self.macro_lr_tile_size,
         )
-        if meta_q != meta_f:
-            raise ValueError(
-                "Quaternion and feature macro-tile banks disagree on support metadata: "
-                f"{meta_q} vs {meta_f}"
+        if need_quat_bank:
+            bank_q, meta_q = _build_macro_tile_patch_bank(
+                lr_quats,
+                img_shape=lr_shape,
+                window_size=self.window_size,
+                tile_size=self.macro_lr_tile_size,
             )
+            if meta_q != meta_f:
+                raise ValueError(
+                    "Quaternion and feature macro-tile banks disagree on support metadata: "
+                    f"{meta_q} vs {meta_f}"
+                )
         return bank_q, bank_f, {
-            "grid_shape": meta_q["tile_shape"],
-            "padded_shape": meta_q["padded_shape"],
+            "grid_shape": meta_f["tile_shape"],
+            "padded_shape": meta_f["padded_shape"],
         }
 
     def _assemble_patch_tokens(
@@ -2000,9 +2149,10 @@ class OCRPPatchUpsampler(nn.Module):
             lr_quats=lr_quats,
             feat_lr=feat_lr,
             lr_shape=lr_shape,
+            need_quat_bank=return_aux,
         )
 
-        cluster_ids = self.clusterer(bank_q)
+        cluster_ids = self.clusterer(bank_f)
         slot_info = self.slot_builder(cluster_ids)
         slot_mask = slot_info["slot_mask"]
         slot_meta = slot_info["slot_meta"]
@@ -2012,7 +2162,6 @@ class OCRPPatchUpsampler(nn.Module):
         )
 
         slot_ctx, slot_anchor_alpha = self.context_builder(
-            bank_q=bank_q,
             bank_f=bank_f,
             slot_mask=slot_mask,
             slot_meta=slot_meta,
@@ -2136,13 +2285,15 @@ class IsoEmbeddingSROCRP(nn.Module):
         lr_conv1_kernel_size: int = 5,
         use_residual_lr1: bool = True,
         lr_conv1_residual_weight: float = 1.0,
-        conv_feature_mask_cosine_threshold: float = 0.98,
+        conv_feature_mask_cosine_threshold: float | None = 0.98,
+        conv_feature_mask_l2_threshold: float | None = None,
         conv_feature_mask_soft: bool = False,
         conv_feature_mask_temperature: float = 32.0,
         upsample_factor: int | tuple[int, int] | list[int] = 4,
         window_size: int = 5,
         kmax_slots: int = 10,
         cluster_threshold_deg: float = 2.0,
+        cluster_feature_l2_threshold: float | None = None,
         cluster_connectivity: int = 8,
         phase_dim: int = 32,
         ocrp_router_hidden_dim: int = 128,
@@ -2170,6 +2321,7 @@ class IsoEmbeddingSROCRP(nn.Module):
         hr_conv1_kernel_size: int = 7,
         use_residual_hr1: bool = True,
         hr_conv1_residual_weight: float = 1.0,
+        hr_conv_feature_mask_l2_threshold: float | None = None,
         hr_conv_feature_mask_cosine_threshold: float | None = None,
         hr_conv_feature_mask_soft: bool | None = None,
         hr_conv_feature_mask_temperature: float | None = None,
@@ -2177,6 +2329,7 @@ class IsoEmbeddingSROCRP(nn.Module):
         hr_conv2_kernel_size: int | None = None,
         use_residual_hr2: bool = True,
         hr_conv2_residual_weight: float = 1.0,
+        hr_conv2_feature_mask_l2_threshold: float | None = None,
         hr_conv2_feature_mask_cosine_threshold: float | None = None,
         hr_conv2_feature_mask_soft: bool | None = None,
         hr_conv2_feature_mask_temperature: float | None = None,
@@ -2184,6 +2337,7 @@ class IsoEmbeddingSROCRP(nn.Module):
         hr_conv3_kernel_size: int | None = None,
         use_residual_hr3: bool = True,
         hr_conv3_residual_weight: float = 1.0,
+        hr_conv3_feature_mask_l2_threshold: float | None = None,
         hr_conv3_feature_mask_cosine_threshold: float | None = None,
         hr_conv3_feature_mask_soft: bool | None = None,
         hr_conv3_feature_mask_temperature: float | None = None,
@@ -2251,13 +2405,29 @@ class IsoEmbeddingSROCRP(nn.Module):
                 "ocrp_slot_ratio_temperature must be > 0, "
                 f"got {ocrp_slot_ratio_temperature}"
             )
-        self.lr_conv_feature_mask_cosine_threshold = float(conv_feature_mask_cosine_threshold)
+        self.lr_conv_feature_mask_cosine_threshold = (
+            None if conv_feature_mask_cosine_threshold is None else float(conv_feature_mask_cosine_threshold)
+        )
+        self.lr_conv_feature_mask_l2_threshold = _resolve_feature_l2_threshold(
+            explicit_l2_threshold=conv_feature_mask_l2_threshold,
+            legacy_cosine_threshold=self.lr_conv_feature_mask_cosine_threshold,
+            default_l2_threshold=math.radians(5.0),
+        )
         self.lr_conv_feature_mask_soft = bool(conv_feature_mask_soft)
         self.lr_conv_feature_mask_temperature = float(conv_feature_mask_temperature)
-        self.hr_conv_feature_mask_cosine_threshold = float(
+        self.hr_conv_feature_mask_cosine_threshold = (
             self.lr_conv_feature_mask_cosine_threshold
             if hr_conv_feature_mask_cosine_threshold is None
-            else hr_conv_feature_mask_cosine_threshold
+            else float(hr_conv_feature_mask_cosine_threshold)
+        )
+        self.hr_conv_feature_mask_l2_threshold = _resolve_feature_l2_threshold(
+            explicit_l2_threshold=(
+                self.lr_conv_feature_mask_l2_threshold
+                if hr_conv_feature_mask_l2_threshold is None
+                else hr_conv_feature_mask_l2_threshold
+            ),
+            legacy_cosine_threshold=self.hr_conv_feature_mask_cosine_threshold,
+            default_l2_threshold=self.lr_conv_feature_mask_l2_threshold,
         )
         self.hr_conv_feature_mask_soft = bool(
             self.lr_conv_feature_mask_soft
@@ -2272,10 +2442,19 @@ class IsoEmbeddingSROCRP(nn.Module):
         self.hr_conv2_kernel_size = int(
             hr_conv1_kernel_size if hr_conv2_kernel_size is None else hr_conv2_kernel_size
         )
-        self.hr_conv2_feature_mask_cosine_threshold = float(
+        self.hr_conv2_feature_mask_cosine_threshold = (
             self.hr_conv_feature_mask_cosine_threshold
             if hr_conv2_feature_mask_cosine_threshold is None
-            else hr_conv2_feature_mask_cosine_threshold
+            else float(hr_conv2_feature_mask_cosine_threshold)
+        )
+        self.hr_conv2_feature_mask_l2_threshold = _resolve_feature_l2_threshold(
+            explicit_l2_threshold=(
+                self.hr_conv_feature_mask_l2_threshold
+                if hr_conv2_feature_mask_l2_threshold is None
+                else hr_conv2_feature_mask_l2_threshold
+            ),
+            legacy_cosine_threshold=self.hr_conv2_feature_mask_cosine_threshold,
+            default_l2_threshold=self.hr_conv_feature_mask_l2_threshold,
         )
         self.hr_conv2_feature_mask_soft = bool(
             self.hr_conv_feature_mask_soft
@@ -2290,10 +2469,19 @@ class IsoEmbeddingSROCRP(nn.Module):
         self.hr_conv3_kernel_size = int(
             hr_conv1_kernel_size if hr_conv3_kernel_size is None else hr_conv3_kernel_size
         )
-        self.hr_conv3_feature_mask_cosine_threshold = float(
+        self.hr_conv3_feature_mask_cosine_threshold = (
             self.hr_conv_feature_mask_cosine_threshold
             if hr_conv3_feature_mask_cosine_threshold is None
-            else hr_conv3_feature_mask_cosine_threshold
+            else float(hr_conv3_feature_mask_cosine_threshold)
+        )
+        self.hr_conv3_feature_mask_l2_threshold = _resolve_feature_l2_threshold(
+            explicit_l2_threshold=(
+                self.hr_conv_feature_mask_l2_threshold
+                if hr_conv3_feature_mask_l2_threshold is None
+                else hr_conv3_feature_mask_l2_threshold
+            ),
+            legacy_cosine_threshold=self.hr_conv3_feature_mask_cosine_threshold,
+            default_l2_threshold=self.hr_conv_feature_mask_l2_threshold,
         )
         self.hr_conv3_feature_mask_soft = bool(
             self.hr_conv_feature_mask_soft
@@ -2305,12 +2493,13 @@ class IsoEmbeddingSROCRP(nn.Module):
             if hr_conv3_feature_mask_temperature is None
             else hr_conv3_feature_mask_temperature
         )
-        self.conv_lr1 = CosineMaskedEquivariantSpatialConv(
+        self.conv_lr1 = FeatureDistanceMaskedEquivariantSpatialConv(
             kernel_size=int(lr_conv1_kernel_size),
             irreps_in=self.irreps_feat,
             irreps_out=self.irreps_feat,
             use_residual=self.use_residual_lr1,
             residual_weight=self.lr_conv1_residual_weight,
+            feature_mask_l2_threshold=self.lr_conv_feature_mask_l2_threshold,
             feature_mask_cosine_threshold=self.lr_conv_feature_mask_cosine_threshold,
             feature_mask_soft=self.lr_conv_feature_mask_soft,
             feature_mask_temperature=self.lr_conv_feature_mask_temperature,
@@ -2322,6 +2511,7 @@ class IsoEmbeddingSROCRP(nn.Module):
             window_size=int(window_size),
             kmax_slots=int(kmax_slots),
             cluster_threshold_deg=float(cluster_threshold_deg),
+            cluster_feature_l2_threshold=cluster_feature_l2_threshold,
             cluster_connectivity=int(cluster_connectivity),
             phase_dim=int(phase_dim),
             router_hidden_dim=int(ocrp_router_hidden_dim),
@@ -2342,34 +2532,37 @@ class IsoEmbeddingSROCRP(nn.Module):
             proposal_chunk_size=int(ocrp_proposal_chunk_size),
             proposal_token_chunk_size=ocrp_proposal_token_chunk_size,
         )
-        self.conv_hr1 = CosineMaskedEquivariantSpatialConv(
+        self.conv_hr1 = FeatureDistanceMaskedEquivariantSpatialConv(
             kernel_size=int(hr_conv1_kernel_size),
             irreps_in=self.irreps_feat,
             irreps_out=self.irreps_feat,
             use_residual=self.use_residual_hr1,
             residual_weight=self.hr_conv1_residual_weight,
+            feature_mask_l2_threshold=self.hr_conv_feature_mask_l2_threshold,
             feature_mask_cosine_threshold=self.hr_conv_feature_mask_cosine_threshold,
             feature_mask_soft=self.hr_conv_feature_mask_soft,
             feature_mask_temperature=self.hr_conv_feature_mask_temperature,
         )
-        self.conv_hr2 = CosineMaskedEquivariantSpatialConv(
+        self.conv_hr2 = FeatureDistanceMaskedEquivariantSpatialConv(
             kernel_size=self.hr_conv2_kernel_size,
             irreps_in=self.irreps_feat,
             irreps_out=self.irreps_feat,
             use_residual=self.use_residual_hr2,
             residual_weight=self.hr_conv2_residual_weight,
+            feature_mask_l2_threshold=self.hr_conv2_feature_mask_l2_threshold,
             feature_mask_cosine_threshold=self.hr_conv2_feature_mask_cosine_threshold,
             feature_mask_soft=self.hr_conv2_feature_mask_soft,
             feature_mask_temperature=self.hr_conv2_feature_mask_temperature,
         )
-        self.conv_hr3: CosineMaskedEquivariantSpatialConv | None = None
+        self.conv_hr3: FeatureDistanceMaskedEquivariantSpatialConv | None = None
         if self.use_hr_conv3:
-            self.conv_hr3 = CosineMaskedEquivariantSpatialConv(
+            self.conv_hr3 = FeatureDistanceMaskedEquivariantSpatialConv(
                 kernel_size=self.hr_conv3_kernel_size,
                 irreps_in=self.irreps_feat,
                 irreps_out=self.irreps_feat,
                 use_residual=self.use_residual_hr3,
                 residual_weight=self.hr_conv3_residual_weight,
+                feature_mask_l2_threshold=self.hr_conv3_feature_mask_l2_threshold,
                 feature_mask_cosine_threshold=self.hr_conv3_feature_mask_cosine_threshold,
                 feature_mask_soft=self.hr_conv3_feature_mask_soft,
                 feature_mask_temperature=self.hr_conv3_feature_mask_temperature,
