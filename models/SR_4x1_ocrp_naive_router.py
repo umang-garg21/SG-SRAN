@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import warnings
 from pathlib import Path
 
@@ -81,89 +80,6 @@ def _irrep_block_slices(irreps: Irreps) -> list[tuple[int, int]]:
     return slices
 
 
-def resolve_ocrp_upsample_residual_weight(
-    cfg,
-    *,
-    epoch: int | None = None,
-    total_epochs: int | None = None,
-    for_training: bool = False,
-) -> float:
-    """Resolve the OCRP LR-anchor residual weight from config and training progress."""
-    start = float(getattr(cfg, "ocrp_upsample_residual_weight", 1.0))
-    final_cfg = getattr(cfg, "ocrp_upsample_residual_weight_final", None)
-    final = start if final_cfg is None else float(final_cfg)
-    schedule = str(
-        getattr(cfg, "ocrp_upsample_residual_weight_schedule", "constant")
-    ).strip().lower()
-
-    if start < 0.0 or final < 0.0:
-        raise ValueError(
-            "OCRP upsample residual weights must be >= 0, "
-            f"got start={start} final={final}"
-        )
-
-    if schedule in {"", "constant", "none", "off"}:
-        return start
-
-    if schedule not in {"linear", "cosine"}:
-        raise ValueError(
-            "ocrp_upsample_residual_weight_schedule must be one of "
-            f"['constant', 'linear', 'cosine'], got {schedule!r}"
-        )
-
-    if not for_training:
-        return final
-
-    if epoch is None or total_epochs is None or int(total_epochs) <= 1:
-        return start
-
-    denom = max(1, int(total_epochs) - 1)
-    progress = min(max(float(epoch) / float(denom), 0.0), 1.0)
-    if schedule == "cosine":
-        mix = 0.5 * (1.0 - math.cos(math.pi * progress))
-    else:
-        mix = progress
-    return (1.0 - mix) * start + mix * final
-
-
-def _approx_l2_threshold_from_legacy_cosine_threshold(cosine_threshold: float) -> float:
-    """
-    Approximate an embedding-space L2 cutoff from the earlier cosine-based OCRP mask.
-
-    This uses the measured FCC local-iso correspondence between cosine thresholds
-    and misorientation angles, then maps angle to radians because the embedding is
-    close to isometric in L2.
-    """
-    cos_points = np.array([0.80, 0.85, 0.90, 0.95, 0.97, 0.98, 0.99, 0.995], dtype=np.float64)
-    deg_points = np.array([15.0, 13.0, 11.0, 8.0, 6.0, 5.0, 4.0, 3.0], dtype=np.float64)
-    cos_clamped = float(np.clip(float(cosine_threshold), float(cos_points[0]), float(cos_points[-1])))
-    approx_deg = float(np.interp(cos_clamped, cos_points, deg_points))
-    return float(math.radians(approx_deg))
-
-
-def _resolve_feature_l2_threshold(
-    *,
-    explicit_l2_threshold: float | None,
-    legacy_cosine_threshold: float | None,
-    default_l2_threshold: float,
-) -> float:
-    if explicit_l2_threshold is not None:
-        return float(explicit_l2_threshold)
-    if legacy_cosine_threshold is not None:
-        return _approx_l2_threshold_from_legacy_cosine_threshold(float(legacy_cosine_threshold))
-    return float(default_l2_threshold)
-
-
-def _resolve_cluster_feature_l2_threshold(
-    *,
-    cluster_feature_l2_threshold: float | None,
-    legacy_cluster_threshold_deg: float,
-) -> float:
-    if cluster_feature_l2_threshold is not None:
-        return float(cluster_feature_l2_threshold)
-    return float(math.radians(float(legacy_cluster_threshold_deg)))
-
-
 def _as_scale_tuple(scale: int | tuple[int, int] | list[int]) -> tuple[int, int]:
     if isinstance(scale, (tuple, list)):
         if len(scale) != 2:
@@ -219,10 +135,25 @@ def _misorientation_angle_sym(
     q2: torch.Tensor,
     sym_ops: torch.Tensor,
 ) -> torch.Tensor:
-    q2var = torch.einsum("gij,...j->...gi", sym_ops, q2)
-    dots = (q1.unsqueeze(-2) * q2var).sum(dim=-1).abs().clamp(0.0, 1.0)
-    best = dots.max(dim=-1).values
-    return 2.0 * torch.acos(best)
+    lead_shape = q1.shape[:-1]
+    if q2.shape[:-1] != lead_shape or q1.shape[-1] != 4 or q2.shape[-1] != 4:
+        raise ValueError(
+            f"Expected q1 and q2 with matching leading dims and trailing quaternion dim 4, "
+            f"got {tuple(q1.shape)} and {tuple(q2.shape)}"
+        )
+
+    q1_flat = q1.reshape(-1, 4)
+    q2_flat = q2.reshape(-1, 4)
+    max_pairs_per_chunk = 262144
+    out_chunks: list[torch.Tensor] = []
+    for start in range(0, q1_flat.shape[0], max_pairs_per_chunk):
+        end = min(start + max_pairs_per_chunk, q1_flat.shape[0])
+        q1_chunk = q1_flat[start:end]
+        q2_chunk = q2_flat[start:end]
+        dots = torch.einsum("bi,gij,bj->bg", q1_chunk, sym_ops, q2_chunk).abs().clamp(0.0, 1.0)
+        best = dots.max(dim=-1).values
+        out_chunks.append(2.0 * torch.acos(best))
+    return torch.cat(out_chunks, dim=0).view(*lead_shape)
 
 
 def _flat_to_image(features: torch.Tensor, img_shape: tuple[int, int]) -> torch.Tensor:
@@ -282,14 +213,24 @@ def _validate_odd_positive_int(name: str, value: int) -> int:
     return value_int
 
 
-def _build_macro_tile_patch_bank(
+def _validate_positive_shape(
+    name: str,
+    value: int | tuple[int, int] | list[int],
+) -> tuple[int, int]:
+    shape = _as_patch_shape(value, name=name)
+    if shape[0] < 1 or shape[1] < 1:
+        raise ValueError(f"{name} must be positive in both dims, got {shape}")
+    return shape
+
+
+def _build_macro_stride_patch_bank(
     features: torch.Tensor,
     img_shape: tuple[int, int],
     window_size: int,
-    tile_size: int,
+    stride_shape: tuple[int, int],
 ) -> tuple[torch.Tensor, dict[str, tuple[int, int]]]:
     h, w = int(img_shape[0]), int(img_shape[1])
-    tile_size = _validate_odd_positive_int("macro_lr_tile_size", tile_size)
+    stride_h, stride_w = _validate_positive_shape("macro_lr_stride_shape", stride_shape)
     batched = features.dim() == 3
     if not batched:
         features = features.unsqueeze(0)
@@ -297,11 +238,12 @@ def _build_macro_tile_patch_bank(
     if n != h * w:
         raise ValueError(f"Expected N={h*w}, got {n}")
 
-    tile_h = (h + tile_size - 1) // tile_size
-    tile_w = (w + tile_size - 1) // tile_size
-    h_pad = tile_h * tile_size
-    w_pad = tile_w * tile_size
-    center = tile_size // 2
+    tile_h = (h + stride_h - 1) // stride_h
+    tile_w = (w + stride_w - 1) // stride_w
+    h_pad = tile_h * stride_h
+    w_pad = tile_w * stride_w
+    center_y = stride_h // 2
+    center_x = stride_w // 2
 
     feat_img = features.view(bsz, h, w, cdim).permute(0, 3, 1, 2).contiguous()
     if h_pad != h or w_pad != w:
@@ -312,11 +254,11 @@ def _build_macro_tile_patch_bank(
         )
     pad = int(window_size // 2)
     feat_pad = F.pad(feat_img, (pad, pad, pad, pad), mode="replicate")
-    sampled = feat_pad[:, :, center:, center:]
-    patches = sampled.unfold(2, window_size, tile_size).unfold(3, window_size, tile_size)
+    sampled = feat_pad[:, :, center_y:, center_x:]
+    patches = sampled.unfold(2, window_size, stride_h).unfold(3, window_size, stride_w)
     if int(patches.shape[2]) != tile_h or int(patches.shape[3]) != tile_w:
         raise ValueError(
-            "Macro-tile support extraction produced an unexpected grid shape: "
+            "Macro-stride support extraction produced an unexpected grid shape: "
             f"got {(int(patches.shape[2]), int(patches.shape[3]))}, "
             f"expected {(tile_h, tile_w)}"
         )
@@ -328,7 +270,12 @@ def _build_macro_tile_patch_bank(
     )
     if not batched:
         bank = bank.squeeze(0)
-    return bank, {"tile_shape": (tile_h, tile_w), "padded_shape": (h_pad, w_pad)}
+    return bank, {
+        "tile_shape": (tile_h, tile_w),
+        "padded_shape": (h_pad, w_pad),
+        "stride_shape": (stride_h, stride_w),
+        "sample_center_offset": (center_y, center_x),
+    }
 
 
 def _build_patch_token_coords(
@@ -364,13 +311,13 @@ def _build_patch_token_coords(
     return torch.stack([yy, xx], dim=-1).reshape(patch_tokens, 2)
 
 
-class FeatureDistanceMaskedEquivariantSpatialConv(nn.Module):
+class CosineMaskedEquivariantSpatialConv(nn.Module):
     """
-    Equivariant local convolution with a feature-space Euclidean-distance mask.
+    Equivariant local convolution with a cosine-similarity neighbor mask.
 
     The local context stays a weighted average over existing nearby orientation
-    features, but neighbors whose embedding L2 distance to the center rises
-    above the configured threshold are excluded before renormalization.
+    features, but neighbors whose embedding cosine to the center falls below
+    the configured threshold are excluded before renormalization.
     """
 
     def __init__(
@@ -381,8 +328,7 @@ class FeatureDistanceMaskedEquivariantSpatialConv(nn.Module):
         use_residual: bool = False,
         residual_weight: float = 1.0,
         dilation: int = 1,
-        feature_mask_l2_threshold: float | None = None,
-        feature_mask_cosine_threshold: float | None = None,
+        feature_mask_cosine_threshold: float = 0.99,
         feature_mask_soft: bool = False,
         feature_mask_temperature: float = 32.0,
         eps: float = 1e-8,
@@ -391,14 +337,7 @@ class FeatureDistanceMaskedEquivariantSpatialConv(nn.Module):
         self.kernel_size = int(kernel_size)
         self.dilation = int(dilation)
         self.padding = (self.kernel_size // 2) * self.dilation
-        self.feature_mask_l2_threshold = _resolve_feature_l2_threshold(
-            explicit_l2_threshold=feature_mask_l2_threshold,
-            legacy_cosine_threshold=feature_mask_cosine_threshold,
-            default_l2_threshold=math.radians(5.0),
-        )
-        self.feature_mask_cosine_threshold = (
-            None if feature_mask_cosine_threshold is None else float(feature_mask_cosine_threshold)
-        )
+        self.feature_mask_cosine_threshold = float(feature_mask_cosine_threshold)
         self.feature_mask_soft = bool(feature_mask_soft)
         self.feature_mask_temperature = float(feature_mask_temperature)
         self.eps = float(eps)
@@ -447,17 +386,17 @@ class FeatureDistanceMaskedEquivariantSpatialConv(nn.Module):
             .reshape(bsz, cdim, h, w, self.kernel_size, self.kernel_size)
         )
 
-    def _masked_spatial_weights(self, l2_dist: torch.Tensor) -> torch.Tensor:
+    def _masked_spatial_weights(self, cosine: torch.Tensor) -> torch.Tensor:
         base_w = F.softmax(self.spatial_logits.reshape(-1), dim=0).view(
             1, 1, 1, self.kernel_size, self.kernel_size
         )
         if self.feature_mask_soft:
             mask = torch.sigmoid(
-                self.feature_mask_temperature * (self.feature_mask_l2_threshold - l2_dist)
+                self.feature_mask_temperature * (cosine - self.feature_mask_cosine_threshold)
             )
             mask = torch.where(self.center_mask, torch.ones_like(mask), mask)
         else:
-            mask = (l2_dist <= self.feature_mask_l2_threshold)
+            mask = (cosine >= self.feature_mask_cosine_threshold)
             mask = torch.logical_or(mask, self.center_mask).to(base_w.dtype)
         return base_w * mask
 
@@ -475,8 +414,13 @@ class FeatureDistanceMaskedEquivariantSpatialConv(nn.Module):
         feat_img = features.view(bsz, h, w, cdim).permute(0, 3, 1, 2).contiguous()
         patches = self._extract_patches(feat_img)
         center = feat_img.unsqueeze(-1).unsqueeze(-1)
-        l2_dist = (patches - center).pow(2).sum(dim=1).clamp_min(self.eps).sqrt()
-        masked_w = self._masked_spatial_weights(l2_dist)
+
+        dot = (patches * center).sum(dim=1)
+        patch_norm = patches.pow(2).sum(dim=1).clamp_min(self.eps).sqrt()
+        center_norm = feat_img.pow(2).sum(dim=1).clamp_min(self.eps).sqrt().unsqueeze(-1).unsqueeze(-1)
+        cosine = (dot / (patch_norm * center_norm).clamp_min(self.eps)).clamp(-1.0, 1.0)
+
+        masked_w = self._masked_spatial_weights(cosine)
         denom = masked_w.sum(dim=(-1, -2)).clamp_min(self.eps)
         neigh = (patches * masked_w.unsqueeze(1)).sum(dim=(-1, -2)) / denom.unsqueeze(1)
 
@@ -494,9 +438,6 @@ class FeatureDistanceMaskedEquivariantSpatialConv(nn.Module):
         if not batched:
             out = out.squeeze(0)
         return out
-
-
-CosineMaskedEquivariantSpatialConv = FeatureDistanceMaskedEquivariantSpatialConv
 
 
 class LocalIsoCrystalEncoder(nn.Module):
@@ -889,118 +830,14 @@ class QuaternionBankClusterer(nn.Module):
 
         # Vectorized connected-components by repeated minimum-label propagation.
         for _ in range(nnode - 1):
-            new_labels = labels_flat.clone()
-            
-            # First propagation: edge_a <- edge_b
             la = labels_flat.gather(1, edge_a)
             lb = labels_flat.gather(1, edge_b)
             edge_min = torch.minimum(la, lb)
-            masked_min_a = torch.where(keep_edges, edge_min, inactive_label)
-            new_labels.scatter_reduce_(1, edge_a, masked_min_a, reduce="amin", include_self=True)
-            
-            # Second propagation: edge_b <- updated edge_a
-            # Recompute masked_min using UPDATED labels from first propagation
-            la_updated = new_labels.gather(1, edge_a)  # UPDATED labels
-            lb = labels_flat.gather(1, edge_b)
-            edge_min_b = torch.minimum(la_updated, lb)
-            masked_min_b = torch.where(keep_edges, edge_min_b, inactive_label)
-            new_labels.scatter_reduce_(1, edge_b, masked_min_b, reduce="amin", include_self=True)
-            
-            if torch.equal(new_labels, labels_flat):
-                break
-            labels_flat = new_labels
+            masked_min = torch.where(keep_edges, edge_min, inactive_label)
 
-        labels = labels_flat.view(bsz, nwin, nnode)
-        if not batched:
-            labels = labels.squeeze(0)
-        return labels
-
-
-class FeatureBankClusterer(nn.Module):
-    """Cluster a local LR feature bank into connected components using pairwise L2 edges."""
-
-    def __init__(
-        self,
-        threshold_l2: float = 0.035,
-        connectivity: int = 8,
-        window_size: int = 5,
-        eps: float = 1e-8,
-    ):
-        super().__init__()
-        if int(window_size) < 3 or int(window_size) % 2 == 0:
-            raise ValueError(f"OCRP expects an odd window_size >= 3, got {window_size}")
-        if int(connectivity) not in (4, 8):
-            raise ValueError(f"OCRP currently expects 4- or 8-neighbor clustering, got {connectivity}")
-        self.threshold_l2 = float(threshold_l2)
-        self.connectivity = int(connectivity)
-        self.window_size = int(window_size)
-        self.num_nodes = int(self.window_size * self.window_size)
-        self.eps = float(eps)
-
-        edges: list[tuple[int, int]] = []
-        for y in range(self.window_size):
-            for x in range(self.window_size):
-                idx = y * self.window_size + x
-                if x + 1 < self.window_size:
-                    edges.append((idx, idx + 1))
-                if y + 1 < self.window_size:
-                    edges.append((idx, idx + self.window_size))
-                if self.connectivity == 8 and y + 1 < self.window_size:
-                    if x + 1 < self.window_size:
-                        edges.append((idx, idx + self.window_size + 1))
-                    if x - 1 >= 0:
-                        edges.append((idx, idx + self.window_size - 1))
-        edge_idx_a = torch.tensor([a for a, _ in edges], dtype=torch.long)
-        edge_idx_b = torch.tensor([b for _, b in edges], dtype=torch.long)
-        self.register_buffer("edge_idx_a", edge_idx_a, persistent=False)
-        self.register_buffer("edge_idx_b", edge_idx_b, persistent=False)
-
-    def forward(self, bank_f: torch.Tensor) -> torch.Tensor:
-        batched = bank_f.dim() == 4
-        if not batched:
-            bank_f = bank_f.unsqueeze(0)
-        bsz, nwin, nnode, cdim = bank_f.shape
-        if nnode != self.num_nodes:
-            raise ValueError(
-                f"Expected bank_f shape (B,N,{self.num_nodes},C), got {tuple(bank_f.shape)}"
-            )
-        if cdim < 1:
-            raise ValueError(f"Expected bank_f feature dim >= 1, got {cdim}")
-
-        flat = bank_f.to(dtype=torch.float32).reshape(bsz * nwin, nnode, cdim)
-        idx_a = self.edge_idx_a.to(device=flat.device)
-        idx_b = self.edge_idx_b.to(device=flat.device)
-        f1 = flat.index_select(1, idx_a)
-        f2 = flat.index_select(1, idx_b)
-        l2 = (f1 - f2).pow(2).sum(dim=-1).clamp_min(self.eps).sqrt()
-        keep_edges = l2 <= self.threshold_l2
-
-        num_windows = int(flat.shape[0])
-        labels_flat = (
-            torch.arange(nnode, device=flat.device, dtype=torch.long)
-            .view(1, nnode)
-            .expand(num_windows, -1)
-            .clone()
-        )
-        edge_a = idx_a.view(1, -1).expand(num_windows, -1)
-        edge_b = idx_b.view(1, -1).expand(num_windows, -1)
-        inactive_label = torch.full_like(edge_a, fill_value=nnode)
-
-        for _ in range(nnode - 1):
             new_labels = labels_flat.clone()
-
-            la = labels_flat.gather(1, edge_a)
-            lb = labels_flat.gather(1, edge_b)
-            edge_min = torch.minimum(la, lb)
-            masked_min_a = torch.where(keep_edges, edge_min, inactive_label)
-            new_labels.scatter_reduce_(1, edge_a, masked_min_a, reduce="amin", include_self=True)
-
-            la_updated = new_labels.gather(1, edge_a)
-            lb = labels_flat.gather(1, edge_b)
-            edge_min_b = torch.minimum(la_updated, lb)
-            masked_min_b = torch.where(keep_edges, edge_min_b, inactive_label)
-            new_labels.scatter_reduce_(1, edge_b, masked_min_b, reduce="amin", include_self=True)
-
+            new_labels.scatter_reduce_(1, edge_a, masked_min, reduce="amin", include_self=True)
+            new_labels.scatter_reduce_(1, edge_b, masked_min, reduce="amin", include_self=True)
             if torch.equal(new_labels, labels_flat):
                 break
             labels_flat = new_labels
@@ -1014,9 +851,8 @@ class FeatureBankClusterer(nn.Module):
 class ClusterSlotBuilder(nn.Module):
     """Pack top-ranked clusters into deterministic slots and emit cheap metadata."""
 
-    SLOT_TYPE_DIM = 10
-    MAX_SLOTS = 10
-    META_DIM = 25
+    SLOT_TYPE_DIM = 6
+    META_DIM = 11
     META_VALID = 0
     META_SLOT_TYPE_START = 1
     META_MASS = 7
@@ -1024,11 +860,11 @@ class ClusterSlotBuilder(nn.Module):
     META_CENTROID_X = 9
     META_SPATIAL_DISP = 10
 
-    def __init__(self, kmax_slots: int = 10, window_size: int = 5):
+    def __init__(self, kmax_slots: int = 6, window_size: int = 5):
         super().__init__()
-        if int(kmax_slots) < 1 or int(kmax_slots) > self.MAX_SLOTS:
+        if int(kmax_slots) < 1 or int(kmax_slots) > self.SLOT_TYPE_DIM:
             raise ValueError(
-                f"OCRP expects 1 <= kmax_slots <= {self.MAX_SLOTS}, got {kmax_slots}"
+                f"OCRP expects 1 <= kmax_slots <= {self.SLOT_TYPE_DIM}, got {kmax_slots}"
             )
         if int(window_size) < 3 or int(window_size) % 2 == 0:
             raise ValueError(f"OCRP expects an odd window_size >= 3, got {window_size}")
@@ -1052,17 +888,31 @@ class ClusterSlotBuilder(nn.Module):
         if nnode != self.num_nodes:
             raise ValueError(f"Expected cluster_ids last dim {self.num_nodes}, got {nnode}")
 
-        labels = cluster_ids.to(dtype=torch.long)
-        label_onehot = F.one_hot(labels.clamp(min=0, max=self.num_nodes - 1), num_classes=self.num_nodes).to(torch.float32)
-        label_mass = label_onehot.mean(dim=2)
-        label_mask = label_onehot.permute(0, 1, 3, 2).contiguous()
-        label_count = label_mask.sum(dim=-1)
-
         coords = self.coords.to(device=cluster_ids.device, dtype=torch.float32)
-        coords_exp = coords.view(1, 1, 1, nnode, 2)
-        label_centroid = (
-            label_mask.unsqueeze(-1) * coords_exp
-        ).sum(dim=-2) / label_count.clamp_min(1.0).unsqueeze(-1)
+        labels = cluster_ids.to(dtype=torch.long)
+        labels_clamped = labels.clamp(min=0, max=self.num_nodes - 1)
+        num_windows = int(bsz * nwin)
+        labels_flat = labels_clamped.view(num_windows, nnode)
+
+        ones = torch.ones((num_windows, nnode), device=cluster_ids.device, dtype=torch.float32)
+        label_count_flat = torch.zeros(
+            (num_windows, self.num_nodes),
+            device=cluster_ids.device,
+            dtype=torch.float32,
+        )
+        label_count_flat.scatter_add_(1, labels_flat, ones)
+        label_count = label_count_flat.view(bsz, nwin, self.num_nodes)
+        label_mass = label_count / float(self.num_nodes)
+
+        label_coord_sum_flat = torch.zeros(
+            (num_windows, self.num_nodes, 2),
+            device=cluster_ids.device,
+            dtype=torch.float32,
+        )
+        scatter_idx = labels_flat.unsqueeze(-1).expand(-1, -1, 2)
+        coord_src = coords.view(1, nnode, 2).expand(num_windows, -1, -1)
+        label_coord_sum_flat.scatter_add_(1, scatter_idx, coord_src)
+        label_centroid = label_coord_sum_flat.view(bsz, nwin, self.num_nodes, 2) / label_count.clamp_min(1.0).unsqueeze(-1)
         # Prefer larger clusters first; use centrality only as a light tie-break.
         centrality = -(label_centroid.pow(2).sum(dim=-1))
         label_idx = torch.arange(self.num_nodes, device=cluster_ids.device, dtype=torch.float32).view(1, 1, -1)
@@ -1185,11 +1035,13 @@ class LearnedWeightedSlotContextBuilder(nn.Module):
 
     def forward(
         self,
+        bank_q: torch.Tensor,
         bank_f: torch.Tensor,
         slot_mask: torch.Tensor,
         slot_meta: torch.Tensor,
         return_alpha: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        del bank_q
         batched = bank_f.dim() == 4
         if not batched:
             bank_f = bank_f.unsqueeze(0)
@@ -1239,6 +1091,7 @@ class WithinSlotInvariantPool(nn.Module):
         hidden_dim: int = 96,
         chunk_size: int = 512,
         token_conditioned_member_bias: bool = True,
+        center_bias_init: float | None = None,
     ):
         super().__init__()
         self.irreps_feat = Irreps(irreps_feat)
@@ -1290,6 +1143,21 @@ class WithinSlotInvariantPool(nn.Module):
             else None
         )
         self.logit_scale = float(max(1, hidden_dim)) ** -0.5
+
+        if self.token_conditioned_member_bias and self.token_bias_ctrl is not None:
+            if center_bias_init is None:
+                # Default: τ ≈ W²/8 → bias drop ≈ -0.5 per LR-pixel step in normalized coords.
+                tau = (float(self.window_size) ** 2) / 8.0
+            else:
+                tau = float(center_bias_init)
+            if tau != 0.0:
+                final = self.token_bias_ctrl[-1]
+                with torch.no_grad():
+                    final.weight.zero_()
+                    init_b = torch.zeros(6, dtype=final.bias.dtype)
+                    init_b[3] = -tau
+                    init_b[4] = -tau
+                    final.bias.copy_(init_b)
 
     @staticmethod
     def _token_geom_features(token_coords: torch.Tensor) -> torch.Tensor:
@@ -1448,32 +1316,25 @@ class WithinSlotInvariantPool(nn.Module):
 
 
 class PatchSlotRouter(nn.Module):
-    """Predict joint patchwise slot ownership logits for the full HR patch."""
+    """Geometric router: predicts per-HR-pixel slot ownership logits from the LR
+    slot-composition image (K binary slot masks over the window) plus phase."""
 
     def __init__(
         self,
-        irreps_feat: Irreps | str,
-        meta_dim: int,
-        kmax_slots: int = 10,
-        upsample_factor: int | tuple[int, int] | list[int] = 4,
-        patch_size: int | tuple[int, int] | list[int] | None = None,
+        kmax_slots: int,
+        window_size: int,
+        patch_size: int | tuple[int, int] | list[int],
         phase_dim: int = 32,
         hidden_dim: int = 128,
-        conv_hidden_dim: int = 64,
         chunk_size: int = 512,
-        slot_mass_power: float = 0.25,
-        uniform_slot_mix: float = 0.75,
-        use_slot_type_meta: bool = True,
-        use_raw_token_ctx: bool = False,
+        use_mlp_encoder: bool = False,
+        center_prior_weight: float = 0.0,
     ):
         super().__init__()
-        self.irreps_feat = Irreps(irreps_feat)
         self.kmax_slots = int(kmax_slots)
-        self.upsample_factor = _as_scale_tuple(upsample_factor)
-        self.patch_shape = _as_patch_shape(
-            patch_size if patch_size is not None else self.upsample_factor,
-            name="patch_size",
-        )
+        self.window_size = int(window_size)
+        self.num_nodes = self.window_size * self.window_size
+        self.patch_shape = _as_patch_shape(patch_size, name="patch_size")
         self.patch_size = (
             int(self.patch_shape[0])
             if self.patch_shape[0] == self.patch_shape[1]
@@ -1481,112 +1342,76 @@ class PatchSlotRouter(nn.Module):
         )
         self.patch_tokens = _num_patch_tokens(self.patch_shape)
         self.phase_dim = int(phase_dim)
-        self.summary = InvariantSlotSummary(self.irreps_feat)
-        self.slot_hidden_dim = int(hidden_dim)
+        self.hidden_dim = int(hidden_dim)
         self.chunk_size = max(1, int(chunk_size))
-        self.slot_mass_power = float(slot_mass_power)
-        self.uniform_slot_mix = float(uniform_slot_mix)
-        self.use_slot_type_meta = bool(use_slot_type_meta)
-        self.use_raw_token_ctx = bool(use_raw_token_ctx)
-        if self.slot_mass_power < 0.0:
-            raise ValueError(f"slot_mass_power must be >= 0, got {slot_mass_power}")
-        if not (0.0 <= self.uniform_slot_mix <= 1.0):
-            raise ValueError(f"uniform_slot_mix must be in [0,1], got {uniform_slot_mix}")
+        self.use_mlp_encoder = bool(use_mlp_encoder)
+        self.center_prior_weight = float(center_prior_weight)
+        self.center_idx = (self.window_size // 2) * self.window_size + (self.window_size // 2)
 
-        in_slot = int(self.summary.out_dim) + int(meta_dim)
-        self.slot_proj = nn.Sequential(
-            nn.Linear(in_slot, self.slot_hidden_dim),
-            nn.GELU(),
-            nn.Linear(self.slot_hidden_dim, self.slot_hidden_dim),
-        )
-        raw_in_slot = int(self.irreps_feat.dim) + int(meta_dim)
-        self.slot_proj_raw = (
-            nn.Sequential(
-                nn.Linear(raw_in_slot, self.slot_hidden_dim),
+        if self.use_mlp_encoder:
+            self.encoder = None
+            feat_dim = self.kmax_slots * self.num_nodes
+        else:
+            self.encoder = nn.Sequential(
+                nn.Conv2d(self.kmax_slots, self.hidden_dim, kernel_size=3, padding=1),
                 nn.GELU(),
-                nn.Linear(self.slot_hidden_dim, self.slot_hidden_dim),
+                nn.Conv2d(self.hidden_dim, self.hidden_dim, kernel_size=3, padding=1),
+                nn.GELU(),
+                nn.Conv2d(self.hidden_dim, self.hidden_dim, kernel_size=3, padding=1),
+                nn.GELU(),
             )
-            if self.use_raw_token_ctx
-            else None
-        )
+            feat_dim = self.hidden_dim * self.num_nodes
         self.phase_proj = nn.Sequential(
-            nn.Linear(self.phase_dim, self.slot_hidden_dim),
+            nn.Linear(self.phase_dim, self.hidden_dim),
             nn.GELU(),
-            nn.Linear(self.slot_hidden_dim, self.slot_hidden_dim),
+            nn.Linear(self.hidden_dim, self.hidden_dim),
         )
-        self.base_logit = nn.Sequential(
-            nn.Linear(2 * self.slot_hidden_dim, self.slot_hidden_dim),
+        self.logit_head = nn.Sequential(
+            nn.Linear(feat_dim + self.hidden_dim, self.hidden_dim),
             nn.GELU(),
-            nn.Linear(self.slot_hidden_dim, 1),
+            nn.Linear(self.hidden_dim, self.kmax_slots),
         )
-
-    def _router_weight_context(
-        self,
-        slot_meta: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        slot_valid = slot_meta[
-            ..., ClusterSlotBuilder.META_VALID : ClusterSlotBuilder.META_VALID + 1
-        ]
-        raw_mass = slot_meta[
-            ..., ClusterSlotBuilder.META_MASS : ClusterSlotBuilder.META_MASS + 1
-        ].clamp_min(0.0)
-        tempered_mass = torch.where(
-            raw_mass > 0.0,
-            raw_mass.clamp_min(1e-6).pow(self.slot_mass_power),
-            torch.zeros_like(raw_mass),
-        )
-        slot_meta_router = slot_meta.clone()
-        slot_meta_router[
-            ..., ClusterSlotBuilder.META_MASS : ClusterSlotBuilder.META_MASS + 1
-        ] = tempered_mass * slot_valid
-        if not self.use_slot_type_meta:
-            slot_meta_router[
-                ...,
-                ClusterSlotBuilder.META_SLOT_TYPE_START : (
-                    ClusterSlotBuilder.META_SLOT_TYPE_START + ClusterSlotBuilder.SLOT_TYPE_DIM
-                ),
-            ] = 0.0
-        return slot_valid, slot_meta_router
 
     def forward(
         self,
-        slot_ctx: torch.Tensor,
-        slot_meta: torch.Tensor,
+        slot_mask: torch.Tensor,
         phase_grid: torch.Tensor,
-        weak_parent_prior: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        if slot_ctx.dim() == 4:
-            bsz, nwin, kmax, cdim = slot_ctx.shape
-            token_ctx = None
-        elif slot_ctx.dim() == 5:
-            bsz, nwin, kmax, patch_tokens_ctx, cdim = slot_ctx.shape
-            token_ctx = slot_ctx
-        else:
+        if slot_mask.dim() != 4:
             raise ValueError(
-                "slot_ctx must have shape (B,N,K,C) or (B,N,K,T,C), "
-                f"got {tuple(slot_ctx.shape)}"
+                "slot_mask must have shape (B, N, K, num_nodes), "
+                f"got {tuple(slot_mask.shape)}"
             )
+        bsz, nwin, kmax, num_nodes = slot_mask.shape
         if kmax != self.kmax_slots:
             raise ValueError(f"Expected kmax_slots={self.kmax_slots}, got {kmax}")
+        if num_nodes != self.num_nodes:
+            raise ValueError(f"Expected num_nodes={self.num_nodes}, got {num_nodes}")
 
-        slot_valid, slot_meta_router = self._router_weight_context(slot_meta)
         nflat = int(bsz * nwin)
-        slot_meta_flat = slot_meta_router.reshape(nflat, kmax, slot_meta_router.shape[-1])
+        W = self.window_size
+        mask_f32 = slot_mask.to(dtype=torch.float32)
+        if self.use_mlp_encoder:
+            x = mask_f32.reshape(nflat, self.kmax_slots * self.num_nodes)
+        else:
+            x = mask_f32.reshape(nflat, kmax, W, W)
 
-        phase_flat: torch.Tensor | None = None
-        phase_shared: torch.Tensor | None = None
+        phase_emb_shared: torch.Tensor | None = None
+        phase_emb_flat: torch.Tensor | None = None
         if phase_grid.dim() == 2:
             if int(phase_grid.shape[0]) != self.patch_tokens:
                 raise ValueError(
                     f"Expected phase patch tokens {self.patch_tokens}, got {int(phase_grid.shape[0])}"
                 )
-            phase_shared = self.phase_proj(phase_grid)
+            phase_emb_shared = self.phase_proj(phase_grid.to(dtype=torch.float32))
         elif phase_grid.dim() == 4:
             if int(phase_grid.shape[2]) != self.patch_tokens:
                 raise ValueError(
                     f"Expected phase patch tokens {self.patch_tokens}, got {int(phase_grid.shape[2])}"
                 )
-            phase_flat = self.phase_proj(phase_grid).reshape(nflat, self.patch_tokens, self.slot_hidden_dim)
+            phase_emb_flat = self.phase_proj(phase_grid.to(dtype=torch.float32)).reshape(
+                nflat, self.patch_tokens, self.hidden_dim
+            )
         else:
             raise ValueError(
                 "phase_grid must have shape (T,D_phase) or (B,N,T,D_phase), "
@@ -1595,50 +1420,30 @@ class PatchSlotRouter(nn.Module):
 
         logits_flat = torch.empty(
             (nflat, self.patch_tokens, self.kmax_slots),
-            device=slot_meta.device,
-            dtype=slot_meta.dtype,
+            device=slot_mask.device,
+            dtype=x.dtype,
         )
-
-        if token_ctx is None:
-            slot_inv_flat = self.summary.summarize(slot_ctx).reshape(nflat, kmax, -1)
-            for start in range(0, nflat, self.chunk_size):
-                end = min(start + self.chunk_size, nflat)
-                slot_inv_chunk = slot_inv_flat[start:end]
-                slot_meta_chunk = slot_meta_flat[start:end]
-                slot_desc_chunk = self.slot_proj(torch.cat([slot_inv_chunk, slot_meta_chunk], dim=-1))
-                slot_desc_exp = slot_desc_chunk.unsqueeze(2).expand(-1, -1, self.patch_tokens, -1)
-                phase_chunk = phase_shared.unsqueeze(0).expand(end - start, -1, -1) if phase_shared is not None else phase_flat[start:end]
-                phase_exp = phase_chunk.unsqueeze(1).expand(-1, self.kmax_slots, -1, -1)
-                base_chunk = self.base_logit(torch.cat([slot_desc_exp, phase_exp], dim=-1)).squeeze(-1)
-                logits_flat[start:end] = base_chunk.permute(0, 2, 1)
-        else:
-            if patch_tokens_ctx != self.patch_tokens:
-                raise ValueError(
-                    f"Expected slot_ctx token dim {self.patch_tokens}, got {patch_tokens_ctx}"
-                )
-            if self.use_raw_token_ctx:
-                slot_inv_flat = token_ctx.reshape(nflat, kmax, self.patch_tokens, -1)
-                proj = self.slot_proj_raw
-                if proj is None:
-                    raise ValueError("slot_proj_raw is required when use_raw_token_ctx=True")
+        for start in range(0, nflat, self.chunk_size):
+            end = min(start + self.chunk_size, nflat)
+            if self.use_mlp_encoder:
+                feat_pool = x[start:end]
             else:
-                slot_inv_flat = self.summary.summarize(token_ctx).reshape(nflat, kmax, self.patch_tokens, -1)
-                proj = self.slot_proj
-            for start in range(0, nflat, self.chunk_size):
-                end = min(start + self.chunk_size, nflat)
-                slot_inv_chunk = slot_inv_flat[start:end]
-                slot_meta_chunk = slot_meta_flat[start:end]
-                meta_exp = slot_meta_chunk.unsqueeze(2).expand(-1, -1, self.patch_tokens, -1)
-                slot_desc_chunk = proj(torch.cat([slot_inv_chunk, meta_exp], dim=-1))
-                phase_chunk = phase_shared.unsqueeze(0).expand(end - start, -1, -1) if phase_shared is not None else phase_flat[start:end]
-                phase_exp = phase_chunk.unsqueeze(1).expand(-1, self.kmax_slots, -1, -1)
-                base_chunk = self.base_logit(torch.cat([slot_desc_chunk, phase_exp], dim=-1)).squeeze(-1)
-                logits_flat[start:end] = base_chunk.permute(0, 2, 1)
+                feat = self.encoder(x[start:end])
+                feat_pool = feat.reshape(end - start, -1)
+            if phase_emb_shared is not None:
+                phase_chunk = phase_emb_shared.unsqueeze(0).expand(end - start, -1, -1)
+            else:
+                phase_chunk = phase_emb_flat[start:end]
+            feat_exp = feat_pool.unsqueeze(1).expand(-1, self.patch_tokens, -1)
+            combined = torch.cat([feat_exp, phase_chunk], dim=-1)
+            logits_flat[start:end] = self.logit_head(combined)
 
         logits = logits_flat.view(bsz, nwin, self.patch_tokens, self.kmax_slots)
-
-        invalid = slot_valid.squeeze(-1) <= 0.0
-        logits = logits.masked_fill(invalid.unsqueeze(2), -1e4)
+        if self.center_prior_weight != 0.0:
+            center_slot = mask_f32.view(bsz, nwin, kmax, self.num_nodes)[..., self.center_idx]
+            logits = logits + self.center_prior_weight * center_slot.unsqueeze(2)
+        slot_present = slot_mask.to(dtype=torch.float32).sum(dim=-1) > 0
+        logits = logits.masked_fill(~slot_present.unsqueeze(2), -1e4)
         return logits
 
 
@@ -1692,11 +1497,13 @@ class SharedTPPatchProposalHead(nn.Module):
         hidden_dim: int = 128,
         chunk_size: int = 128,
         token_chunk_size: int | None = None,
+        query_residual_scale: float = 0.5,
     ):
         super().__init__()
         self.irreps_feat = Irreps(irreps_feat)
         self.feature_dim = int(self.irreps_feat.dim)
         self.block_slices = _irrep_block_slices(self.irreps_feat)
+        self.query_residual_scale = float(query_residual_scale)
         self.num_blocks = len(self.block_slices)
         self.phase_dim = int(phase_dim)
         self.upsample_factor = _as_scale_tuple(upsample_factor)
@@ -1855,7 +1662,7 @@ class SharedTPPatchProposalHead(nn.Module):
                 coeffs = self.ctrl_net(torch.cat([meta_chunk, phase_exp], dim=-1))
                 alpha, beta = coeffs.chunk(2, dim=-1)
                 alpha = 1.0 + 0.5 * torch.tanh(alpha)
-                beta = 0.5 * torch.tanh(beta)
+                beta = self.query_residual_scale * torch.tanh(beta)
 
                 out_token = torch.empty_like(tp_out)
                 for j, (block_start, block_end) in enumerate(self.block_slices):
@@ -1872,8 +1679,8 @@ class SharedTPPatchProposalHead(nn.Module):
         return out_flat.view(bsz, nwin, kmax, self.patch_tokens, self.feature_dim)
 
 
-class OCRPPatchUpsampler(nn.Module):
-    """Orientation-Cluster Routed Patch (OCRP) upsampler."""
+class OCRP4x1PatchUpsampler(nn.Module):
+    """4x1-specialized OCRP upsampler with decoupled macro support and stride."""
 
     def __init__(
         self,
@@ -1881,28 +1688,28 @@ class OCRPPatchUpsampler(nn.Module):
         sym_ops_quat: torch.Tensor,
         upsample_factor: int | tuple[int, int] | list[int] = 4,
         window_size: int = 5,
-        kmax_slots: int = 10,
+        kmax_slots: int = 6,
         cluster_threshold_deg: float = 2.0,
-        cluster_feature_l2_threshold: float | None = None,
         cluster_connectivity: int = 8,
         phase_dim: int = 32,
         router_hidden_dim: int = 128,
         router_conv_hidden_dim: int = 64,
         router_slot_mass_power: float = 0.25,
         router_uniform_slot_mix: float = 0.75,
-        router_use_slot_type_meta: bool = True,
-        router_geom_logit_bias: float = 0.0,
         proposal_hidden_dim: int = 128,
+        proposal_query_residual_scale: float = 0.5,
         straight_through: bool = True,
         ocrp_mode: str = "pixel_patch",
         macro_lr_tile_size: int = 3,
+        macro_lr_stride_shape: int | tuple[int, int] | list[int] | None = (1, 4),
         token_conditioned_member_bias: bool | None = None,
+        pool_center_bias_init: float | None = None,
         pool_chunk_size: int = 512,
         router_chunk_size: int = 512,
+        router_use_mlp_encoder: bool = False,
+        router_center_prior_weight: float = 0.0,
         proposal_chunk_size: int = 128,
         proposal_token_chunk_size: int | None = None,
-        use_upsample_residual: bool = False,
-        upsample_residual_weight: float = 1.0,
     ):
         super().__init__()
         self.irreps_feat = Irreps(irreps_feat)
@@ -1910,22 +1717,23 @@ class OCRPPatchUpsampler(nn.Module):
         self.upsample_factor = _as_scale_tuple(upsample_factor)
         self.window_size = int(window_size)
         self.kmax_slots = int(kmax_slots)
-        self.cluster_feature_l2_threshold = _resolve_cluster_feature_l2_threshold(
-            cluster_feature_l2_threshold=cluster_feature_l2_threshold,
-            legacy_cluster_threshold_deg=cluster_threshold_deg,
-        )
         self.straight_through = bool(straight_through)
         self.ocrp_mode = _resolve_ocrp_mode(ocrp_mode)
-        self.macro_lr_tile_size = _validate_odd_positive_int(
-            "macro_lr_tile_size",
-            macro_lr_tile_size,
+        self.macro_lr_stride_shape = _validate_positive_shape(
+            "macro_lr_stride_shape",
+            macro_lr_stride_shape if macro_lr_stride_shape is not None else macro_lr_tile_size,
+        )
+        self.macro_lr_tile_size = (
+            int(self.macro_lr_stride_shape[0])
+            if self.macro_lr_stride_shape[0] == self.macro_lr_stride_shape[1]
+            else self.macro_lr_stride_shape
         )
         self.hr_patch_shape = (
             self.upsample_factor
             if self.ocrp_mode == "pixel_patch"
             else (
-                int(self.macro_lr_tile_size * self.upsample_factor[0]),
-                int(self.macro_lr_tile_size * self.upsample_factor[1]),
+                int(self.macro_lr_stride_shape[0] * self.upsample_factor[0]),
+                int(self.macro_lr_stride_shape[1] * self.upsample_factor[1]),
             )
         )
         self.hr_patch_size = (
@@ -1939,33 +1747,18 @@ class OCRPPatchUpsampler(nn.Module):
             if token_conditioned_member_bias is None
             else bool(token_conditioned_member_bias)
         )
-        self.router_geom_logit_bias = float(router_geom_logit_bias)
-        if self.router_geom_logit_bias < 0.0:
-            raise ValueError(
-                f"router_geom_logit_bias must be >= 0, got {router_geom_logit_bias}"
-            )
-        self.use_upsample_residual = bool(use_upsample_residual)
-        self.set_upsample_residual_weight(float(upsample_residual_weight))
 
         self.phase_embed = PhaseEmbeddingGrid(
             upsample_factor=self.upsample_factor,
             emb_dim=int(phase_dim),
             patch_size=self.hr_patch_shape,
         )
-        self.quat_clusterer = QuaternionBankClusterer(
+        self.clusterer = QuaternionBankClusterer(
             sym_ops_quat=sym_ops_quat,
             threshold_deg=float(cluster_threshold_deg),
             connectivity=int(cluster_connectivity),
             window_size=int(window_size),
         )
-        self.feature_clusterer = FeatureBankClusterer(
-            threshold_l2=self.cluster_feature_l2_threshold,
-            connectivity=int(cluster_connectivity),
-            window_size=int(window_size),
-        )
-        # Backward-compatible alias used by notebooks and analysis helpers.
-        self.clusterer = self.quat_clusterer
-        del sym_ops_quat
         self.slot_builder = ClusterSlotBuilder(
             kmax_slots=int(kmax_slots),
             window_size=int(window_size),
@@ -1984,21 +1777,17 @@ class OCRPPatchUpsampler(nn.Module):
             hidden_dim=max(64, int(proposal_hidden_dim)),
             chunk_size=int(pool_chunk_size),
             token_conditioned_member_bias=self.token_conditioned_member_bias,
+            center_bias_init=pool_center_bias_init,
         )
         self.router = PatchSlotRouter(
-            irreps_feat=self.irreps_feat,
-            meta_dim=ClusterSlotBuilder.META_DIM,
             kmax_slots=int(kmax_slots),
-            upsample_factor=self.upsample_factor,
+            window_size=int(window_size),
             patch_size=self.hr_patch_shape,
             phase_dim=int(phase_dim),
             hidden_dim=int(router_hidden_dim),
-            conv_hidden_dim=int(router_conv_hidden_dim),
             chunk_size=int(router_chunk_size),
-            slot_mass_power=float(router_slot_mass_power),
-            uniform_slot_mix=float(router_uniform_slot_mix),
-            use_slot_type_meta=bool(router_use_slot_type_meta),
-            use_raw_token_ctx=True,
+            use_mlp_encoder=bool(router_use_mlp_encoder),
+            center_prior_weight=float(router_center_prior_weight),
         )
         self.proposal_head = SharedTPPatchProposalHead(
             irreps_feat=self.irreps_feat,
@@ -2009,19 +1798,8 @@ class OCRPPatchUpsampler(nn.Module):
             hidden_dim=int(proposal_hidden_dim),
             chunk_size=int(proposal_chunk_size),
             token_chunk_size=proposal_token_chunk_size,
+            query_residual_scale=float(proposal_query_residual_scale),
         )
-        token_support_index = self._build_router_token_support_index()
-        self.register_buffer(
-            "router_token_support_index",
-            token_support_index,
-            persistent=False,
-        )
-
-    def set_upsample_residual_weight(self, weight: float) -> None:
-        weight = float(weight)
-        if weight < 0.0:
-            raise ValueError(f"upsample_residual_weight must be >= 0, got {weight}")
-        self.upsample_residual_weight = weight
 
     def _phase_grid(self, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
         phase_ids = torch.arange(
@@ -2031,47 +1809,14 @@ class OCRPPatchUpsampler(nn.Module):
         )
         return self.phase_embed(phase_ids).to(dtype=dtype)
 
-    def _build_router_token_support_index(self) -> torch.Tensor:
-        patch_h, patch_w = self.hr_patch_shape
-        up_h, up_w = self.upsample_factor
-        center = self.window_size // 2
-        if self.ocrp_mode == "pixel_patch":
-            center_idx = center * self.window_size + center
-            return torch.full((self.hr_patch_tokens,), center_idx, dtype=torch.long)
-
-        tile_half = self.macro_lr_tile_size // 2
-        yy = torch.arange(patch_h, dtype=torch.long)
-        xx = torch.arange(patch_w, dtype=torch.long)
-        grid_y, grid_x = torch.meshgrid(yy, xx, indexing="ij")
-        lr_local_y = (grid_y // up_h).clamp(min=0, max=self.macro_lr_tile_size - 1)
-        lr_local_x = (grid_x // up_w).clamp(min=0, max=self.macro_lr_tile_size - 1)
-        support_y = (center - tile_half) + lr_local_y
-        support_x = (center - tile_half) + lr_local_x
-        return (support_y * self.window_size + support_x).reshape(-1)
-
-    def _router_targets_from_slot_mask(
-        self,
-        slot_mask: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        node_index = self.router_token_support_index.to(device=slot_mask.device)
-        target_mask = slot_mask.index_select(dim=-1, index=node_index).permute(0, 1, 3, 2)
-        target_valid = target_mask.any(dim=-1)
-        target_slot = target_mask.to(dtype=torch.long).argmax(dim=-1)
-        return target_slot, target_valid
-
     def _build_support_banks(
         self,
         lr_quats: torch.Tensor,
         feat_lr: torch.Tensor,
         lr_shape: tuple[int, int],
-        need_quat_bank: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor, dict[str, tuple[int, int]]]:
         if self.ocrp_mode == "pixel_patch":
-            bank_q = (
-                _build_local_patch_bank(lr_quats, img_shape=lr_shape, window_size=self.window_size)
-                if need_quat_bank
-                else None
-            )
+            bank_q = _build_local_patch_bank(lr_quats, img_shape=lr_shape, window_size=self.window_size)
             bank_f = _build_local_patch_bank(feat_lr, img_shape=lr_shape, window_size=self.window_size)
             support_meta = {
                 "grid_shape": (int(lr_shape[0]), int(lr_shape[1])),
@@ -2079,28 +1824,26 @@ class OCRPPatchUpsampler(nn.Module):
             }
             return bank_q, bank_f, support_meta
 
-        bank_q = None
-        bank_f, meta_f = _build_macro_tile_patch_bank(
+        bank_q, meta_q = _build_macro_stride_patch_bank(
+            lr_quats,
+            img_shape=lr_shape,
+            window_size=self.window_size,
+            stride_shape=self.macro_lr_stride_shape,
+        )
+        bank_f, meta_f = _build_macro_stride_patch_bank(
             feat_lr,
             img_shape=lr_shape,
             window_size=self.window_size,
-            tile_size=self.macro_lr_tile_size,
+            stride_shape=self.macro_lr_stride_shape,
         )
-        if need_quat_bank:
-            bank_q, meta_q = _build_macro_tile_patch_bank(
-                lr_quats,
-                img_shape=lr_shape,
-                window_size=self.window_size,
-                tile_size=self.macro_lr_tile_size,
+        if meta_q != meta_f:
+            raise ValueError(
+                "Quaternion and feature macro-tile banks disagree on support metadata: "
+                f"{meta_q} vs {meta_f}"
             )
-            if meta_q != meta_f:
-                raise ValueError(
-                    "Quaternion and feature macro-tile banks disagree on support metadata: "
-                    f"{meta_q} vs {meta_f}"
-                )
         return bank_q, bank_f, {
-            "grid_shape": meta_f["tile_shape"],
-            "padded_shape": meta_f["padded_shape"],
+            "grid_shape": meta_q["tile_shape"],
+            "padded_shape": meta_q["padded_shape"],
         }
 
     def _assemble_patch_tokens(
@@ -2149,7 +1892,6 @@ class OCRPPatchUpsampler(nn.Module):
         img = img[:, :crop_h, :crop_w, :]
         return img.reshape(bsz, crop_h * crop_w, cdim)
 
-    
     @staticmethod
     def _hard_owner_from_logits(logits: torch.Tensor, straight_through: bool) -> tuple[torch.Tensor, torch.Tensor]:
         owner_idx = torch.argmax(logits, dim=-1)
@@ -2177,22 +1919,16 @@ class OCRPPatchUpsampler(nn.Module):
             lr_quats=lr_quats,
             feat_lr=feat_lr,
             lr_shape=lr_shape,
-            need_quat_bank=True,
         )
 
-        if bank_q is not None:
-            cluster_ids = self.quat_clusterer(bank_q)
-        else:
-            cluster_ids = self.feature_clusterer(bank_f)
+        cluster_ids = self.clusterer(bank_q)
         slot_info = self.slot_builder(cluster_ids)
         slot_mask = slot_info["slot_mask"]
         slot_meta = slot_info["slot_meta"]
         slot_valid = slot_info["slot_valid"]
-        router_target_slot, router_target_valid = self._router_targets_from_slot_mask(
-            slot_mask
-        )
 
         slot_ctx, slot_anchor_alpha = self.context_builder(
+            bank_q=bank_q,
             bank_f=bank_f,
             slot_mask=slot_mask,
             slot_meta=slot_meta,
@@ -2209,20 +1945,9 @@ class OCRPPatchUpsampler(nn.Module):
         )
 
         router_logits = self.router(
-            slot_ctx=slot_pooled_ctx,
-            slot_meta=slot_meta,
+            slot_mask=slot_mask,
             phase_grid=phase_grid,
         )
-        if self.router_geom_logit_bias > 0.0:
-            router_prior = F.one_hot(
-                router_target_slot,
-                num_classes=self.kmax_slots,
-            ).to(dtype=router_logits.dtype)
-            router_prior = (
-                router_prior
-                * router_target_valid.unsqueeze(-1).to(dtype=router_logits.dtype)
-            )
-            router_logits = router_logits + self.router_geom_logit_bias * router_prior
         owner_idx, owner_onehot = self._hard_owner_from_logits(
             router_logits,
             straight_through=self.straight_through and self.training,
@@ -2250,15 +1975,6 @@ class OCRPPatchUpsampler(nn.Module):
                 hr_crop_shape=hr_shape,
             )
 
-        if self.use_upsample_residual:
-            bsz = feat_lr.shape[0]
-            h_lr, w_lr = int(lr_shape[0]), int(lr_shape[1])
-            cdim = feat_hr.shape[-1]
-            feat_hr_img = feat_hr.view(bsz, int(hr_shape[0]), int(hr_shape[1]), cdim)
-            lr_img = feat_lr.view(bsz, h_lr, w_lr, cdim)
-            feat_hr_img[:, 0::r_h, 0::r_w, :] += self.upsample_residual_weight * lr_img
-            feat_hr = feat_hr_img.reshape(bsz, int(hr_shape[0]) * int(hr_shape[1]), cdim)
-
         if not batched:
             feat_hr = feat_hr.squeeze(0)
 
@@ -2277,13 +1993,12 @@ class OCRPPatchUpsampler(nn.Module):
             "slot_pooled_ctx": slot_pooled_ctx,
             "slot_pool_alpha": slot_pool_alpha,
             "router_logits": router_logits,
-            "router_target_slot": router_target_slot,
-            "router_target_valid": router_target_valid,
             "owner_idx": owner_idx,
             "patch_prop": patch_prop,
             "patch_out": patch_out,
             "ocrp_mode": self.ocrp_mode,
             "macro_lr_tile_size": self.macro_lr_tile_size,
+            "macro_lr_stride_shape": self.macro_lr_stride_shape,
             "hr_patch_size": self.hr_patch_size,
             "hr_patch_shape": self.hr_patch_shape,
             "hr_patch_tokens": self.hr_patch_tokens,
@@ -2303,8 +2018,8 @@ class OCRPPatchUpsampler(nn.Module):
         return feat_hr, hr_shape, aux
 
 
-class IsoEmbeddingSROCRP(nn.Module):
-    """OCRP SR model: encoder -> OCRP upsampler -> decoder."""
+class IsoEmbedding4x1SROCRP(nn.Module):
+    """4x1-specialized OCRP SR model: encoder -> OCRP upsampler -> decoder."""
 
     def __init__(
         self,
@@ -2316,43 +2031,37 @@ class IsoEmbeddingSROCRP(nn.Module):
         lr_conv1_kernel_size: int = 5,
         use_residual_lr1: bool = True,
         lr_conv1_residual_weight: float = 1.0,
-        conv_feature_mask_cosine_threshold: float | None = 0.98,
-        conv_feature_mask_l2_threshold: float | None = None,
+        conv_feature_mask_cosine_threshold: float = 0.98,
         conv_feature_mask_soft: bool = False,
         conv_feature_mask_temperature: float = 32.0,
-        upsample_factor: int | tuple[int, int] | list[int] = 4,
+        upsample_factor: int | tuple[int, int] | list[int] = (4, 1),
         window_size: int = 5,
-        kmax_slots: int = 10,
+        kmax_slots: int = 6,
         cluster_threshold_deg: float = 2.0,
-        cluster_feature_l2_threshold: float | None = None,
         cluster_connectivity: int = 8,
         phase_dim: int = 32,
         ocrp_router_hidden_dim: int = 128,
         ocrp_router_conv_hidden_dim: int = 64,
         ocrp_router_slot_mass_power: float = 0.25,
         ocrp_router_uniform_slot_mix: float = 0.75,
-        ocrp_router_use_slot_type_meta: bool = True,
-        ocrp_router_geom_logit_bias: float = 0.0,
         ocrp_proposal_hidden_dim: int = 128,
-        ocrp_slot_ratio_loss_weight: float = 0.0,
-        ocrp_router_geom_loss_weight: float = 0.0,
-        ocrp_router_geom_boundary_only: bool = False,
-        ocrp_slot_ratio_temperature: float = 1.0,
+        ocrp_proposal_query_residual_scale: float = 0.5,
         ocrp_straight_through: bool = True,
         ocrp_mode: str = "pixel_patch",
-        macro_lr_tile_size: int = 3,
+        macro_lr_tile_size: int = 4,
+        macro_lr_stride_shape: int | tuple[int, int] | list[int] | None = (1, 4),
         ocrp_token_conditioned_member_bias: bool | None = None,
-        ocrp_upsample_residual: bool = False,
-        ocrp_upsample_residual_weight: float = 1.0,
+        ocrp_pool_center_bias_init: float | None = None,
         ocrp_pool_chunk_size: int = 512,
         ocrp_router_chunk_size: int = 512,
+        ocrp_router_use_mlp_encoder: bool = False,
+        ocrp_router_center_prior_weight: float = 0.0,
         ocrp_proposal_chunk_size: int = 128,
         ocrp_proposal_token_chunk_size: int | None = None,
         use_hr_conv1: bool = True,
         hr_conv1_kernel_size: int = 7,
         use_residual_hr1: bool = True,
         hr_conv1_residual_weight: float = 1.0,
-        hr_conv_feature_mask_l2_threshold: float | None = None,
         hr_conv_feature_mask_cosine_threshold: float | None = None,
         hr_conv_feature_mask_soft: bool | None = None,
         hr_conv_feature_mask_temperature: float | None = None,
@@ -2360,7 +2069,6 @@ class IsoEmbeddingSROCRP(nn.Module):
         hr_conv2_kernel_size: int | None = None,
         use_residual_hr2: bool = True,
         hr_conv2_residual_weight: float = 1.0,
-        hr_conv2_feature_mask_l2_threshold: float | None = None,
         hr_conv2_feature_mask_cosine_threshold: float | None = None,
         hr_conv2_feature_mask_soft: bool | None = None,
         hr_conv2_feature_mask_temperature: float | None = None,
@@ -2368,7 +2076,6 @@ class IsoEmbeddingSROCRP(nn.Module):
         hr_conv3_kernel_size: int | None = None,
         use_residual_hr3: bool = True,
         hr_conv3_residual_weight: float = 1.0,
-        hr_conv3_feature_mask_l2_threshold: float | None = None,
         hr_conv3_feature_mask_cosine_threshold: float | None = None,
         hr_conv3_feature_mask_soft: bool | None = None,
         hr_conv3_feature_mask_temperature: float | None = None,
@@ -2417,48 +2124,13 @@ class IsoEmbeddingSROCRP(nn.Module):
         self.hr_conv1_residual_weight = float(hr_conv1_residual_weight)
         self.hr_conv2_residual_weight = float(hr_conv2_residual_weight)
         self.hr_conv3_residual_weight = float(hr_conv3_residual_weight)
-        self.ocrp_slot_ratio_loss_weight = float(ocrp_slot_ratio_loss_weight)
-        self.ocrp_router_geom_loss_weight = float(ocrp_router_geom_loss_weight)
-        self.ocrp_router_geom_boundary_only = bool(ocrp_router_geom_boundary_only)
-        self.ocrp_slot_ratio_temperature = float(ocrp_slot_ratio_temperature)
-        if self.ocrp_slot_ratio_loss_weight < 0.0:
-            raise ValueError(
-                "ocrp_slot_ratio_loss_weight must be >= 0, "
-                f"got {ocrp_slot_ratio_loss_weight}"
-            )
-        if self.ocrp_router_geom_loss_weight < 0.0:
-            raise ValueError(
-                "ocrp_router_geom_loss_weight must be >= 0, "
-                f"got {ocrp_router_geom_loss_weight}"
-            )
-        if self.ocrp_slot_ratio_temperature <= 0.0:
-            raise ValueError(
-                "ocrp_slot_ratio_temperature must be > 0, "
-                f"got {ocrp_slot_ratio_temperature}"
-            )
-        self.lr_conv_feature_mask_cosine_threshold = (
-            None if conv_feature_mask_cosine_threshold is None else float(conv_feature_mask_cosine_threshold)
-        )
-        self.lr_conv_feature_mask_l2_threshold = _resolve_feature_l2_threshold(
-            explicit_l2_threshold=conv_feature_mask_l2_threshold,
-            legacy_cosine_threshold=self.lr_conv_feature_mask_cosine_threshold,
-            default_l2_threshold=math.radians(5.0),
-        )
+        self.lr_conv_feature_mask_cosine_threshold = float(conv_feature_mask_cosine_threshold)
         self.lr_conv_feature_mask_soft = bool(conv_feature_mask_soft)
         self.lr_conv_feature_mask_temperature = float(conv_feature_mask_temperature)
-        self.hr_conv_feature_mask_cosine_threshold = (
+        self.hr_conv_feature_mask_cosine_threshold = float(
             self.lr_conv_feature_mask_cosine_threshold
             if hr_conv_feature_mask_cosine_threshold is None
-            else float(hr_conv_feature_mask_cosine_threshold)
-        )
-        self.hr_conv_feature_mask_l2_threshold = _resolve_feature_l2_threshold(
-            explicit_l2_threshold=(
-                self.lr_conv_feature_mask_l2_threshold
-                if hr_conv_feature_mask_l2_threshold is None
-                else hr_conv_feature_mask_l2_threshold
-            ),
-            legacy_cosine_threshold=self.hr_conv_feature_mask_cosine_threshold,
-            default_l2_threshold=self.lr_conv_feature_mask_l2_threshold,
+            else hr_conv_feature_mask_cosine_threshold
         )
         self.hr_conv_feature_mask_soft = bool(
             self.lr_conv_feature_mask_soft
@@ -2473,19 +2145,10 @@ class IsoEmbeddingSROCRP(nn.Module):
         self.hr_conv2_kernel_size = int(
             hr_conv1_kernel_size if hr_conv2_kernel_size is None else hr_conv2_kernel_size
         )
-        self.hr_conv2_feature_mask_cosine_threshold = (
+        self.hr_conv2_feature_mask_cosine_threshold = float(
             self.hr_conv_feature_mask_cosine_threshold
             if hr_conv2_feature_mask_cosine_threshold is None
-            else float(hr_conv2_feature_mask_cosine_threshold)
-        )
-        self.hr_conv2_feature_mask_l2_threshold = _resolve_feature_l2_threshold(
-            explicit_l2_threshold=(
-                self.hr_conv_feature_mask_l2_threshold
-                if hr_conv2_feature_mask_l2_threshold is None
-                else hr_conv2_feature_mask_l2_threshold
-            ),
-            legacy_cosine_threshold=self.hr_conv2_feature_mask_cosine_threshold,
-            default_l2_threshold=self.hr_conv_feature_mask_l2_threshold,
+            else hr_conv2_feature_mask_cosine_threshold
         )
         self.hr_conv2_feature_mask_soft = bool(
             self.hr_conv_feature_mask_soft
@@ -2500,19 +2163,10 @@ class IsoEmbeddingSROCRP(nn.Module):
         self.hr_conv3_kernel_size = int(
             hr_conv1_kernel_size if hr_conv3_kernel_size is None else hr_conv3_kernel_size
         )
-        self.hr_conv3_feature_mask_cosine_threshold = (
+        self.hr_conv3_feature_mask_cosine_threshold = float(
             self.hr_conv_feature_mask_cosine_threshold
             if hr_conv3_feature_mask_cosine_threshold is None
-            else float(hr_conv3_feature_mask_cosine_threshold)
-        )
-        self.hr_conv3_feature_mask_l2_threshold = _resolve_feature_l2_threshold(
-            explicit_l2_threshold=(
-                self.hr_conv_feature_mask_l2_threshold
-                if hr_conv3_feature_mask_l2_threshold is None
-                else hr_conv3_feature_mask_l2_threshold
-            ),
-            legacy_cosine_threshold=self.hr_conv3_feature_mask_cosine_threshold,
-            default_l2_threshold=self.hr_conv_feature_mask_l2_threshold,
+            else hr_conv3_feature_mask_cosine_threshold
         )
         self.hr_conv3_feature_mask_soft = bool(
             self.hr_conv_feature_mask_soft
@@ -2524,76 +2178,72 @@ class IsoEmbeddingSROCRP(nn.Module):
             if hr_conv3_feature_mask_temperature is None
             else hr_conv3_feature_mask_temperature
         )
-        self.conv_lr1 = FeatureDistanceMaskedEquivariantSpatialConv(
+        self.conv_lr1 = CosineMaskedEquivariantSpatialConv(
             kernel_size=int(lr_conv1_kernel_size),
             irreps_in=self.irreps_feat,
             irreps_out=self.irreps_feat,
             use_residual=self.use_residual_lr1,
             residual_weight=self.lr_conv1_residual_weight,
-            feature_mask_l2_threshold=self.lr_conv_feature_mask_l2_threshold,
             feature_mask_cosine_threshold=self.lr_conv_feature_mask_cosine_threshold,
             feature_mask_soft=self.lr_conv_feature_mask_soft,
             feature_mask_temperature=self.lr_conv_feature_mask_temperature,
         )
-        self.ocrp = OCRPPatchUpsampler(
+        self.ocrp = OCRP4x1PatchUpsampler(
             irreps_feat=self.irreps_feat,
             sym_ops_quat=self.encoder.sym_ops,
             upsample_factor=self.upsample_factor,
             window_size=int(window_size),
             kmax_slots=int(kmax_slots),
             cluster_threshold_deg=float(cluster_threshold_deg),
-            cluster_feature_l2_threshold=cluster_feature_l2_threshold,
             cluster_connectivity=int(cluster_connectivity),
             phase_dim=int(phase_dim),
             router_hidden_dim=int(ocrp_router_hidden_dim),
             router_conv_hidden_dim=int(ocrp_router_conv_hidden_dim),
             router_slot_mass_power=float(ocrp_router_slot_mass_power),
             router_uniform_slot_mix=float(ocrp_router_uniform_slot_mix),
-            router_use_slot_type_meta=bool(ocrp_router_use_slot_type_meta),
-            router_geom_logit_bias=float(ocrp_router_geom_logit_bias),
             proposal_hidden_dim=int(ocrp_proposal_hidden_dim),
+            proposal_query_residual_scale=float(ocrp_proposal_query_residual_scale),
             straight_through=bool(ocrp_straight_through),
             ocrp_mode=str(ocrp_mode),
             macro_lr_tile_size=int(macro_lr_tile_size),
+            macro_lr_stride_shape=macro_lr_stride_shape,
             token_conditioned_member_bias=ocrp_token_conditioned_member_bias,
-            use_upsample_residual=bool(ocrp_upsample_residual),
-            upsample_residual_weight=float(ocrp_upsample_residual_weight),
+            pool_center_bias_init=ocrp_pool_center_bias_init,
             pool_chunk_size=int(ocrp_pool_chunk_size),
             router_chunk_size=int(ocrp_router_chunk_size),
+            router_use_mlp_encoder=bool(ocrp_router_use_mlp_encoder),
+            router_center_prior_weight=float(ocrp_router_center_prior_weight),
             proposal_chunk_size=int(ocrp_proposal_chunk_size),
             proposal_token_chunk_size=ocrp_proposal_token_chunk_size,
         )
-        self.conv_hr1 = FeatureDistanceMaskedEquivariantSpatialConv(
+        self.conv_hr1 = CosineMaskedEquivariantSpatialConv(
             kernel_size=int(hr_conv1_kernel_size),
             irreps_in=self.irreps_feat,
             irreps_out=self.irreps_feat,
             use_residual=self.use_residual_hr1,
             residual_weight=self.hr_conv1_residual_weight,
-            feature_mask_l2_threshold=self.hr_conv_feature_mask_l2_threshold,
             feature_mask_cosine_threshold=self.hr_conv_feature_mask_cosine_threshold,
             feature_mask_soft=self.hr_conv_feature_mask_soft,
             feature_mask_temperature=self.hr_conv_feature_mask_temperature,
         )
-        self.conv_hr2 = FeatureDistanceMaskedEquivariantSpatialConv(
+        self.conv_hr2 = CosineMaskedEquivariantSpatialConv(
             kernel_size=self.hr_conv2_kernel_size,
             irreps_in=self.irreps_feat,
             irreps_out=self.irreps_feat,
             use_residual=self.use_residual_hr2,
             residual_weight=self.hr_conv2_residual_weight,
-            feature_mask_l2_threshold=self.hr_conv2_feature_mask_l2_threshold,
             feature_mask_cosine_threshold=self.hr_conv2_feature_mask_cosine_threshold,
             feature_mask_soft=self.hr_conv2_feature_mask_soft,
             feature_mask_temperature=self.hr_conv2_feature_mask_temperature,
         )
-        self.conv_hr3: FeatureDistanceMaskedEquivariantSpatialConv | None = None
+        self.conv_hr3: CosineMaskedEquivariantSpatialConv | None = None
         if self.use_hr_conv3:
-            self.conv_hr3 = FeatureDistanceMaskedEquivariantSpatialConv(
+            self.conv_hr3 = CosineMaskedEquivariantSpatialConv(
                 kernel_size=self.hr_conv3_kernel_size,
                 irreps_in=self.irreps_feat,
                 irreps_out=self.irreps_feat,
                 use_residual=self.use_residual_hr3,
                 residual_weight=self.hr_conv3_residual_weight,
-                feature_mask_l2_threshold=self.hr_conv3_feature_mask_l2_threshold,
                 feature_mask_cosine_threshold=self.hr_conv3_feature_mask_cosine_threshold,
                 feature_mask_soft=self.hr_conv3_feature_mask_soft,
                 feature_mask_temperature=self.hr_conv3_feature_mask_temperature,
@@ -2631,7 +2281,7 @@ class IsoEmbeddingSROCRP(nn.Module):
                 for key in legacy_hr3_keys:
                     filtered_state_dict.pop(key, None)
                 warnings.warn(
-                    "Ignoring legacy conv_hr3 weights because use_hr_conv3=False for this 4x4 OCRP model.",
+                    "Ignoring legacy conv_hr3 weights because use_hr_conv3=False for this 4x1 OCRP model.",
                     RuntimeWarning,
                 )
         return filtered_state_dict
@@ -2639,12 +2289,6 @@ class IsoEmbeddingSROCRP(nn.Module):
     def load_state_dict(self, state_dict, strict: bool = True, assign: bool = False):
         filtered_state_dict = self._filter_incompatible_state_dict(state_dict)
         return super().load_state_dict(filtered_state_dict, strict=strict, assign=assign)
-
-    def set_ocrp_upsample_residual_weight(self, weight: float) -> None:
-        self.ocrp.set_upsample_residual_weight(weight)
-
-    def get_ocrp_upsample_residual_weight(self) -> float:
-        return float(self.ocrp.upsample_residual_weight)
 
     @staticmethod
     def quat_mul(q1: torch.Tensor, q2: torch.Tensor) -> torch.Tensor:
@@ -2772,142 +2416,13 @@ class IsoEmbeddingSROCRP(nn.Module):
             return_aux=return_aux,
         )
 
-    def _slot_ratio_loss_from_aux(
-        self,
-        aux: dict[str, torch.Tensor],
-    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-        router_logits = aux["router_logits"]
-        slot_meta = aux["slot_meta"]
-        slot_valid = aux["slot_valid"]
-        if router_logits.dim() == 3:
-            router_logits = router_logits.unsqueeze(0)
-            slot_meta = slot_meta.unsqueeze(0)
-            slot_valid = slot_valid.unsqueeze(0)
-
-        eps = 1e-6
-        valid = slot_valid.to(dtype=router_logits.dtype)
-        probs = torch.softmax(
-            router_logits / self.ocrp_slot_ratio_temperature,
-            dim=-1,
-        )
-        probs = probs * valid.unsqueeze(2)
-        probs = probs / probs.sum(dim=-1, keepdim=True).clamp_min(eps)
-
-        pred_ratio = probs.mean(dim=2) * valid
-        pred_ratio = pred_ratio / pred_ratio.sum(dim=-1, keepdim=True).clamp_min(eps)
-
-        target_ratio = slot_meta[..., ClusterSlotBuilder.META_MASS].to(dtype=router_logits.dtype)
-        target_ratio = target_ratio * valid
-        target_ratio = target_ratio / target_ratio.sum(dim=-1, keepdim=True).clamp_min(eps)
-
-        per_slot = F.smooth_l1_loss(pred_ratio, target_ratio, reduction="none") * valid
-        valid_count = valid.sum(dim=-1)
-        per_window = per_slot.sum(dim=-1) / valid_count.clamp_min(1.0)
-        has_valid = valid_count > 0.0
-        if has_valid.any():
-            ratio_loss = per_window[has_valid].mean()
-            ratio_l1 = (
-                ((pred_ratio - target_ratio).abs() * valid).sum(dim=-1)
-                / valid_count.clamp_min(1.0)
-            )[has_valid].mean()
-        else:
-            ratio_loss = router_logits.new_zeros(())
-            ratio_l1 = router_logits.new_zeros(())
-        return ratio_loss, {
-            "slot_ratio_unweighted": ratio_loss,
-            "slot_ratio_l1": ratio_l1,
-        }
-
-    def _router_geom_loss_from_aux(
-        self,
-        aux: dict[str, torch.Tensor],
-    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-        router_logits = aux["router_logits"]
-        router_target_slot = aux["router_target_slot"]
-        router_target_valid = aux["router_target_valid"]
-        if router_logits.dim() == 3:
-            router_logits = router_logits.unsqueeze(0)
-            router_target_slot = router_target_slot.unsqueeze(0)
-            router_target_valid = router_target_valid.unsqueeze(0)
-
-        valid = router_target_valid.to(dtype=torch.bool)
-        selected = valid
-        boundary_frac = router_logits.new_ones(())
-        if self.ocrp_router_geom_boundary_only:
-            selected = self._router_geom_boundary_mask(
-                router_target_slot=router_target_slot,
-                router_target_valid=router_target_valid,
-            )
-            valid_count = valid.to(dtype=router_logits.dtype).sum()
-            if valid_count > 0:
-                boundary_frac = selected.to(dtype=router_logits.dtype).sum() / valid_count
-            else:
-                boundary_frac = router_logits.new_zeros(())
-
-        if not selected.any():
-            zero = router_logits.new_zeros(())
-            info = {
-                "router_geom_unweighted": zero,
-                "router_geom_acc": zero,
-                "router_geom_supervised_frac": zero,
-            }
-            if self.ocrp_router_geom_boundary_only:
-                info["router_geom_boundary_frac"] = boundary_frac
-            return zero, info
-
-        logits_valid = router_logits[selected]
-        target_valid = router_target_slot[selected].to(dtype=torch.long)
-        geom_loss = F.cross_entropy(logits_valid, target_valid)
-        geom_acc = (logits_valid.argmax(dim=-1) == target_valid).to(dtype=router_logits.dtype).mean()
-        info = {
-            "router_geom_unweighted": geom_loss,
-            "router_geom_acc": geom_acc,
-            "router_geom_supervised_frac": selected.to(dtype=router_logits.dtype).mean(),
-        }
-        if self.ocrp_router_geom_boundary_only:
-            info["router_geom_boundary_frac"] = boundary_frac
-        return geom_loss, info
-
-    def _router_geom_boundary_mask(
-        self,
-        router_target_slot: torch.Tensor,
-        router_target_valid: torch.Tensor,
-    ) -> torch.Tensor:
-        patch_h, patch_w = self.ocrp.hr_patch_shape
-        patch_tokens = patch_h * patch_w
-        if router_target_slot.shape[-1] != patch_tokens:
-            return router_target_valid.to(dtype=torch.bool)
-
-        slot = router_target_slot.reshape(*router_target_slot.shape[:-1], patch_h, patch_w)
-        valid = router_target_valid.reshape(*router_target_valid.shape[:-1], patch_h, patch_w).to(dtype=torch.bool)
-        boundary = torch.zeros_like(valid)
-
-        horiz = valid[..., :, 1:] & valid[..., :, :-1] & (slot[..., :, 1:] != slot[..., :, :-1])
-        boundary[..., :, 1:] |= horiz
-        boundary[..., :, :-1] |= horiz
-
-        vert = valid[..., 1:, :] & valid[..., :-1, :] & (slot[..., 1:, :] != slot[..., :-1, :])
-        boundary[..., 1:, :] |= vert
-        boundary[..., :-1, :] |= vert
-
-        diag = valid[..., 1:, 1:] & valid[..., :-1, :-1] & (slot[..., 1:, 1:] != slot[..., :-1, :-1])
-        boundary[..., 1:, 1:] |= diag
-        boundary[..., :-1, :-1] |= diag
-
-        anti = valid[..., 1:, :-1] & valid[..., :-1, 1:] & (slot[..., 1:, :-1] != slot[..., :-1, 1:])
-        boundary[..., 1:, :-1] |= anti
-        boundary[..., :-1, 1:] |= anti
-
-        return boundary.reshape_as(router_target_valid) & router_target_valid.to(dtype=torch.bool)
-
     def feature_loss_sr(
         self,
         lr_quats: torch.Tensor,
         hr_quats: torch.Tensor,
         lr_shape: tuple[int, int],
         normalize_input: bool = True,
-        return_info: bool = False,
-    ) -> torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    ) -> torch.Tensor:
         lr_quats = lr_quats.to(self.device)
         hr_quats = hr_quats.to(self.device)
 
@@ -2936,48 +2451,17 @@ class IsoEmbeddingSROCRP(nn.Module):
         else:
             lr_q_batched = lr_flat
 
-        need_ratio_loss = self.ocrp_slot_ratio_loss_weight > 0.0
-        need_router_geom_loss = self.ocrp_router_geom_loss_weight > 0.0
-        need_aux = need_ratio_loss or need_router_geom_loss
-        if need_aux:
-            feat_hr_pred, _, aux = self._forward_sr_features(
-                lr_quats=lr_q_batched,
-                feat_lr=feat_lr,
-                lr_shape=lr_shape,
-                return_aux=True,
-            )
-        else:
-            feat_hr_pred, _ = self._forward_sr_features(
-                lr_quats=lr_q_batched,
-                feat_lr=feat_lr,
-                lr_shape=lr_shape,
-                return_aux=False,
-            )
+        feat_hr_pred, _ = self._forward_sr_features(
+            lr_quats=lr_q_batched,
+            feat_lr=feat_lr,
+            lr_shape=lr_shape,
+            return_aux=False,
+        )
+        return F.mse_loss(feat_hr_pred, feat_hr_tgt)
 
-        feature_loss = F.mse_loss(feat_hr_pred, feat_hr_tgt)
-        total_loss = feature_loss
-        info: dict[str, torch.Tensor] = {
-            "loss_feature": feature_loss,
-        }
 
-        if need_ratio_loss:
-            ratio_loss, ratio_info = self._slot_ratio_loss_from_aux(aux)
-            weighted_ratio_loss = self.ocrp_slot_ratio_loss_weight * ratio_loss
-            total_loss = total_loss + weighted_ratio_loss
-            info["loss_slot_ratio"] = weighted_ratio_loss
-            info.update(ratio_info)
-
-        if need_router_geom_loss:
-            router_geom_loss, router_geom_info = self._router_geom_loss_from_aux(aux)
-            weighted_router_geom_loss = self.ocrp_router_geom_loss_weight * router_geom_loss
-            total_loss = total_loss + weighted_router_geom_loss
-            info["loss_router_geom"] = weighted_router_geom_loss
-            info.update(router_geom_info)
-
-        info["loss_total"] = total_loss
-        if return_info:
-            return total_loss, info
-        return total_loss
+OCRPPatchUpsampler = OCRP4x1PatchUpsampler
+IsoEmbeddingSROCRP = IsoEmbedding4x1SROCRP
 
 
 __all__ = [
@@ -2995,6 +2479,8 @@ __all__ = [
     "PatchSlotRouter",
     "EquivariantSlotPatchQueryAnchor",
     "SharedTPPatchProposalHead",
+    "OCRP4x1PatchUpsampler",
+    "IsoEmbedding4x1SROCRP",
     "OCRPPatchUpsampler",
     "IsoEmbeddingSROCRP",
 ]

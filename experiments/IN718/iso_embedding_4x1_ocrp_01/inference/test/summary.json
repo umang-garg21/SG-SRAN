@@ -1,0 +1,2508 @@
+{
+  "exp_dir": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01",
+  "config": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/config_new.json",
+  "checkpoint": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/checkpoints/epoch_0010.pt",
+  "split": "Test",
+  "num_samples": 147,
+  "records": [
+    {
+      "sample_id": 0,
+      "batch_index": 0,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000000_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000000_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000000_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000000_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 1,
+      "batch_index": 0,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000001_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000001_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000001_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000001_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 2,
+      "batch_index": 1,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000002_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000002_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000002_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000002_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 3,
+      "batch_index": 1,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000003_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000003_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000003_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000003_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 4,
+      "batch_index": 2,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000004_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000004_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000004_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000004_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 5,
+      "batch_index": 2,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000005_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000005_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000005_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000005_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 6,
+      "batch_index": 3,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000006_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000006_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000006_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000006_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 7,
+      "batch_index": 3,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000007_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000007_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000007_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000007_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 8,
+      "batch_index": 4,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000008_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000008_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000008_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000008_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 9,
+      "batch_index": 4,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000009_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000009_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000009_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000009_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 10,
+      "batch_index": 5,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000010_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000010_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000010_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000010_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 11,
+      "batch_index": 5,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000011_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000011_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000011_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000011_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 12,
+      "batch_index": 6,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000012_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000012_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000012_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000012_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 13,
+      "batch_index": 6,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000013_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000013_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000013_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000013_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 14,
+      "batch_index": 7,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000014_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000014_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000014_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000014_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 15,
+      "batch_index": 7,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000015_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000015_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000015_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000015_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 16,
+      "batch_index": 8,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000016_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000016_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000016_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000016_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 17,
+      "batch_index": 8,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000017_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000017_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000017_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000017_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 18,
+      "batch_index": 9,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000018_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000018_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000018_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000018_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 19,
+      "batch_index": 9,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000019_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000019_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000019_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000019_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 20,
+      "batch_index": 10,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000020_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000020_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000020_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000020_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 21,
+      "batch_index": 10,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000021_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000021_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000021_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000021_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 22,
+      "batch_index": 11,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000022_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000022_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000022_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000022_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 23,
+      "batch_index": 11,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000023_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000023_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000023_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000023_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 24,
+      "batch_index": 12,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000024_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000024_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000024_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000024_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 25,
+      "batch_index": 12,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000025_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000025_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000025_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000025_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 26,
+      "batch_index": 13,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000026_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000026_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000026_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000026_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 27,
+      "batch_index": 13,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000027_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000027_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000027_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000027_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 28,
+      "batch_index": 14,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000028_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000028_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000028_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000028_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 29,
+      "batch_index": 14,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000029_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000029_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000029_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000029_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 30,
+      "batch_index": 15,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000030_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000030_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000030_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000030_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 31,
+      "batch_index": 15,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000031_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000031_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000031_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000031_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 32,
+      "batch_index": 16,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000032_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000032_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000032_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000032_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 33,
+      "batch_index": 16,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000033_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000033_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000033_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000033_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 34,
+      "batch_index": 17,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000034_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000034_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000034_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000034_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 35,
+      "batch_index": 17,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000035_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000035_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000035_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000035_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 36,
+      "batch_index": 18,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000036_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000036_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000036_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000036_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 37,
+      "batch_index": 18,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000037_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000037_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000037_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000037_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 38,
+      "batch_index": 19,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000038_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000038_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000038_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000038_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 39,
+      "batch_index": 19,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000039_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000039_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000039_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000039_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 40,
+      "batch_index": 20,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000040_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000040_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000040_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000040_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 41,
+      "batch_index": 20,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000041_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000041_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000041_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000041_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 42,
+      "batch_index": 21,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000042_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000042_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000042_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000042_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 43,
+      "batch_index": 21,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000043_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000043_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000043_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000043_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 44,
+      "batch_index": 22,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000044_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000044_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000044_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000044_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 45,
+      "batch_index": 22,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000045_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000045_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000045_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000045_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 46,
+      "batch_index": 23,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000046_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000046_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000046_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000046_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 47,
+      "batch_index": 23,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000047_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000047_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000047_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000047_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 48,
+      "batch_index": 24,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000048_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000048_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000048_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000048_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 49,
+      "batch_index": 24,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000049_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000049_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000049_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000049_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 50,
+      "batch_index": 25,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000050_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000050_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000050_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000050_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 51,
+      "batch_index": 25,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000051_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000051_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000051_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000051_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 52,
+      "batch_index": 26,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000052_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000052_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000052_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000052_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 53,
+      "batch_index": 26,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000053_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000053_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000053_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000053_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 54,
+      "batch_index": 27,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000054_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000054_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000054_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000054_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 55,
+      "batch_index": 27,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000055_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000055_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000055_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000055_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 56,
+      "batch_index": 28,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000056_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000056_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000056_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000056_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 57,
+      "batch_index": 28,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000057_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000057_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000057_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000057_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 58,
+      "batch_index": 29,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000058_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000058_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000058_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000058_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 59,
+      "batch_index": 29,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000059_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000059_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000059_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000059_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 60,
+      "batch_index": 30,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000060_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000060_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000060_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000060_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 61,
+      "batch_index": 30,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000061_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000061_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000061_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000061_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 62,
+      "batch_index": 31,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000062_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000062_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000062_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000062_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 63,
+      "batch_index": 31,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000063_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000063_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000063_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000063_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 64,
+      "batch_index": 32,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000064_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000064_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000064_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000064_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 65,
+      "batch_index": 32,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000065_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000065_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000065_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000065_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 66,
+      "batch_index": 33,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000066_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000066_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000066_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000066_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 67,
+      "batch_index": 33,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000067_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000067_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000067_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000067_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 68,
+      "batch_index": 34,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000068_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000068_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000068_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000068_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 69,
+      "batch_index": 34,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000069_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000069_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000069_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000069_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 70,
+      "batch_index": 35,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000070_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000070_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000070_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000070_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 71,
+      "batch_index": 35,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000071_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000071_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000071_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000071_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 72,
+      "batch_index": 36,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000072_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000072_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000072_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000072_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 73,
+      "batch_index": 36,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000073_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000073_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000073_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000073_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 74,
+      "batch_index": 37,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000074_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000074_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000074_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000074_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 75,
+      "batch_index": 37,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000075_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000075_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000075_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000075_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 76,
+      "batch_index": 38,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000076_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000076_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000076_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000076_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 77,
+      "batch_index": 38,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000077_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000077_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000077_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000077_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 78,
+      "batch_index": 39,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000078_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000078_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000078_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000078_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 79,
+      "batch_index": 39,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000079_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000079_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000079_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000079_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 80,
+      "batch_index": 40,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000080_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000080_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000080_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000080_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 81,
+      "batch_index": 40,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000081_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000081_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000081_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000081_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 82,
+      "batch_index": 41,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000082_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000082_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000082_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000082_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 83,
+      "batch_index": 41,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000083_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000083_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000083_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000083_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 84,
+      "batch_index": 42,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000084_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000084_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000084_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000084_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 85,
+      "batch_index": 42,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000085_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000085_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000085_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000085_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 86,
+      "batch_index": 43,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000086_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000086_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000086_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000086_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 87,
+      "batch_index": 43,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000087_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000087_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000087_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000087_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 88,
+      "batch_index": 44,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000088_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000088_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000088_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000088_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 89,
+      "batch_index": 44,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000089_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000089_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000089_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000089_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 90,
+      "batch_index": 45,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000090_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000090_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000090_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000090_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 91,
+      "batch_index": 45,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000091_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000091_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000091_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000091_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 92,
+      "batch_index": 46,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000092_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000092_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000092_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000092_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 93,
+      "batch_index": 46,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000093_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000093_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000093_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000093_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 94,
+      "batch_index": 47,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000094_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000094_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000094_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000094_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 95,
+      "batch_index": 47,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000095_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000095_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000095_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000095_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 96,
+      "batch_index": 48,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000096_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000096_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000096_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000096_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 97,
+      "batch_index": 48,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000097_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000097_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000097_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000097_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 98,
+      "batch_index": 49,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000098_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000098_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000098_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000098_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 99,
+      "batch_index": 49,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000099_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000099_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000099_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000099_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 100,
+      "batch_index": 50,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000100_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000100_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000100_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000100_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 101,
+      "batch_index": 50,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000101_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000101_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000101_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000101_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 102,
+      "batch_index": 51,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000102_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000102_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000102_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000102_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 103,
+      "batch_index": 51,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000103_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000103_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000103_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000103_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 104,
+      "batch_index": 52,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000104_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000104_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000104_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000104_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 105,
+      "batch_index": 52,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000105_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000105_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000105_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000105_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 106,
+      "batch_index": 53,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000106_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000106_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000106_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000106_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 107,
+      "batch_index": 53,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000107_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000107_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000107_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000107_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 108,
+      "batch_index": 54,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000108_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000108_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000108_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000108_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 109,
+      "batch_index": 54,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000109_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000109_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000109_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000109_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 110,
+      "batch_index": 55,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000110_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000110_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000110_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000110_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 111,
+      "batch_index": 55,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000111_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000111_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000111_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000111_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 112,
+      "batch_index": 56,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000112_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000112_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000112_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000112_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 113,
+      "batch_index": 56,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000113_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000113_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000113_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000113_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 114,
+      "batch_index": 57,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000114_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000114_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000114_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000114_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 115,
+      "batch_index": 57,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000115_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000115_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000115_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000115_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 116,
+      "batch_index": 58,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000116_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000116_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000116_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000116_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 117,
+      "batch_index": 58,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000117_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000117_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000117_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000117_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 118,
+      "batch_index": 59,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000118_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000118_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000118_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000118_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 119,
+      "batch_index": 59,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000119_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000119_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000119_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000119_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 120,
+      "batch_index": 60,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000120_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000120_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000120_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000120_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 121,
+      "batch_index": 60,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000121_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000121_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000121_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000121_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 122,
+      "batch_index": 61,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000122_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000122_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000122_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000122_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 123,
+      "batch_index": 61,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000123_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000123_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000123_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000123_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 124,
+      "batch_index": 62,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000124_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000124_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000124_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000124_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 125,
+      "batch_index": 62,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000125_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000125_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000125_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000125_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 126,
+      "batch_index": 63,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000126_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000126_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000126_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000126_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 127,
+      "batch_index": 63,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000127_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000127_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000127_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000127_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 128,
+      "batch_index": 64,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000128_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000128_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000128_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000128_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 129,
+      "batch_index": 64,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000129_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000129_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000129_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000129_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 130,
+      "batch_index": 65,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000130_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000130_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000130_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000130_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 131,
+      "batch_index": 65,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000131_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000131_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000131_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000131_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 132,
+      "batch_index": 66,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000132_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000132_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000132_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000132_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 133,
+      "batch_index": 66,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000133_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000133_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000133_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000133_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 134,
+      "batch_index": 67,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000134_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000134_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000134_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000134_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 135,
+      "batch_index": 67,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000135_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000135_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000135_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000135_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 136,
+      "batch_index": 68,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000136_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000136_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000136_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000136_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 137,
+      "batch_index": 68,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000137_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000137_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000137_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000137_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 138,
+      "batch_index": 69,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000138_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000138_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000138_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000138_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 139,
+      "batch_index": 69,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000139_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000139_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000139_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000139_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 140,
+      "batch_index": 70,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000140_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000140_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000140_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000140_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 141,
+      "batch_index": 70,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000141_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000141_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000141_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000141_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 142,
+      "batch_index": 71,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000142_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000142_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000142_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000142_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 143,
+      "batch_index": 71,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000143_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000143_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000143_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000143_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 144,
+      "batch_index": 72,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000144_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000144_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000144_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000144_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 145,
+      "batch_index": 72,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000145_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000145_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000145_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000145_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 146,
+      "batch_index": 73,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000146_sr.npy",
+      "lr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000146_lr.npy",
+      "hr_npy": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/sr_quaternions/sample_000146_hr.npy",
+      "ipf_png": "/data/home/umang/Materials/Reynolds-QSR_4x1/experiments/IN718/iso_embedding_4x1_ocrp_01/inference/test/ipf/sample_000146_lr_sr_hr_ipf.png"
+    }
+  ]
+}

@@ -1156,8 +1156,9 @@ class InvariantSlotSummary(nn.Module):
         return torch.cat(outs, dim=-1)
 
 
-class LearnedWeightedSlotContextBuilder(nn.Module):
-    """Learn scalar mixing weights over masked slot members to build the anchor."""
+class MedoidSlotContextBuilder(nn.Module):
+    """Hard medoid: per slot, pick the member feature closest to the slot's
+    feature-space centroid (L2 distance in raw feature space)."""
 
     def __init__(
         self,
@@ -1167,21 +1168,10 @@ class LearnedWeightedSlotContextBuilder(nn.Module):
     ):
         super().__init__()
         self.irreps_feat = Irreps(irreps_feat)
-        self.summary = InvariantSlotSummary(self.irreps_feat)
+        self.feature_dim = int(self.irreps_feat.dim)
         self.meta_dim = int(meta_dim)
         self.window_size = int(window_size)
         self.num_nodes = int(self.window_size * self.window_size)
-        den = float(max(1, self.window_size // 2))
-        coords = []
-        for y in range(self.window_size):
-            for x in range(self.window_size):
-                coords.append(((float(y) - den) / den, (float(x) - den) / den))
-        self.register_buffer("coords", torch.tensor(coords, dtype=torch.float32), persistent=False)
-        member_in_dim = int(self.summary.out_dim) + self.meta_dim + 2
-        self.anchor_mixer = nn.Linear(member_in_dim, 1)
-        # Start near uniform, but with a tiny symmetry break so the mixer can learn away from mean.
-        nn.init.normal_(self.anchor_mixer.weight, mean=0.0, std=1e-3)
-        nn.init.zeros_(self.anchor_mixer.bias)
 
     def forward(
         self,
@@ -1195,35 +1185,44 @@ class LearnedWeightedSlotContextBuilder(nn.Module):
             bank_f = bank_f.unsqueeze(0)
             slot_mask = slot_mask.unsqueeze(0)
             slot_meta = slot_meta.unsqueeze(0)
-        _, _, nnode, _ = bank_f.shape
+        bsz, nwin, nnode, cdim = bank_f.shape
         if slot_mask.shape[-1] != nnode:
             raise ValueError("slot_mask and bank_f disagree on bank size")
         if slot_meta.shape[:3] != slot_mask.shape[:3]:
             raise ValueError("slot_meta and slot_mask must agree on (B, N, K)")
+        kmax = slot_meta.shape[2]
 
-        bsz, nwin, kmax, _ = slot_meta.shape
-        member_summary = self.summary.summarize(bank_f).unsqueeze(2).expand(-1, -1, kmax, -1, -1)
-        coord_feat = self.coords.to(device=bank_f.device, dtype=slot_meta.dtype)
-        coord_feat = coord_feat.view(1, 1, 1, self.num_nodes, 2).expand(bsz, nwin, kmax, -1, -1)
-        member_meta = slot_meta.unsqueeze(-2).expand(-1, -1, -1, self.num_nodes, -1)
-        logits = self.anchor_mixer(torch.cat([member_summary, member_meta, coord_feat], dim=-1)).squeeze(-1)
-        logits = logits.masked_fill(~slot_mask.bool(), -1e4)
-
-        alpha = torch.softmax(logits, dim=-1)
-        alpha = alpha * slot_mask.to(dtype=alpha.dtype)
-        alpha = alpha / alpha.sum(dim=-1, keepdim=True).clamp_min(1e-6)
-        slot_ctx = torch.einsum("bnkm,bnmc->bnkc", alpha.to(dtype=bank_f.dtype), bank_f)
+        mask_f = slot_mask.to(dtype=bank_f.dtype)
+        mass = mask_f.sum(dim=-1, keepdim=True)
+        mean_feat = torch.einsum("bnkm,bnmc->bnkc", mask_f, bank_f) / mass.clamp_min(1.0)
+        diff = bank_f.unsqueeze(2) - mean_feat.unsqueeze(3)
+        dist = diff.pow(2).sum(dim=-1)
+        dist = dist.masked_fill(~slot_mask.bool(), float("inf"))
+        medoid_idx = dist.argmin(dim=-1)
+        idx_for_gather = medoid_idx.unsqueeze(-1).expand(-1, -1, -1, cdim)
+        slot_ctx = bank_f.unsqueeze(2).expand(-1, -1, kmax, -1, -1).gather(
+            dim=3, index=idx_for_gather.unsqueeze(3)
+        ).squeeze(3)
         has_member = slot_mask.any(dim=-1, keepdim=True)
         slot_ctx = torch.where(has_member, slot_ctx, torch.zeros_like(slot_ctx))
 
+        alpha: torch.Tensor | None = None
+        if return_alpha:
+            alpha = torch.zeros(
+                bsz, nwin, kmax, nnode, dtype=bank_f.dtype, device=bank_f.device
+            )
+            alpha.scatter_(3, medoid_idx.unsqueeze(-1), 1.0)
+            alpha = alpha * mask_f
+
         if not batched:
             slot_ctx = slot_ctx.squeeze(0)
-            alpha = alpha.squeeze(0)
-        return slot_ctx, (alpha.to(dtype=bank_f.dtype) if return_alpha else None)
+            if alpha is not None:
+                alpha = alpha.squeeze(0)
+        return slot_ctx, alpha
 
 
-MeanSlotContextBuilder = LearnedWeightedSlotContextBuilder
-MedoidSlotContextBuilder = LearnedWeightedSlotContextBuilder
+LearnedWeightedSlotContextBuilder = MedoidSlotContextBuilder
+MeanSlotContextBuilder = MedoidSlotContextBuilder
 
 
 class WithinSlotInvariantPool(nn.Module):
@@ -1239,6 +1238,7 @@ class WithinSlotInvariantPool(nn.Module):
         hidden_dim: int = 96,
         chunk_size: int = 512,
         token_conditioned_member_bias: bool = True,
+        center_bias_init: float | None = None,
     ):
         super().__init__()
         self.irreps_feat = Irreps(irreps_feat)
@@ -1290,6 +1290,21 @@ class WithinSlotInvariantPool(nn.Module):
             else None
         )
         self.logit_scale = float(max(1, hidden_dim)) ** -0.5
+
+        if self.token_conditioned_member_bias and self.token_bias_ctrl is not None:
+            if center_bias_init is None:
+                # Default: τ ≈ W²/8 → bias drop ≈ -0.5 per LR-pixel step in normalized coords.
+                tau = (float(self.window_size) ** 2) / 8.0
+            else:
+                tau = float(center_bias_init)
+            if tau != 0.0:
+                final = self.token_bias_ctrl[-1]
+                with torch.no_grad():
+                    final.weight.zero_()
+                    init_b = torch.zeros(6, dtype=final.bias.dtype)
+                    init_b[3] = -tau
+                    init_b[4] = -tau
+                    final.bias.copy_(init_b)
 
     @staticmethod
     def _token_geom_features(token_coords: torch.Tensor) -> torch.Tensor:
@@ -1448,32 +1463,25 @@ class WithinSlotInvariantPool(nn.Module):
 
 
 class PatchSlotRouter(nn.Module):
-    """Predict joint patchwise slot ownership logits for the full HR patch."""
+    """Geometric router: predicts per-HR-pixel slot ownership logits from the LR
+    slot-composition image (K binary slot masks over the window) plus phase."""
 
     def __init__(
         self,
-        irreps_feat: Irreps | str,
-        meta_dim: int,
-        kmax_slots: int = 10,
-        upsample_factor: int | tuple[int, int] | list[int] = 4,
-        patch_size: int | tuple[int, int] | list[int] | None = None,
+        kmax_slots: int,
+        window_size: int,
+        patch_size: int | tuple[int, int] | list[int],
         phase_dim: int = 32,
         hidden_dim: int = 128,
-        conv_hidden_dim: int = 64,
         chunk_size: int = 512,
-        slot_mass_power: float = 0.25,
-        uniform_slot_mix: float = 0.75,
-        use_slot_type_meta: bool = True,
-        use_raw_token_ctx: bool = False,
+        use_mlp_encoder: bool = False,
+        center_prior_weight: float = 0.0,
     ):
         super().__init__()
-        self.irreps_feat = Irreps(irreps_feat)
         self.kmax_slots = int(kmax_slots)
-        self.upsample_factor = _as_scale_tuple(upsample_factor)
-        self.patch_shape = _as_patch_shape(
-            patch_size if patch_size is not None else self.upsample_factor,
-            name="patch_size",
-        )
+        self.window_size = int(window_size)
+        self.num_nodes = self.window_size * self.window_size
+        self.patch_shape = _as_patch_shape(patch_size, name="patch_size")
         self.patch_size = (
             int(self.patch_shape[0])
             if self.patch_shape[0] == self.patch_shape[1]
@@ -1481,112 +1489,76 @@ class PatchSlotRouter(nn.Module):
         )
         self.patch_tokens = _num_patch_tokens(self.patch_shape)
         self.phase_dim = int(phase_dim)
-        self.summary = InvariantSlotSummary(self.irreps_feat)
-        self.slot_hidden_dim = int(hidden_dim)
+        self.hidden_dim = int(hidden_dim)
         self.chunk_size = max(1, int(chunk_size))
-        self.slot_mass_power = float(slot_mass_power)
-        self.uniform_slot_mix = float(uniform_slot_mix)
-        self.use_slot_type_meta = bool(use_slot_type_meta)
-        self.use_raw_token_ctx = bool(use_raw_token_ctx)
-        if self.slot_mass_power < 0.0:
-            raise ValueError(f"slot_mass_power must be >= 0, got {slot_mass_power}")
-        if not (0.0 <= self.uniform_slot_mix <= 1.0):
-            raise ValueError(f"uniform_slot_mix must be in [0,1], got {uniform_slot_mix}")
+        self.use_mlp_encoder = bool(use_mlp_encoder)
+        self.center_prior_weight = float(center_prior_weight)
+        self.center_idx = (self.window_size // 2) * self.window_size + (self.window_size // 2)
 
-        in_slot = int(self.summary.out_dim) + int(meta_dim)
-        self.slot_proj = nn.Sequential(
-            nn.Linear(in_slot, self.slot_hidden_dim),
-            nn.GELU(),
-            nn.Linear(self.slot_hidden_dim, self.slot_hidden_dim),
-        )
-        raw_in_slot = int(self.irreps_feat.dim) + int(meta_dim)
-        self.slot_proj_raw = (
-            nn.Sequential(
-                nn.Linear(raw_in_slot, self.slot_hidden_dim),
+        if self.use_mlp_encoder:
+            self.encoder = None
+            feat_dim = self.kmax_slots * self.num_nodes
+        else:
+            self.encoder = nn.Sequential(
+                nn.Conv2d(self.kmax_slots, self.hidden_dim, kernel_size=3, padding=1),
                 nn.GELU(),
-                nn.Linear(self.slot_hidden_dim, self.slot_hidden_dim),
+                nn.Conv2d(self.hidden_dim, self.hidden_dim, kernel_size=3, padding=1),
+                nn.GELU(),
+                nn.Conv2d(self.hidden_dim, self.hidden_dim, kernel_size=3, padding=1),
+                nn.GELU(),
             )
-            if self.use_raw_token_ctx
-            else None
-        )
+            feat_dim = self.hidden_dim * self.num_nodes
         self.phase_proj = nn.Sequential(
-            nn.Linear(self.phase_dim, self.slot_hidden_dim),
+            nn.Linear(self.phase_dim, self.hidden_dim),
             nn.GELU(),
-            nn.Linear(self.slot_hidden_dim, self.slot_hidden_dim),
+            nn.Linear(self.hidden_dim, self.hidden_dim),
         )
-        self.base_logit = nn.Sequential(
-            nn.Linear(2 * self.slot_hidden_dim, self.slot_hidden_dim),
+        self.logit_head = nn.Sequential(
+            nn.Linear(feat_dim + self.hidden_dim, self.hidden_dim),
             nn.GELU(),
-            nn.Linear(self.slot_hidden_dim, 1),
+            nn.Linear(self.hidden_dim, self.kmax_slots),
         )
-
-    def _router_weight_context(
-        self,
-        slot_meta: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        slot_valid = slot_meta[
-            ..., ClusterSlotBuilder.META_VALID : ClusterSlotBuilder.META_VALID + 1
-        ]
-        raw_mass = slot_meta[
-            ..., ClusterSlotBuilder.META_MASS : ClusterSlotBuilder.META_MASS + 1
-        ].clamp_min(0.0)
-        tempered_mass = torch.where(
-            raw_mass > 0.0,
-            raw_mass.clamp_min(1e-6).pow(self.slot_mass_power),
-            torch.zeros_like(raw_mass),
-        )
-        slot_meta_router = slot_meta.clone()
-        slot_meta_router[
-            ..., ClusterSlotBuilder.META_MASS : ClusterSlotBuilder.META_MASS + 1
-        ] = tempered_mass * slot_valid
-        if not self.use_slot_type_meta:
-            slot_meta_router[
-                ...,
-                ClusterSlotBuilder.META_SLOT_TYPE_START : (
-                    ClusterSlotBuilder.META_SLOT_TYPE_START + ClusterSlotBuilder.SLOT_TYPE_DIM
-                ),
-            ] = 0.0
-        return slot_valid, slot_meta_router
 
     def forward(
         self,
-        slot_ctx: torch.Tensor,
-        slot_meta: torch.Tensor,
+        slot_mask: torch.Tensor,
         phase_grid: torch.Tensor,
-        weak_parent_prior: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        if slot_ctx.dim() == 4:
-            bsz, nwin, kmax, cdim = slot_ctx.shape
-            token_ctx = None
-        elif slot_ctx.dim() == 5:
-            bsz, nwin, kmax, patch_tokens_ctx, cdim = slot_ctx.shape
-            token_ctx = slot_ctx
-        else:
+        if slot_mask.dim() != 4:
             raise ValueError(
-                "slot_ctx must have shape (B,N,K,C) or (B,N,K,T,C), "
-                f"got {tuple(slot_ctx.shape)}"
+                "slot_mask must have shape (B, N, K, num_nodes), "
+                f"got {tuple(slot_mask.shape)}"
             )
+        bsz, nwin, kmax, num_nodes = slot_mask.shape
         if kmax != self.kmax_slots:
             raise ValueError(f"Expected kmax_slots={self.kmax_slots}, got {kmax}")
+        if num_nodes != self.num_nodes:
+            raise ValueError(f"Expected num_nodes={self.num_nodes}, got {num_nodes}")
 
-        slot_valid, slot_meta_router = self._router_weight_context(slot_meta)
         nflat = int(bsz * nwin)
-        slot_meta_flat = slot_meta_router.reshape(nflat, kmax, slot_meta_router.shape[-1])
+        W = self.window_size
+        mask_f32 = slot_mask.to(dtype=torch.float32)
+        if self.use_mlp_encoder:
+            x = mask_f32.reshape(nflat, self.kmax_slots * self.num_nodes)
+        else:
+            x = mask_f32.reshape(nflat, kmax, W, W)
 
-        phase_flat: torch.Tensor | None = None
-        phase_shared: torch.Tensor | None = None
+        phase_emb_shared: torch.Tensor | None = None
+        phase_emb_flat: torch.Tensor | None = None
         if phase_grid.dim() == 2:
             if int(phase_grid.shape[0]) != self.patch_tokens:
                 raise ValueError(
                     f"Expected phase patch tokens {self.patch_tokens}, got {int(phase_grid.shape[0])}"
                 )
-            phase_shared = self.phase_proj(phase_grid)
+            phase_emb_shared = self.phase_proj(phase_grid.to(dtype=torch.float32))
         elif phase_grid.dim() == 4:
             if int(phase_grid.shape[2]) != self.patch_tokens:
                 raise ValueError(
                     f"Expected phase patch tokens {self.patch_tokens}, got {int(phase_grid.shape[2])}"
                 )
-            phase_flat = self.phase_proj(phase_grid).reshape(nflat, self.patch_tokens, self.slot_hidden_dim)
+            phase_emb_flat = self.phase_proj(phase_grid.to(dtype=torch.float32)).reshape(
+                nflat, self.patch_tokens, self.hidden_dim
+            )
         else:
             raise ValueError(
                 "phase_grid must have shape (T,D_phase) or (B,N,T,D_phase), "
@@ -1595,50 +1567,30 @@ class PatchSlotRouter(nn.Module):
 
         logits_flat = torch.empty(
             (nflat, self.patch_tokens, self.kmax_slots),
-            device=slot_meta.device,
-            dtype=slot_meta.dtype,
+            device=slot_mask.device,
+            dtype=x.dtype,
         )
-
-        if token_ctx is None:
-            slot_inv_flat = self.summary.summarize(slot_ctx).reshape(nflat, kmax, -1)
-            for start in range(0, nflat, self.chunk_size):
-                end = min(start + self.chunk_size, nflat)
-                slot_inv_chunk = slot_inv_flat[start:end]
-                slot_meta_chunk = slot_meta_flat[start:end]
-                slot_desc_chunk = self.slot_proj(torch.cat([slot_inv_chunk, slot_meta_chunk], dim=-1))
-                slot_desc_exp = slot_desc_chunk.unsqueeze(2).expand(-1, -1, self.patch_tokens, -1)
-                phase_chunk = phase_shared.unsqueeze(0).expand(end - start, -1, -1) if phase_shared is not None else phase_flat[start:end]
-                phase_exp = phase_chunk.unsqueeze(1).expand(-1, self.kmax_slots, -1, -1)
-                base_chunk = self.base_logit(torch.cat([slot_desc_exp, phase_exp], dim=-1)).squeeze(-1)
-                logits_flat[start:end] = base_chunk.permute(0, 2, 1)
-        else:
-            if patch_tokens_ctx != self.patch_tokens:
-                raise ValueError(
-                    f"Expected slot_ctx token dim {self.patch_tokens}, got {patch_tokens_ctx}"
-                )
-            if self.use_raw_token_ctx:
-                slot_inv_flat = token_ctx.reshape(nflat, kmax, self.patch_tokens, -1)
-                proj = self.slot_proj_raw
-                if proj is None:
-                    raise ValueError("slot_proj_raw is required when use_raw_token_ctx=True")
+        for start in range(0, nflat, self.chunk_size):
+            end = min(start + self.chunk_size, nflat)
+            if self.use_mlp_encoder:
+                feat_pool = x[start:end]
             else:
-                slot_inv_flat = self.summary.summarize(token_ctx).reshape(nflat, kmax, self.patch_tokens, -1)
-                proj = self.slot_proj
-            for start in range(0, nflat, self.chunk_size):
-                end = min(start + self.chunk_size, nflat)
-                slot_inv_chunk = slot_inv_flat[start:end]
-                slot_meta_chunk = slot_meta_flat[start:end]
-                meta_exp = slot_meta_chunk.unsqueeze(2).expand(-1, -1, self.patch_tokens, -1)
-                slot_desc_chunk = proj(torch.cat([slot_inv_chunk, meta_exp], dim=-1))
-                phase_chunk = phase_shared.unsqueeze(0).expand(end - start, -1, -1) if phase_shared is not None else phase_flat[start:end]
-                phase_exp = phase_chunk.unsqueeze(1).expand(-1, self.kmax_slots, -1, -1)
-                base_chunk = self.base_logit(torch.cat([slot_desc_chunk, phase_exp], dim=-1)).squeeze(-1)
-                logits_flat[start:end] = base_chunk.permute(0, 2, 1)
+                feat = self.encoder(x[start:end])
+                feat_pool = feat.reshape(end - start, -1)
+            if phase_emb_shared is not None:
+                phase_chunk = phase_emb_shared.unsqueeze(0).expand(end - start, -1, -1)
+            else:
+                phase_chunk = phase_emb_flat[start:end]
+            feat_exp = feat_pool.unsqueeze(1).expand(-1, self.patch_tokens, -1)
+            combined = torch.cat([feat_exp, phase_chunk], dim=-1)
+            logits_flat[start:end] = self.logit_head(combined)
 
         logits = logits_flat.view(bsz, nwin, self.patch_tokens, self.kmax_slots)
-
-        invalid = slot_valid.squeeze(-1) <= 0.0
-        logits = logits.masked_fill(invalid.unsqueeze(2), -1e4)
+        if self.center_prior_weight != 0.0:
+            center_slot = mask_f32.view(bsz, nwin, kmax, self.num_nodes)[..., self.center_idx]
+            logits = logits + self.center_prior_weight * center_slot.unsqueeze(2)
+        slot_present = slot_mask.to(dtype=torch.float32).sum(dim=-1) > 0
+        logits = logits.masked_fill(~slot_present.unsqueeze(2), -1e4)
         return logits
 
 
@@ -1734,7 +1686,7 @@ class SharedTPPatchProposalHead(nn.Module):
         self.ctrl_net = nn.Sequential(
             nn.Linear(int(meta_dim) + self.phase_dim, int(hidden_dim)),
             nn.GELU(),
-            nn.Linear(int(hidden_dim), 2 * self.num_blocks),
+            nn.Linear(int(hidden_dim), self.num_blocks),
         )
 
     def forward(
@@ -1853,18 +1805,12 @@ class SharedTPPatchProposalHead(nn.Module):
                 tp_out = tp_flat.reshape(chunk, kmax, token_count, self.feature_dim)
 
                 coeffs = self.ctrl_net(torch.cat([meta_chunk, phase_exp], dim=-1))
-                alpha, beta = coeffs.chunk(2, dim=-1)
-                alpha = 1.0 + 0.5 * torch.tanh(alpha)
-                beta = 0.5 * torch.tanh(beta)
+                alpha = 1.0 + 0.5 * torch.tanh(coeffs)
 
                 out_token = torch.empty_like(tp_out)
                 for j, (block_start, block_end) in enumerate(self.block_slices):
                     out_token[..., block_start:block_end] = (
                         alpha[..., j : j + 1] * tp_out[..., block_start:block_end]
-                    )
-                    out_token[..., block_start:block_end] = (
-                        out_token[..., block_start:block_end]
-                        + beta[..., j : j + 1] * query_chunk[..., block_start:block_end]
                     )
                 out_chunk[:, :, token_start:token_end, :] = out_token
             out_flat[start:end] = out_chunk
@@ -1897,8 +1843,11 @@ class OCRPPatchUpsampler(nn.Module):
         ocrp_mode: str = "pixel_patch",
         macro_lr_tile_size: int = 3,
         token_conditioned_member_bias: bool | None = None,
+        pool_center_bias_init: float | None = None,
         pool_chunk_size: int = 512,
         router_chunk_size: int = 512,
+        router_use_mlp_encoder: bool = False,
+        router_center_prior_weight: float = 0.0,
         proposal_chunk_size: int = 128,
         proposal_token_chunk_size: int | None = None,
         use_upsample_residual: bool = False,
@@ -1984,21 +1933,17 @@ class OCRPPatchUpsampler(nn.Module):
             hidden_dim=max(64, int(proposal_hidden_dim)),
             chunk_size=int(pool_chunk_size),
             token_conditioned_member_bias=self.token_conditioned_member_bias,
+            center_bias_init=pool_center_bias_init,
         )
         self.router = PatchSlotRouter(
-            irreps_feat=self.irreps_feat,
-            meta_dim=ClusterSlotBuilder.META_DIM,
             kmax_slots=int(kmax_slots),
-            upsample_factor=self.upsample_factor,
+            window_size=int(window_size),
             patch_size=self.hr_patch_shape,
             phase_dim=int(phase_dim),
             hidden_dim=int(router_hidden_dim),
-            conv_hidden_dim=int(router_conv_hidden_dim),
             chunk_size=int(router_chunk_size),
-            slot_mass_power=float(router_slot_mass_power),
-            uniform_slot_mix=float(router_uniform_slot_mix),
-            use_slot_type_meta=bool(router_use_slot_type_meta),
-            use_raw_token_ctx=True,
+            use_mlp_encoder=bool(router_use_mlp_encoder),
+            center_prior_weight=float(router_center_prior_weight),
         )
         self.proposal_head = SharedTPPatchProposalHead(
             irreps_feat=self.irreps_feat,
@@ -2209,8 +2154,7 @@ class OCRPPatchUpsampler(nn.Module):
         )
 
         router_logits = self.router(
-            slot_ctx=slot_pooled_ctx,
-            slot_meta=slot_meta,
+            slot_mask=slot_mask,
             phase_grid=phase_grid,
         )
         if self.router_geom_logit_bias > 0.0:
@@ -2342,10 +2286,13 @@ class IsoEmbeddingSROCRP(nn.Module):
         ocrp_mode: str = "pixel_patch",
         macro_lr_tile_size: int = 3,
         ocrp_token_conditioned_member_bias: bool | None = None,
+        ocrp_pool_center_bias_init: float | None = None,
         ocrp_upsample_residual: bool = False,
         ocrp_upsample_residual_weight: float = 1.0,
         ocrp_pool_chunk_size: int = 512,
         ocrp_router_chunk_size: int = 512,
+        ocrp_router_use_mlp_encoder: bool = False,
+        ocrp_router_center_prior_weight: float = 0.0,
         ocrp_proposal_chunk_size: int = 128,
         ocrp_proposal_token_chunk_size: int | None = None,
         use_hr_conv1: bool = True,
@@ -2556,10 +2503,13 @@ class IsoEmbeddingSROCRP(nn.Module):
             ocrp_mode=str(ocrp_mode),
             macro_lr_tile_size=int(macro_lr_tile_size),
             token_conditioned_member_bias=ocrp_token_conditioned_member_bias,
+            pool_center_bias_init=ocrp_pool_center_bias_init,
             use_upsample_residual=bool(ocrp_upsample_residual),
             upsample_residual_weight=float(ocrp_upsample_residual_weight),
             pool_chunk_size=int(ocrp_pool_chunk_size),
             router_chunk_size=int(ocrp_router_chunk_size),
+            router_use_mlp_encoder=bool(ocrp_router_use_mlp_encoder),
+            router_center_prior_weight=float(ocrp_router_center_prior_weight),
             proposal_chunk_size=int(ocrp_proposal_chunk_size),
             proposal_token_chunk_size=ocrp_proposal_token_chunk_size,
         )

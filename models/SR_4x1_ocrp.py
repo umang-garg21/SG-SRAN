@@ -1315,6 +1315,7 @@ class PatchSlotRouter(nn.Module):
         chunk_size: int = 512,
         slot_mass_power: float = 0.25,
         uniform_slot_mix: float = 0.75,
+        use_raw_token_ctx: bool = False,
     ):
         super().__init__()
         self.irreps_feat = Irreps(irreps_feat)
@@ -1336,6 +1337,7 @@ class PatchSlotRouter(nn.Module):
         self.chunk_size = max(1, int(chunk_size))
         self.slot_mass_power = float(slot_mass_power)
         self.uniform_slot_mix = float(uniform_slot_mix)
+        self.use_raw_token_ctx = bool(use_raw_token_ctx)
         if self.slot_mass_power < 0.0:
             raise ValueError(f"slot_mass_power must be >= 0, got {slot_mass_power}")
         if not (0.0 <= self.uniform_slot_mix <= 1.0):
@@ -1346,6 +1348,16 @@ class PatchSlotRouter(nn.Module):
             nn.Linear(in_slot, self.slot_hidden_dim),
             nn.GELU(),
             nn.Linear(self.slot_hidden_dim, self.slot_hidden_dim),
+        )
+        raw_in_slot = int(self.irreps_feat.dim) + int(meta_dim)
+        self.slot_proj_raw = (
+            nn.Sequential(
+                nn.Linear(raw_in_slot, self.slot_hidden_dim),
+                nn.GELU(),
+                nn.Linear(self.slot_hidden_dim, self.slot_hidden_dim),
+            )
+            if self.use_raw_token_ctx
+            else None
         )
         self.phase_proj = nn.Sequential(
             nn.Linear(self.phase_dim, self.slot_hidden_dim),
@@ -1457,14 +1469,21 @@ class PatchSlotRouter(nn.Module):
                 raise ValueError(
                     f"Expected slot_ctx token dim {self.patch_tokens}, got {patch_tokens_ctx}"
                 )
-            slot_inv_flat = self.summary.summarize(token_ctx).reshape(nflat, kmax, self.patch_tokens, -1)
+            if self.use_raw_token_ctx:
+                slot_inv_flat = token_ctx.reshape(nflat, kmax, self.patch_tokens, -1)
+                proj = self.slot_proj_raw
+                if proj is None:
+                    raise ValueError("slot_proj_raw is required when use_raw_token_ctx=True")
+            else:
+                slot_inv_flat = self.summary.summarize(token_ctx).reshape(nflat, kmax, self.patch_tokens, -1)
+                proj = self.slot_proj
             for start in range(0, nflat, self.chunk_size):
                 end = min(start + self.chunk_size, nflat)
                 slot_inv_chunk = slot_inv_flat[start:end]
                 slot_meta_chunk = slot_meta_flat[start:end]
                 weights_chunk = weights_flat[start:end]
                 meta_exp = slot_meta_chunk.unsqueeze(2).expand(-1, -1, self.patch_tokens, -1)
-                slot_desc_chunk = self.slot_proj(torch.cat([slot_inv_chunk, meta_exp], dim=-1))
+                slot_desc_chunk = proj(torch.cat([slot_inv_chunk, meta_exp], dim=-1))
                 weights_exp = weights_chunk.unsqueeze(2)
                 global_desc_chunk = (weights_exp * slot_desc_chunk).sum(dim=1) / weights_exp.sum(dim=1).clamp_min(1e-6)
                 global_exp = global_desc_chunk.unsqueeze(1).expand(-1, self.kmax_slots, -1, -1)
@@ -1817,6 +1836,7 @@ class OCRP4x1PatchUpsampler(nn.Module):
             chunk_size=int(router_chunk_size),
             slot_mass_power=float(router_slot_mass_power),
             uniform_slot_mix=float(router_uniform_slot_mix),
+            use_raw_token_ctx=True,
         )
         self.proposal_head = SharedTPPatchProposalHead(
             irreps_feat=self.irreps_feat,
