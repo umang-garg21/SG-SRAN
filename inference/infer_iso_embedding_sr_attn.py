@@ -364,6 +364,8 @@ def _load_model_from_checkpoint(
         "ocrp_router_chunk_size": int(getattr(cfg, "ocrp_router_chunk_size", 512)),
         "ocrp_router_use_mlp_encoder": bool(getattr(cfg, "ocrp_router_use_mlp_encoder", False)),
         "ocrp_router_center_prior_weight": float(getattr(cfg, "ocrp_router_center_prior_weight", 0.0)),
+        "ocrp_router_mode": str(getattr(cfg, "ocrp_router_mode", "geometric")),
+        "ocrp_router_use_raw_token_ctx": bool(getattr(cfg, "ocrp_router_use_raw_token_ctx", False)),
         "ocrp_pool_center_bias_init": getattr(cfg, "ocrp_pool_center_bias_init", None),
         "ocrp_proposal_query_residual_scale": float(getattr(cfg, "ocrp_proposal_query_residual_scale", 0.5)),
         "ocrp_proposal_chunk_size": int(getattr(cfg, "ocrp_proposal_chunk_size", 128)),
