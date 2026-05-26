@@ -1,5 +1,5 @@
 {
-  "dataset_root": "/data/home/umang/Materials/Materials_data_mount/datasets/IN718_QSR_x4",
+  "dataset_root": "/data/home/umang/Materials/Materials_data_mount/datasets/h200_datasets/Ti_Al_1pct_QSR_x2",
   "epochs": 2,
   "batch_size": 2,
   "num_workers": 2,
@@ -14,15 +14,15 @@
   "lr": 0.0003,
   "clip": 1.0,
   "scale": [
-    4,
-    4
+    2,
+    2
   ],
   "upsample_factor": [
-    4,
-    4
+    2,
+    2
   ],
-  "symmetry_group": "Oh",
-  "crystal": "fcc",
+  "symmetry_group": "D6h",
+  "crystal": "hcp",
   "d6_convention": "z_axis",
   "feature_irreps": "full",
   "use_lr_conv1": true,
@@ -96,7 +96,7 @@
   "model": {
     "type": "iso_embedding_ocrp",
     "model_module": "models.SR_4x4_from_4x1_ocrp_anchorless",
-    "model_class": "IsoEmbedding4x4FromSROCRP"
+    "model_class": "IsoEmbedding2x2FromSROCRP"
   },
   "viz_sample_key": "x_230"
 }

@@ -162,34 +162,123 @@ def print_config_diff(cfg: Dict[str, Any]):
 # ----------------------------------------------------------------------
 
 
-def try_load_dataset_symmetry(cfg: Dict[str, Any]) -> Dict[str, Any]:
+def _load_dataset_info(dataset_root: str | Path | None) -> Dict[str, Any] | None:
+    """Load dataset_info.json when available."""
+    if dataset_root is None or not str(dataset_root).strip():
+        return None
+    info_path = Path(dataset_root) / "dataset_info.json"
+    if not info_path.exists():
+        return None
+    with open(info_path, "r") as f:
+        return json.load(f)
+
+
+def _normalize_crystal_name(crystal: Any) -> str:
+    """Normalize config crystal aliases to the model's supported names."""
+    key = str(crystal).strip().lower()
+    if key in {"fcc", "o", "oh", "cubic"}:
+        return "fcc"
+    if key in {"hcp", "d6", "d6h", "hex", "hexagonal"}:
+        return "hcp"
+    raise ValueError(
+        f"Unsupported crystal={crystal!r}. Expected one of "
+        "'fcc'/'cubic' or 'hcp'/'hexagonal'."
+    )
+
+
+def _crystal_for_symmetry(symmetry_group: Any) -> str | None:
+    """Infer the supported crystal family from a symmetry-group name."""
+    canon = canon_symmetry_str(symmetry_group)
+    if canon in {"O", "Oh", "Td"}:
+        return "fcc"
+    if str(canon).startswith("D6"):
+        return "hcp"
+    return None
+
+
+def try_load_dataset_symmetry(
+    cfg: Dict[str, Any],
+    user_cfg: Dict[str, Any] | None = None,
+) -> tuple[Dict[str, Any], str | None]:
     """
-    If symmetry_group is not provided in cfg, attempt to read it
-    from dataset_info.json at dataset_root. If not found, fall back
-    to the default value.
+    Resolve symmetry_group from the explicit config or dataset metadata.
+
+    Returns the updated cfg plus the dataset symmetry (if available).
     """
-    # Only check dataset if symmetry_group wasn't explicitly set
-    if not cfg.get("symmetry_group"):
-        dataset_root = Path(cfg["dataset_root"])
-        info_path = dataset_root / "dataset_info.json"
-        if info_path.exists():
-            with open(info_path, "r") as f:
-                dataset_info = json.load(f)
-            if "symmetry" in dataset_info:
-                cfg["symmetry_group"] = dataset_info["symmetry"]
-                print(f"Detected symmetry group from dataset: {cfg['symmetry_group']}")
-            else:
-                print(
-                    f"dataset_info.json found but no 'symmetry' key — using default {DEFAULT_CONFIG['symmetry_group']}"
-                )
-                cfg["symmetry_group"] = DEFAULT_CONFIG["symmetry_group"]
-        else:
-            print(
-                f"No dataset_info.json found — using default {DEFAULT_CONFIG['symmetry_group']}"
+    explicit_sym = bool(
+        isinstance(user_cfg, dict)
+        and str(user_cfg.get("symmetry_group", "")).strip()
+    )
+
+    dataset_info = _load_dataset_info(cfg.get("dataset_root"))
+    dataset_symmetry = None
+    if isinstance(dataset_info, dict) and str(dataset_info.get("symmetry", "")).strip():
+        dataset_symmetry = canon_symmetry_str(dataset_info["symmetry"])
+
+    if explicit_sym:
+        cfg_symmetry = canon_symmetry_str(
+            cfg.get("symmetry_group", DEFAULT_CONFIG["symmetry_group"])
+        )
+        cfg["symmetry_group"] = cfg_symmetry
+        print(f"Using symmetry group from config: {cfg_symmetry}")
+        if dataset_symmetry is not None and cfg_symmetry != dataset_symmetry:
+            raise ValueError(
+                "Config symmetry_group does not match dataset metadata: "
+                f"config={cfg_symmetry!r}, dataset={dataset_symmetry!r}, "
+                f"dataset_root={cfg.get('dataset_root')!r}"
             )
-            cfg["symmetry_group"] = DEFAULT_CONFIG["symmetry_group"]
+    elif dataset_symmetry is not None:
+        cfg["symmetry_group"] = dataset_symmetry
+        print(f"Detected symmetry group from dataset: {cfg['symmetry_group']}")
     else:
-        print(f"Using symmetry group from config: {cfg['symmetry_group']}")
+        cfg["symmetry_group"] = canon_symmetry_str(
+            cfg.get("symmetry_group", DEFAULT_CONFIG["symmetry_group"])
+        )
+        print(f"No dataset_info.json found — using default {cfg['symmetry_group']}")
+
+    return cfg, dataset_symmetry
+
+
+def harmonize_symmetry_and_crystal(
+    cfg: Dict[str, Any],
+    user_cfg: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    """Keep symmetry_group and crystal aligned with the dataset and model family."""
+    cfg, dataset_symmetry = try_load_dataset_symmetry(cfg, user_cfg=user_cfg)
+
+    explicit_crystal = bool(
+        isinstance(user_cfg, dict)
+        and str(user_cfg.get("crystal", "")).strip()
+    )
+    crystal_value = cfg.get("crystal", DEFAULT_CONFIG["crystal"])
+    normalized_crystal = _normalize_crystal_name(crystal_value)
+    expected_crystal = _crystal_for_symmetry(cfg.get("symmetry_group"))
+
+    if expected_crystal is not None and normalized_crystal != expected_crystal:
+        if explicit_crystal:
+            raise ValueError(
+                "Config crystal/symmetry mismatch: "
+                f"symmetry_group={cfg.get('symmetry_group')!r} implies crystal={expected_crystal!r}, "
+                f"but config crystal={crystal_value!r}. "
+                "This would instantiate the wrong local-iso encoder/decoder family."
+            )
+        print(
+            f"Inferred crystal family {expected_crystal!r} from symmetry_group "
+            f"{cfg.get('symmetry_group')!r}."
+        )
+        normalized_crystal = expected_crystal
+
+    cfg["crystal"] = normalized_crystal
+
+    if dataset_symmetry is not None:
+        dataset_crystal = _crystal_for_symmetry(dataset_symmetry)
+        if dataset_crystal is not None and cfg["crystal"] != dataset_crystal:
+            raise ValueError(
+                "Config crystal does not match dataset symmetry metadata: "
+                f"crystal={cfg['crystal']!r}, dataset_symmetry={dataset_symmetry!r}, "
+                f"dataset_root={cfg.get('dataset_root')!r}"
+            )
+
     return cfg
 
 
@@ -248,8 +337,8 @@ def load_and_prepare_config(
     user_cfg = load_config(config_path)
     cfg = preprocess_config(user_cfg)
 
-    # Try to read symmetry from dataset info file
-    cfg = try_load_dataset_symmetry(cfg)
+    # Resolve dataset symmetry and validate crystal-family consistency.
+    cfg = harmonize_symmetry_and_crystal(cfg, user_cfg=user_cfg)
 
     print_config_diff(cfg)
 

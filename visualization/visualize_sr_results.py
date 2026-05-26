@@ -1,7 +1,6 @@
 import os
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.axes import Axes
 from typing import Optional
 from utils.quat_ops import (
     enforce_hemisphere,
@@ -10,7 +9,7 @@ from utils.quat_ops import (
     quat_conjugate,
     quat_mul_np,
 )
-from visualization.ipf_render import render_ipf_rgb
+from visualization.ipf_render import add_ipf_key_panel, render_ipf_rgb
 
 
 def _project_lr_rgb_to_hr_sparse(
@@ -84,86 +83,6 @@ def _pad_rgb_to_canvas(
     x0 = (tw - w) // 2
     out[y0 : y0 + h, x0 : x0 + w] = rgb
     return out
-
-
-def _style_simple_ipf_key(
-    ax,
-    *,
-    title: str = "IPF Key",
-    title_fontsize: float = 10.0,
-    label_fontsize: float = 8.0,
-) -> None:
-    """
-    Restyle the default orix IPF key so it reads as a clean legend panel.
-
-    The goal is a compact key with light boundaries and corner labels placed
-    inside the panel rather than floating well outside it.
-    """
-    ax.plot_ipf_color_key(show_title=False)
-    ax.set_title(title, fontsize=title_fontsize, fontweight="semibold", pad=6, color="#111111")
-    ax.set_aspect("equal", adjustable="box")
-    ax.set_facecolor("white")
-
-    try:
-        ax.set_xticks([])
-        ax.set_yticks([])
-    except Exception:
-        pass
-
-    for txt in list(getattr(ax, "texts", [])):
-        try:
-            txt.set_visible(False)
-        except Exception:
-            pass
-
-    for line in getattr(ax, "lines", []):
-        try:
-            line.set_color("none")
-            line.set_linewidth(0.0)
-            line.set_solid_capstyle("round")
-            line.set_solid_joinstyle("round")
-            line.set_clip_on(True)
-        except Exception:
-            pass
-
-    for patch in getattr(ax, "patches", []):
-        try:
-            patch.set_linewidth(0.0)
-            patch.set_edgecolor("none")
-            patch.set_joinstyle("round")
-            patch.set_clip_on(True)
-        except Exception:
-            pass
-
-    for coll in getattr(ax, "collections", []):
-        try:
-            coll.set_linewidths(0.0)
-        except Exception:
-            pass
-        try:
-            coll.set_edgecolor("face")
-        except Exception:
-            pass
-
-    label_specs = [
-        ("[111]", 0.50, 0.96, "center", "top"),
-        ("[001]", 0.10, 0.07, "left", "bottom"),
-        ("[101]", 0.90, 0.07, "right", "bottom"),
-    ]
-    for text, x, y, ha, va in label_specs:
-        Axes.text(
-            ax,
-            x,
-            y,
-            text,
-            transform=ax.transAxes,
-            ha=ha,
-            va=va,
-            fontsize=label_fontsize,
-            fontweight="normal",
-            color="#111111",
-            clip_on=True,
-        )
 
 
 def _proper_sym_ops_wxyz(sym_class) -> np.ndarray:
@@ -364,8 +283,14 @@ def render_sr_hr_side_by_side(
     # IPF color key
     # -------------------------------------------------------------------------
     if include_key:
-        ax_key = fig.add_subplot(gs[:, -1], projection="ipf", symmetry=sym_class.laue)
-        _style_simple_ipf_key(ax_key, title="IPF Key", title_fontsize=10.0, label_fontsize=8.0)
+        add_ipf_key_panel(
+            fig,
+            gs[:, -1],
+            sym_class,
+            title="IPF Key",
+            title_fontsize=10.0,
+            label_fontsize=8.0,
+        )
 
     # -------------------------------------------------------------------------
     # Save figure
@@ -587,12 +512,12 @@ def render_sr_hr_lr_side_by_side(
     # IPF color key
     # -------------------------------------------------------------------------
     if include_key:
-        # Keep the key centered and avoid over-expansion by placing it in the middle row.
-        ax_key = fig.add_subplot(gs[1, ncols + 1], projection="ipf", symmetry=sym_class.laue)
         key_title_fs = float(np.clip(0.070 * panel_h, 11.0, 18.0) * pt_per_px)
         key_label_fs = float(np.clip(0.055 * panel_h, 9.0, 14.0) * pt_per_px)
-        _style_simple_ipf_key(
-            ax_key,
+        add_ipf_key_panel(
+            fig,
+            gs[1, ncols + 1],
+            sym_class,
             title="IPF Key",
             title_fontsize=key_title_fs,
             label_fontsize=key_label_fs,
@@ -745,8 +670,14 @@ def render_input_output_side_by_side(
     # IPF color key
     # -------------------------------------------------------------------------
     if include_key:
-        ax_key = fig.add_subplot(gs[:, -1], projection="ipf", symmetry=sym_class.laue)
-        _style_simple_ipf_key(ax_key, title="IPF Key", title_fontsize=10.0, label_fontsize=8.0)
+        add_ipf_key_panel(
+            fig,
+            gs[:, -1],
+            sym_class,
+            title="IPF Key",
+            title_fontsize=10.0,
+            label_fontsize=8.0,
+        )
 
     # -------------------------------------------------------------------------
     # Save figure

@@ -95,7 +95,7 @@
   "model": {
     "type": "iso_embedding_ocrp",
     "model_module": "models.SR_4x4_from_4x1_ocrp_anchorless",
-    "model_class": "IsoEmbedding4x4From4x1SROCRP"
+    "model_class": "IsoEmbedding4x4FromSROCRP"
   },
   "viz_sample_key": "x_230"
 }

@@ -1,5 +1,5 @@
 {
-  "dataset_root": "/data/home/umang/Materials/Materials_data_mount/datasets/IN718_QSR_x4",
+  "dataset_root": "/data/home/umang/Materials/Materials_data_mount/datasets/Ti_Al_1pct_QSR_x4",
   "epochs": 2,
   "batch_size": 2,
   "num_workers": 2,
@@ -21,8 +21,8 @@
     4,
     4
   ],
-  "symmetry_group": "Oh",
-  "crystal": "fcc",
+  "symmetry_group": "D6h",
+  "crystal": "hcp",
   "d6_convention": "z_axis",
   "feature_irreps": "full",
   "use_lr_conv1": true,

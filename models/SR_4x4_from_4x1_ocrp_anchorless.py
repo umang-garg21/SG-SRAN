@@ -2172,38 +2172,107 @@ class IsoEmbedding4x1SROCRP(nn.Module):
         return F.mse_loss(feat_hr_pred, feat_hr_tgt)
 
 
-class OCRP4x4From4x1PatchUpsampler(OCRP4x1PatchUpsampler):
-    """Scale-only 4x4 wrapper around the 4x1 anchorless OCRP implementation."""
+class OCRPFromSROCRPPatchUpsampler(OCRP4x1PatchUpsampler):
+    """Scale-parametrized wrapper around the anchorless OCRP implementation."""
 
     def __init__(self, *args, upsample_factor=(4, 4), **kwargs):
         super().__init__(*args, upsample_factor=upsample_factor, **kwargs)
 
 
-class IsoEmbedding4x4From4x1SROCRP(IsoEmbedding4x1SROCRP):
-    """Scale-only 4x4 wrapper around the 4x1 anchorless OCRP model."""
+class IsoEmbeddingFromSROCRP(IsoEmbedding4x1SROCRP):
+    """Scale-parametrized anchorless OCRP model.
+
+    The architecture and hyperparameters are inherited from the validated
+    anchorless OCRP implementation; the spatial scale is supplied by
+    ``upsample_factor`` in the experiment config.
+    """
 
     def __init__(self, *args, upsample_factor=(4, 4), **kwargs):
         super().__init__(*args, upsample_factor=upsample_factor, **kwargs)
 
 
-def _with_4x4_upsample_default(fn):
+class OCRP2x2FromSROCRPPatchUpsampler(OCRPFromSROCRPPatchUpsampler):
+    """Trivial 2x2 default wrapper for readable experiment configs."""
+
+    def __init__(self, *args, upsample_factor=(2, 2), **kwargs):
+        super().__init__(*args, upsample_factor=upsample_factor, **kwargs)
+
+
+class IsoEmbedding2x2FromSROCRP(IsoEmbeddingFromSROCRP):
+    """Trivial 2x2 default wrapper for readable experiment configs."""
+
+    def __init__(self, *args, upsample_factor=(2, 2), **kwargs):
+        super().__init__(*args, upsample_factor=upsample_factor, **kwargs)
+
+
+class OCRP4x4FromSROCRPPatchUpsampler(OCRPFromSROCRPPatchUpsampler):
+    """Trivial 4x4 default wrapper for readable experiment configs."""
+
+    def __init__(self, *args, upsample_factor=(4, 4), **kwargs):
+        super().__init__(*args, upsample_factor=upsample_factor, **kwargs)
+
+
+class IsoEmbedding4x4FromSROCRP(IsoEmbeddingFromSROCRP):
+    """Trivial 4x4 default wrapper for readable experiment configs."""
+
+    def __init__(self, *args, upsample_factor=(4, 4), **kwargs):
+        super().__init__(*args, upsample_factor=upsample_factor, **kwargs)
+
+
+class OCRP8x8FromSROCRPPatchUpsampler(OCRPFromSROCRPPatchUpsampler):
+    """Trivial 8x8 default wrapper for readable experiment configs."""
+
+    def __init__(self, *args, upsample_factor=(8, 8), **kwargs):
+        super().__init__(*args, upsample_factor=upsample_factor, **kwargs)
+
+
+class IsoEmbedding8x8FromSROCRP(IsoEmbeddingFromSROCRP):
+    """Trivial 8x8 default wrapper for readable experiment configs."""
+
+    def __init__(self, *args, upsample_factor=(8, 8), **kwargs):
+        super().__init__(*args, upsample_factor=upsample_factor, **kwargs)
+
+
+def _with_upsample_default(fn, default):
     sig = inspect.signature(fn)
     params = [
-        param.replace(default=(4, 4)) if name == "upsample_factor" else param
+        param.replace(default=default) if name == "upsample_factor" else param
         for name, param in sig.parameters.items()
     ]
     return sig.replace(parameters=params)
 
 
-OCRP4x4From4x1PatchUpsampler.__init__.__signature__ = _with_4x4_upsample_default(
-    OCRP4x1PatchUpsampler.__init__
+OCRPFromSROCRPPatchUpsampler.__init__.__signature__ = _with_upsample_default(
+    OCRP4x1PatchUpsampler.__init__, (4, 4)
 )
-IsoEmbedding4x4From4x1SROCRP.__init__.__signature__ = _with_4x4_upsample_default(
-    IsoEmbedding4x1SROCRP.__init__
+IsoEmbeddingFromSROCRP.__init__.__signature__ = _with_upsample_default(
+    IsoEmbedding4x1SROCRP.__init__, (4, 4)
+)
+OCRP2x2FromSROCRPPatchUpsampler.__init__.__signature__ = _with_upsample_default(
+    OCRP4x1PatchUpsampler.__init__, (2, 2)
+)
+IsoEmbedding2x2FromSROCRP.__init__.__signature__ = _with_upsample_default(
+    IsoEmbedding4x1SROCRP.__init__, (2, 2)
+)
+OCRP4x4FromSROCRPPatchUpsampler.__init__.__signature__ = _with_upsample_default(
+    OCRP4x1PatchUpsampler.__init__, (4, 4)
+)
+IsoEmbedding4x4FromSROCRP.__init__.__signature__ = _with_upsample_default(
+    IsoEmbedding4x1SROCRP.__init__, (4, 4)
+)
+OCRP8x8FromSROCRPPatchUpsampler.__init__.__signature__ = _with_upsample_default(
+    OCRP4x1PatchUpsampler.__init__, (8, 8)
+)
+IsoEmbedding8x8FromSROCRP.__init__.__signature__ = _with_upsample_default(
+    IsoEmbedding4x1SROCRP.__init__, (8, 8)
 )
 
-OCRPPatchUpsampler = OCRP4x4From4x1PatchUpsampler
-IsoEmbeddingSROCRP = IsoEmbedding4x4From4x1SROCRP
+# Backwards-compatible names used by existing 4x4 configs and logs.
+OCRP4x4From4x1PatchUpsampler = OCRP4x4FromSROCRPPatchUpsampler
+IsoEmbedding4x4From4x1SROCRP = IsoEmbedding4x4FromSROCRP
+
+OCRPPatchUpsampler = OCRPFromSROCRPPatchUpsampler
+IsoEmbeddingSROCRP = IsoEmbeddingFromSROCRP
 
 
 __all__ = [
@@ -2218,6 +2287,14 @@ __all__ = [
     "DirectHRMemberCrossAttn",
     "OCRP4x1PatchUpsampler",
     "IsoEmbedding4x1SROCRP",
+    "OCRPFromSROCRPPatchUpsampler",
+    "IsoEmbeddingFromSROCRP",
+    "OCRP2x2FromSROCRPPatchUpsampler",
+    "IsoEmbedding2x2FromSROCRP",
+    "OCRP4x4FromSROCRPPatchUpsampler",
+    "IsoEmbedding4x4FromSROCRP",
+    "OCRP8x8FromSROCRPPatchUpsampler",
+    "IsoEmbedding8x8FromSROCRP",
     "OCRP4x4From4x1PatchUpsampler",
     "IsoEmbedding4x4From4x1SROCRP",
     "OCRPPatchUpsampler",

@@ -1020,10 +1020,16 @@ def render_decoded_probe_gallery(
     panel_h, panel_w = int(target_hw[0]), int(target_hw[1])
     panel_h_px = panel_h * scale
     panel_w_px = panel_w * scale
-    label_gutter_px = max(0, int(left_label_gutter_px))
     dpi_out = 180
+    pt_per_px = 72.0 / float(dpi_out)
+    row_label_px = float(np.clip(0.12 * panel_h_px, 13.0, 18.0))
+    header_label_px = float(np.clip(0.10 * panel_h_px, 11.0, 16.0))
+    max_label_chars = max(len(str(row.get("name", "")).strip()) for row in rows)
+    min_label_gutter_px = int(round(26.0 + max_label_chars * row_label_px * 0.64))
+    label_gutter_px = max(0, int(left_label_gutter_px), min_label_gutter_px)
+    header_h_px = max(int(round(0.30 * panel_h_px)), 28)
     fig_px_w = label_gutter_px + 4 * panel_w_px
-    fig_px_h = n_rows * panel_h_px
+    fig_px_h = header_h_px + n_rows * panel_h_px
     fig, axes = plt.subplots(
         n_rows,
         4,
@@ -1032,7 +1038,15 @@ def render_decoded_probe_gallery(
         squeeze=False,
     )
     left_frac = float(label_gutter_px) / float(fig_px_w) if fig_px_w > 0 else 0.0
-    fig.subplots_adjust(left=left_frac, right=1.0, bottom=0.0, top=1.0, wspace=0.0, hspace=0.0)
+    top_frac = 1.0 - (float(header_h_px) / float(fig_px_h)) if fig_px_h > 0 else 1.0
+    fig.subplots_adjust(
+        left=left_frac,
+        right=0.998,
+        bottom=0.002,
+        top=top_frac,
+        wspace=0.0,
+        hspace=0.0,
+    )
 
     error_min = None
     error_max = None
@@ -1117,36 +1131,15 @@ def render_decoded_probe_gallery(
                         resample=False,
                     )
             ax.axis("off")
-            if ridx == 0:
-                col_name = (
-                    "IPF-X"
-                    if cidx == 0
-                    else "IPF-Y"
-                    if cidx == 1
-                    else "IPF-Z"
-                    if cidx == 2
-                    else "Misorientation (deg)"
-                )
-                ax.text(
-                    0.01,
-                    0.99,
-                    col_name,
-                    transform=ax.transAxes,
-                    fontsize=9,
-                    color="white",
-                    ha="left",
-                    va="top",
-                    bbox={"boxstyle": "round,pad=0.2", "facecolor": "black", "alpha": 0.65, "edgecolor": "none"},
-                )
-        h, w = row["shape"]
-        row_label = f"Row {ridx + 1}: {row['name']} ({h}x{w})"
+        row_label = str(row["name"]).strip()
         if label_gutter_px > 0:
-            y_center = 1.0 - ((float(ridx) + 0.5) / float(n_rows))
+            y_center = top_frac - ((float(ridx) + 0.5) / float(n_rows)) * top_frac
             fig.text(
-                0.01,
+                0.012,
                 y_center,
                 row_label,
-                fontsize=10,
+                fontsize=row_label_px * pt_per_px,
+                fontweight="semibold",
                 color="black",
                 ha="left",
                 va="center",
@@ -1157,12 +1150,27 @@ def render_decoded_probe_gallery(
                 0.01,
                 row_label,
                 transform=axes[ridx, 0].transAxes,
-                fontsize=8,
+                fontsize=row_label_px * pt_per_px,
                 color="white",
                 ha="left",
                 va="bottom",
                 bbox={"boxstyle": "round,pad=0.2", "facecolor": "black", "alpha": 0.65, "edgecolor": "none"},
             )
+
+    col_titles = ("IPF-X", "IPF-Y", "IPF-Z", "Misorientation")
+    header_y = top_frac + (1.0 - top_frac) * 0.52
+    for cidx, title in enumerate(col_titles):
+        bbox = axes[0, cidx].get_position()
+        fig.text(
+            bbox.x0 + 0.5 * bbox.width,
+            header_y,
+            title,
+            fontsize=header_label_px * pt_per_px,
+            fontweight="semibold",
+            color="#111111",
+            ha="center",
+            va="center",
+        )
 
     fig.savefig(out_path, dpi=dpi_out)
     plt.close(fig)

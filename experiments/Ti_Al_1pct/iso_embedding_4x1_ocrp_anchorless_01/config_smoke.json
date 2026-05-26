@@ -1,5 +1,5 @@
 {
-  "dataset_root": "/data/home/umang/Materials/Materials_data_mount/datasets/IN718_QSR_x4",
+  "dataset_root": "/data/home/umang/Materials/Materials_data_mount/datasets/Ti_Al_1pct_QSR_4x1",
   "epochs": 2,
   "batch_size": 2,
   "num_workers": 2,
@@ -15,14 +15,14 @@
   "clip": 1.0,
   "scale": [
     4,
-    4
+    1
   ],
   "upsample_factor": [
     4,
-    4
+    1
   ],
-  "symmetry_group": "Oh",
-  "crystal": "fcc",
+  "symmetry_group": "D6h",
+  "crystal": "hcp",
   "d6_convention": "z_axis",
   "feature_irreps": "full",
   "use_lr_conv1": true,
@@ -31,22 +31,20 @@
   "conv_feature_mask_soft": false,
   "conv_feature_mask_temperature": 32.0,
   "use_residual_lr1": true,
-  "window_size": 9,
+  "window_size": 7,
   "kmax_slots": 6,
   "cluster_threshold_deg": 2.0,
   "cluster_connectivity": 8,
   "phase_dim": 32,
-  "ocrp_router_hidden_dim": 64,
+  "ocrp_router_hidden_dim": 128,
   "ocrp_router_conv_hidden_dim": 64,
   "ocrp_router_slot_mass_power": 0.25,
   "ocrp_router_uniform_slot_mix": 0.75,
-  "ocrp_proposal_hidden_dim": 54,
+  "ocrp_proposal_hidden_dim": 128,
   "ocrp_straight_through": true,
   "ocrp_token_conditioned_member_bias": true,
-  "ocrp_pool_chunk_size": 1024,
+  "ocrp_pool_chunk_size": 16384,
   "ocrp_router_chunk_size": 16384,
-  "ocrp_router_use_mlp_encoder": true,
-  "ocrp_router_center_prior_weight": 5.0,
   "ocrp_proposal_chunk_size": 16384,
   "ocrp_proposal_token_chunk_size": 16,
   "use_hr_conv1": true,
@@ -61,7 +59,7 @@
   "hr_conv_feature_mask_soft": false,
   "use_residual_hr1": true,
   "use_residual_hr2": true,
-  "use_residual_hr3": true,
+  "use_residual_hr3": false,
   "use_amp": false,
   "amp_dtype": "bf16",
   "allow_tf32": true,
@@ -95,8 +93,8 @@
   },
   "model": {
     "type": "iso_embedding_ocrp",
-    "model_module": "models.SR_4x4_from_4x1_ocrp_anchorless",
-    "model_class": "IsoEmbedding4x4FromSROCRP"
+    "model_module": "models.SR_4x1_ocrp_anchorless",
+    "model_class": "IsoEmbedding4x1SROCRP"
   },
   "viz_sample_key": "x_230"
 }
