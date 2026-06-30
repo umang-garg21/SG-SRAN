@@ -247,11 +247,15 @@ out/tmp_hcp_export.csv
 # Generated figures and diagnostics
 diagnostics/
 outputs/
+out/
+analysis/out/
 analysis/_dataset_comparison_tmp/
 analysis/test_dataset_comparison_outputs/
 analysis/test_dataset_comparison_resume/
+experiments/**/inference/
 **/checkpoints_*/
 **/visualizations_*/
+third_party/
 
 # Ignore the entire Paper folder
 Paper/
