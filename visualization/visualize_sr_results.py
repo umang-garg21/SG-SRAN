@@ -318,6 +318,7 @@ def render_sr_hr_lr_side_by_side(
     format_input: bool = True,
     dpi: int = 300,
     pixels_per_image_pixel: int = 1,
+    include_row_labels: bool = True,
 ):
     """
     Render LR (Low-Resolution), SR (Super-Resolution), and HR (High-Resolution)
@@ -342,6 +343,8 @@ def render_sr_hr_lr_side_by_side(
         If True, canonicalize quaternions.
     dpi : int, default=300
         Figure DPI for saved PNG.
+    include_row_labels : bool, default=True
+        Whether to reserve a left text panel for LR/SR/HR row labels.
     """
     # -------------------------------------------------------------------------
     # Early exit if file already exists
@@ -402,7 +405,7 @@ def render_sr_hr_lr_side_by_side(
         hr_rgb = _pad_rgb_to_canvas(hr_rgb, (target_h, target_w))
 
     ncols = 3 if multi_ref else 1
-    label_cols = 1
+    label_cols = 1 if include_row_labels else 0
     key_cols = 1 if include_key else 0
     total_cols = label_cols + ncols + key_cols
     total_rows = 3  # LR, SR, HR
@@ -413,7 +416,7 @@ def render_sr_hr_lr_side_by_side(
     scale = max(1, int(pixels_per_image_pixel))
     panel_h = int(target_h) * scale
     panel_w = int(target_w) * scale
-    label_w = int(round(0.90 * panel_w))
+    label_w = int(round(0.90 * panel_w)) if include_row_labels else 0
     key_w = int(round(1.15 * panel_w)) if include_key else 0
     fig_px_w = label_w + panel_w * ncols + key_w
     fig_px_h = panel_h * total_rows
@@ -425,7 +428,9 @@ def render_sr_hr_lr_side_by_side(
     gs = fig.add_gridspec(
         total_rows,
         total_cols,
-        width_ratios=[label_w] + [panel_w] * ncols + ([key_w] if include_key else []),
+        width_ratios=([label_w] if include_row_labels else [])
+        + [panel_w] * ncols
+        + ([key_w] if include_key else []),
         height_ratios=[panel_h, panel_h, panel_h],
         hspace=0.015,
         wspace=0.015,
@@ -437,48 +442,49 @@ def render_sr_hr_lr_side_by_side(
         ax.set_aspect("equal", adjustable="box")
         ax.axis("off")
 
-    # Dedicated label panel on white background to keep text off the image content.
-    ax_labels = fig.add_subplot(gs[:, 0])
-    ax_labels.set_facecolor("white")
-    ax_labels.set_xlim(0.0, 1.0)
-    ax_labels.set_ylim(0.0, 1.0)
-    ax_labels.axis("off")
-
     # Convert desired pixel-sized typography to points so text remains stable at high DPI.
     pt_per_px = 72.0 / float(max(int(dpi), 1))
-    row_title_fs = float(np.clip(0.090 * panel_h, 16.0, 26.0) * pt_per_px)
-    row_detail_fs = float(np.clip(0.060 * panel_h, 10.0, 16.0) * pt_per_px)
     col_title_fs = float(np.clip(0.060 * panel_h, 11.0, 16.0) * pt_per_px)
 
-    row_labels = [
-        ("LR", f"display upsampled\n{lr_h}x{lr_w} -> {hr_h}x{hr_w}"),
-        ("SR", f"{sr_h}x{sr_w}"),
-        ("HR", f"{hr_h}x{hr_w}"),
-    ]
-    row_y = [5.0 / 6.0, 0.5, 1.0 / 6.0]
+    if include_row_labels:
+        # Dedicated label panel on white background to keep text off the image content.
+        ax_labels = fig.add_subplot(gs[:, 0])
+        ax_labels.set_facecolor("white")
+        ax_labels.set_xlim(0.0, 1.0)
+        ax_labels.set_ylim(0.0, 1.0)
+        ax_labels.axis("off")
 
-    for y, (title, detail) in zip(row_y, row_labels):
-        ax_labels.text(
-            0.06,
-            y + 0.055,
-            title,
-            fontsize=row_title_fs,
-            fontweight="bold",
-            color="#111111",
-            ha="left",
-            va="center",
-        )
-        ax_labels.text(
-            0.06,
-            y - 0.020,
-            detail,
-            fontsize=row_detail_fs,
-            fontweight="normal",
-            color="#4a4a4a",
-            ha="left",
-            va="center",
-            linespacing=1.12,
-        )
+        row_title_fs = float(np.clip(0.090 * panel_h, 16.0, 26.0) * pt_per_px)
+        row_detail_fs = float(np.clip(0.060 * panel_h, 10.0, 16.0) * pt_per_px)
+        row_labels = [
+            ("LR", f"display upsampled\n{lr_h}x{lr_w} -> {hr_h}x{hr_w}"),
+            ("SR", f"{sr_h}x{sr_w}"),
+            ("HR", f"{hr_h}x{hr_w}"),
+        ]
+        row_y = [5.0 / 6.0, 0.5, 1.0 / 6.0]
+
+        for y, (title, detail) in zip(row_y, row_labels):
+            ax_labels.text(
+                0.06,
+                y + 0.055,
+                title,
+                fontsize=row_title_fs,
+                fontweight="bold",
+                color="#111111",
+                ha="left",
+                va="center",
+            )
+            ax_labels.text(
+                0.06,
+                y - 0.020,
+                detail,
+                fontsize=row_detail_fs,
+                fontweight="normal",
+                color="#4a4a4a",
+                ha="left",
+                va="center",
+                linespacing=1.12,
+            )
 
     def _set_panel_title(ax, title: str) -> None:
         ax.set_title(
@@ -492,21 +498,22 @@ def render_sr_hr_lr_side_by_side(
     # -------------------------------------------------------------------------
     # Plot LR (row 0), SR (row 1), HR (row 2)
     # -------------------------------------------------------------------------
+    data_col0 = 1 if include_row_labels else 0
     if multi_ref:
         for j, (name, img) in enumerate(zip(("X", "Y", "Z"), lr_rgb)):
-            ax = fig.add_subplot(gs[0, j + 1])
+            ax = fig.add_subplot(gs[0, data_col0 + j])
             _imshow(ax, img)
             _set_panel_title(ax, f"IPF-{name}")
         for j, (name, img) in enumerate(zip(("X", "Y", "Z"), sr_rgb)):
-            _imshow(fig.add_subplot(gs[1, j + 1]), img)
+            _imshow(fig.add_subplot(gs[1, data_col0 + j]), img)
         for j, (name, img) in enumerate(zip(("X", "Y", "Z"), hr_rgb)):
-            _imshow(fig.add_subplot(gs[2, j + 1]), img)
+            _imshow(fig.add_subplot(gs[2, data_col0 + j]), img)
     else:
-        ax = fig.add_subplot(gs[0, 1])
+        ax = fig.add_subplot(gs[0, data_col0])
         _imshow(ax, lr_rgb)
         _set_panel_title(ax, f"IPF-{ref_dir.upper()}")
-        _imshow(fig.add_subplot(gs[1, 1]), sr_rgb)
-        _imshow(fig.add_subplot(gs[2, 1]), hr_rgb)
+        _imshow(fig.add_subplot(gs[1, data_col0]), sr_rgb)
+        _imshow(fig.add_subplot(gs[2, data_col0]), hr_rgb)
 
     # -------------------------------------------------------------------------
     # IPF color key
@@ -516,7 +523,7 @@ def render_sr_hr_lr_side_by_side(
         key_label_fs = float(np.clip(0.055 * panel_h, 9.0, 14.0) * pt_per_px)
         add_ipf_key_panel(
             fig,
-            gs[1, ncols + 1],
+            gs[1, data_col0 + ncols],
             sym_class,
             title="IPF Key",
             title_fontsize=key_title_fs,

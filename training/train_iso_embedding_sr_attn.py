@@ -1776,6 +1776,9 @@ def main() -> None:
     model_kwargs = {
         "crystal": str(getattr(cfg, "crystal", "fcc")),
         "d6_convention": str(getattr(cfg, "d6_convention", "z_axis")),
+        "embedding_mode": str(getattr(cfg, "embedding_mode", "tensor_product")),
+        "max_harmonic_l": getattr(cfg, "max_harmonic_l", None),
+        "embedding_metric_calibration": getattr(cfg, "embedding_metric_calibration", "none"),
         "device": device,
         "upsample_factor": getattr(cfg, "upsample_factor", getattr(cfg, "scale", 4)),
         "feature_upsampler_type": str(getattr(cfg, "feature_upsampler_type", "shifted_bilinear")),
@@ -2040,6 +2043,12 @@ def main() -> None:
     history_path = checkpoints_dir / "history.json"
     best_ckpt = checkpoints_dir / "best_model.pt"
     last_ckpt = checkpoints_dir / "last_checkpoint.pt"
+    logging_cfg = getattr(cfg, "logging", {}) or {}
+    save_best_only = bool(getattr(logging_cfg, "save_best_only", False))
+    save_last_checkpoint = bool(getattr(cfg, "save_last_checkpoint", not save_best_only))
+    save_epoch_checkpoints = bool(getattr(cfg, "save_epoch_checkpoints", not save_best_only))
+    final_viz = bool(getattr(cfg, "final_viz", True))
+    plot_loss_curves = bool(getattr(cfg, "plot_loss_curves", True))
 
     start_epoch = 0
     best_val_loss = float("inf")
@@ -2152,15 +2161,16 @@ def main() -> None:
             + (f" | {' '.join(metric_bits)}" if metric_bits else "")
         )
 
-        _save_checkpoint(
-            last_ckpt,
-            epoch=epoch,
-            model=model,
-            optimizer=optimizer,
-            scheduler=scheduler,
-            best_val_loss=best_val_loss,
-            history=history,
-        )
+        if save_last_checkpoint:
+            _save_checkpoint(
+                last_ckpt,
+                epoch=epoch,
+                model=model,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                best_val_loss=best_val_loss,
+                history=history,
+            )
 
         if val_loss < best_val_loss:
             best_val_loss = float(val_loss)
@@ -2174,7 +2184,7 @@ def main() -> None:
                 history=history,
             )
 
-        if save_every > 0 and ((epoch + 1) % save_every == 0):
+        if save_epoch_checkpoints and save_every > 0 and ((epoch + 1) % save_every == 0):
             epoch_ckpt = checkpoints_dir / f"epoch_{epoch + 1:04d}.pt"
             _save_checkpoint(
                 epoch_ckpt,
@@ -2201,35 +2211,37 @@ def main() -> None:
             )
 
         _save_history(history_path, history)
-        _save_loss_plot(
-            exp_dir / "visualizations" / "loss_curves.png",
-            history,
-            exp_name=exp_dir.name,
-        )
+        if plot_loss_curves:
+            _save_loss_plot(
+                exp_dir / "visualizations" / "loss_curves.png",
+                history,
+                exp_name=exp_dir.name,
+            )
 
-    final_viz_dir = exp_dir / "visualizations" / "final"
-    _render_sr_hr_lr_ipf(
-        model_core=_unwrap_model(model),
-        data_loader=loaders["val"],
-        sym_class=sym_class,
-        out_png=final_viz_dir / "lr_sr_hr_ipf.png",
-        ref_dir=viz_ref_dir,
-        enable_probe_stage_viz=viz_enable_probe_stage_viz,
-        sample_index=viz_sample_index,
-        sample_key=viz_sample_key,
-        force_cpu=viz_force_cpu,
-    )
-    _render_final_probe_split_viz(
-        model_core=_unwrap_model(model),
-        loaders=loaders,
-        sym_class=sym_class,
-        out_root=final_viz_dir,
-        ref_dir=viz_ref_dir,
-        enable_probe_stage_viz=viz_enable_probe_stage_viz,
-        sample_index=viz_sample_index,
-        sample_key=viz_sample_key,
-        force_cpu=viz_force_cpu,
-    )
+    if final_viz:
+        final_viz_dir = exp_dir / "visualizations" / "final"
+        _render_sr_hr_lr_ipf(
+            model_core=_unwrap_model(model),
+            data_loader=loaders["val"],
+            sym_class=sym_class,
+            out_png=final_viz_dir / "lr_sr_hr_ipf.png",
+            ref_dir=viz_ref_dir,
+            enable_probe_stage_viz=viz_enable_probe_stage_viz,
+            sample_index=viz_sample_index,
+            sample_key=viz_sample_key,
+            force_cpu=viz_force_cpu,
+        )
+        _render_final_probe_split_viz(
+            model_core=_unwrap_model(model),
+            loaders=loaders,
+            sym_class=sym_class,
+            out_root=final_viz_dir,
+            ref_dir=viz_ref_dir,
+            enable_probe_stage_viz=viz_enable_probe_stage_viz,
+            sample_index=viz_sample_index,
+            sample_key=viz_sample_key,
+            force_cpu=viz_force_cpu,
+        )
 
     if writer is not None:
         writer.close()

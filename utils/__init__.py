@@ -12,7 +12,12 @@ from utils.quat_ops import (
     to_spatial_quat,
     reduce_to_fz_min_angle,
 )
-from utils.symmetry_utils import canon_symmetry_str, generate_symmetry_files, resolve_symmetry
+from utils.symmetry_utils import (
+    canon_symmetry_str,
+    generate_symmetry_files,
+    proper_symmetry_quaternions,
+    resolve_symmetry,
+)
 
 __all__ = [
     "ConfigNamespace",
@@ -22,6 +27,7 @@ __all__ = [
     "format_quaternions",
     "generate_symmetry_files",
     "normalize_quaternions",
+    "proper_symmetry_quaternions",
     "resolve_symmetry",
     "to_quat_spatial",
     "to_scalar_first",

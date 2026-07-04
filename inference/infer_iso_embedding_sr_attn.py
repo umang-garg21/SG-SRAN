@@ -72,6 +72,11 @@ def parse_args() -> argparse.Namespace:
         help="IPF reference direction: X, Y, Z, or ALL.",
     )
     parser.add_argument(
+        "--skip_ipf",
+        action="store_true",
+        help="Skip per-sample IPF PNG rendering and write quaternion arrays only.",
+    )
+    parser.add_argument(
         "--gpu_ids",
         type=str,
         default=None,
@@ -161,6 +166,8 @@ def _load_model_from_checkpoint(
     model_kwargs = {
         "crystal": str(getattr(cfg, "crystal", "fcc")),
         "d6_convention": str(getattr(cfg, "d6_convention", "z_axis")),
+        "embedding_mode": str(getattr(cfg, "embedding_mode", "tensor_product")),
+        "max_harmonic_l": getattr(cfg, "max_harmonic_l", None),
         "device": device,
         "upsample_factor": getattr(cfg, "upsample_factor", getattr(cfg, "scale", 4)),
         "feature_upsampler_type": str(getattr(cfg, "feature_upsampler_type", "shifted_bilinear")),
@@ -459,7 +466,8 @@ def main() -> None:
     sr_dir = out_dir / "sr_quaternions"
     ipf_dir = out_dir / "ipf"
     sr_dir.mkdir(parents=True, exist_ok=True)
-    ipf_dir.mkdir(parents=True, exist_ok=True)
+    if not args.skip_ipf:
+        ipf_dir.mkdir(parents=True, exist_ok=True)
 
     sym_class = resolve_symmetry(getattr(cfg, "symmetry_group", "O"))
     records = []
@@ -526,19 +534,21 @@ def main() -> None:
                 np.save(lr_path, lr_np)
                 np.save(hr_path, hr_np)
 
-                ipf_path = ipf_dir / f"sample_{sid:06d}_lr_sr_hr_ipf.png"
-                render_sr_hr_lr_side_by_side(
-                    sr_q_arr=sr_np,
-                    hr_q_arr=hr_np,
-                    lr_q_arr=lr_np,
-                    sym_class=sym_class,
-                    out_png=str(ipf_path),
-                    ref_dir=str(args.viz_ref_dir),
-                    include_key=True,
-                    overwrite=True,
-                    format_input=True,
-                    dpi=300,
-                )
+                ipf_path = None
+                if not args.skip_ipf:
+                    ipf_path = ipf_dir / f"sample_{sid:06d}_lr_sr_hr_ipf.png"
+                    render_sr_hr_lr_side_by_side(
+                        sr_q_arr=sr_np,
+                        hr_q_arr=hr_np,
+                        lr_q_arr=lr_np,
+                        sym_class=sym_class,
+                        out_png=str(ipf_path),
+                        ref_dir=str(args.viz_ref_dir),
+                        include_key=True,
+                        overwrite=True,
+                        format_input=True,
+                        dpi=300,
+                    )
 
                 records.append(
                     {
@@ -550,7 +560,7 @@ def main() -> None:
                         "sr_npy": str(sr_path),
                         "lr_npy": str(lr_path),
                         "hr_npy": str(hr_path),
-                        "ipf_png": str(ipf_path),
+                        "ipf_png": str(ipf_path) if ipf_path is not None else None,
                     }
                 )
                 total_written += 1
@@ -563,6 +573,7 @@ def main() -> None:
                 "config": str(config_path),
                 "checkpoint": str(checkpoint_path),
                 "split": split,
+                "skip_ipf": bool(args.skip_ipf),
                 "num_samples": total_written,
                 "records": records,
             },

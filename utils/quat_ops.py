@@ -614,13 +614,24 @@ def reduce_to_fz_min_angle(
 
     # 4. Select candidate with max scalar (min misorientation angle)
     cand_2d = cand.reshape(M, N, 4)
-    w_vals = cand_2d[..., 0]
+    # Copy before masking: this scalar slice is otherwise a view into
+    # ``cand_2d``. Mutating the view used to write ``-inf`` into an output
+    # quaternion when strict floating-point FZ membership rejected all of its
+    # symmetry-equivalent candidates.
+    w_vals = cand_2d[..., 0].copy()
+    has_inside = inside_mask.any(axis=0)
     w_vals[~inside_mask] = -np.inf
 
     best_idx = np.argmax(w_vals, axis=0)
+    # A point numerically on an FZ boundary can have no candidate accepted by
+    # the strict region predicate. Select the equivalent with minimum rotation
+    # angle in that case instead of returning an invalid quaternion.
+    fallback_idx = np.argmax(np.abs(cand_2d[..., 0]), axis=0)
+    best_idx = np.where(has_inside, best_idx, fallback_idx)
     best_idx_exp = best_idx[np.newaxis, :, np.newaxis]
     q_fz = np.take_along_axis(cand_2d, best_idx_exp, axis=0).squeeze(0)
     q_fz = q_fz.reshape(q_spatial.shape)
+    enforce_hemisphere(q_fz, scalar_first=True)
 
     # 5. Return in original layout
     q_fz_out = to_quat_spatial(q_fz) if orig_first else q_fz

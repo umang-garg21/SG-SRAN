@@ -2,10 +2,17 @@ from __future__ import annotations
 
 import types
 
+import numpy as np
 import torch
 
 from training.config_utils import deep_update, flatten_model_config, preprocess_config
 from training.seed_utils import get_seed_from_config, set_seed
+from utils.quat_ops import reduce_to_fz_min_angle
+from utils.symmetry_utils import (
+    canon_symmetry_str,
+    proper_symmetry_quaternions,
+    resolve_symmetry,
+)
 
 
 def test_deep_update_merges_nested_dicts() -> None:
@@ -48,3 +55,24 @@ def test_set_seed_is_deterministic_for_torch() -> None:
     b = torch.randn(5)
     assert torch.allclose(a, b)
 
+
+def test_proper_rotation_subgroups_for_hcp_and_cubic() -> None:
+    assert canon_symmetry_str("D6") == "D6h"
+    assert proper_symmetry_quaternions("D6h").shape == (12, 4)
+    assert proper_symmetry_quaternions("Oh").shape == (24, 4)
+
+
+def test_fz_reduction_never_emits_nonfinite_quaternions() -> None:
+    rng = np.random.default_rng(7)
+    quaternions = rng.normal(size=(64, 64, 4)).astype(np.float32)
+    for symmetry_name in ("Oh", "D6h"):
+        reduced = reduce_to_fz_min_angle(
+            quaternions.copy(),
+            sym=resolve_symmetry(symmetry_name).proper_subgroup,
+        )
+        assert np.isfinite(reduced).all()
+        np.testing.assert_allclose(
+            np.linalg.norm(reduced, axis=-1),
+            1.0,
+            atol=2e-5,
+        )

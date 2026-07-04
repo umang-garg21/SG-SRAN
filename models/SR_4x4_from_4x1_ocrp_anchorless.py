@@ -448,6 +448,9 @@ class LocalIsoCrystalEncoder(nn.Module):
         self,
         crystal: str = "fcc",
         d6_convention: str = "z_axis",
+        embedding_mode: str = "tensor_product",
+        max_harmonic_l: int | None = None,
+        embedding_metric_calibration: object = "none",
         dtype: torch.dtype = torch.float32,
         device: str | torch.device = "cpu",
     ):
@@ -455,7 +458,13 @@ class LocalIsoCrystalEncoder(nn.Module):
         crystal_key = str(crystal).lower()
         if crystal_key in {"fcc", "o", "cubic"}:
             self.group_name = "O"
-            self.embedding = build_local_iso_fcc_embedding(dtype=dtype, device=device).eval()
+            self.embedding = build_local_iso_fcc_embedding(
+                dtype=dtype,
+                device=device,
+                embedding_mode=embedding_mode,
+                max_harmonic_l=max_harmonic_l,
+                metric_calibration=embedding_metric_calibration,
+            ).eval()
             sym = build_fcc_syms_mtex(dtype=dtype, device=device)
         elif crystal_key in {"hcp", "d6"}:
             self.group_name = "D6"
@@ -463,6 +472,9 @@ class LocalIsoCrystalEncoder(nn.Module):
                 d6_convention=d6_convention,
                 dtype=dtype,
                 device=device,
+                embedding_mode=embedding_mode,
+                max_harmonic_l=max_harmonic_l,
+                metric_calibration=embedding_metric_calibration,
             ).eval()
             sym = build_hcp_syms_mtex(dtype=dtype, device=device)
         else:
@@ -572,10 +584,18 @@ class CubochoricOptimizingLocalIsoDecoder(nn.Module):
         self.register_buffer("table_feat_norm", table_feat_norm, persistent=False)
 
     def _cache_metadata(self) -> dict[str, object]:
+        embedding = self.encoder.embedding
         return {
-            "cache_version": 1,
+            "cache_version": 2,
             "group_name": str(self.encoder.group_name),
-            "d6_convention": str(getattr(self.encoder.embedding, "d6_convention", "na")),
+            "d6_convention": str(getattr(embedding, "d6_convention", "na")),
+            "embedding_mode": str(getattr(embedding, "embedding_mode", "tensor_product")),
+            "max_harmonic_l": getattr(embedding, "max_harmonic_l", None),
+            "metric_calibration": (
+                embedding.metric_calibration_metadata()
+                if hasattr(embedding, "metric_calibration_metadata")
+                else {"metric_calibration": "none"}
+            ),
             "target_irreps": str(self.target_irreps),
             "target_dim": int(self.target_dim),
             "irreps_a1": str(self.encoder.irreps_a1),
@@ -1705,6 +1725,9 @@ class IsoEmbedding4x1SROCRP(nn.Module):
         self,
         crystal: str = "fcc",
         d6_convention: str = "z_axis",
+        embedding_mode: str = "tensor_product",
+        max_harmonic_l: int | None = None,
+        embedding_metric_calibration: object = "none",
         device: str | torch.device | None = None,
         feature_irreps: str = "full",
         use_lr_conv1: bool = True,
@@ -1785,6 +1808,9 @@ class IsoEmbedding4x1SROCRP(nn.Module):
         self.encoder = LocalIsoCrystalEncoder(
             crystal=crystal,
             d6_convention=d6_convention,
+            embedding_mode=embedding_mode,
+            max_harmonic_l=max_harmonic_l,
+            embedding_metric_calibration=embedding_metric_calibration,
             dtype=torch.float32,
             device=self.device,
         )
@@ -1798,7 +1824,7 @@ class IsoEmbedding4x1SROCRP(nn.Module):
             self.feature_dim = int(self.encoder.out_dim_a1)
         else:
             self.irreps_feat = self.encoder.irreps_full
-        self.feature_dim = int(self.encoder.out_dim_full)
+            self.feature_dim = int(self.encoder.out_dim_full)
 
         self.use_lr_conv1 = bool(use_lr_conv1)
         self.use_hr_conv1 = bool(use_hr_conv1)

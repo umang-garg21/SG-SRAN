@@ -122,6 +122,42 @@ Inference outputs are written to:
 - `experiments/.../inference/<split>/ipf/*.png`
 - `experiments/.../inference/<split>/summary.json`
 
+## Atindama Hybrid-Inpainting Baseline
+
+The authors' partial-convolution model is imported unchanged from
+`third_party/Atindama-EBSD-Restoration`. The local adapter converts passive
+scalar-first quaternions to normalized intrinsic ZXZ Euler angles and places
+the LR observations on their exact HR-grid locations.
+
+Train the 4x1 and 4x4 models:
+
+```bash
+python training/train_atindama_inpainting.py \
+  --exp_dir experiments/IN718/atindama_inpainting_4x1_01 \
+  --config config.json \
+  --gpu 0
+
+python training/train_atindama_inpainting.py \
+  --exp_dir experiments/IN718/atindama_inpainting_4x4_01 \
+  --config config.json \
+  --gpu 1
+```
+
+Run test inference:
+
+```bash
+python inference/infer_atindama_inpainting.py \
+  --exp_dir experiments/IN718/atindama_inpainting_4x1_01 \
+  --checkpoint best_model.pt \
+  --split Test \
+  --gpu 0
+```
+
+The published Criminisi refinement requires a fully known exemplar patch.
+Neither periodic sampling mask contains a fully known 3x3 patch, so the exact
+second stage is reported as incompatible rather than silently changing its
+candidate-patch rule.
+
 ## Configuration Notes
 
 Key OCRP settings live in the experiment config:
@@ -149,4 +185,3 @@ python analysis/probe_ocrp_macro_stages.py \
   --split Val \
   --sample_idx 0
 ```
-

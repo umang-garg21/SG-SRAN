@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import importlib
 import json
 import os
@@ -16,8 +17,10 @@ import torch
 from tqdm.auto import tqdm
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+REPO_ROOT = Path(__file__).resolve().parents[2]
+for _path in (REPO_ROOT, PROJECT_ROOT):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
 
 # `orix` pulls in numba-cached helpers during import. In this environment we
 # need an explicit writable cache dir or the import can fail before the notebook
@@ -34,8 +37,12 @@ class DatasetSpec:
     dataset_root: str | Path
     crystal: str
     d6_convention: str = "z_axis"
-    model_module: str = "models.SR_boundary_gate_a1"
+    model_module: str = "models.SR_4x4_from_4x1_ocrp_anchorless"
     split: str = "Test"
+    embedding_mode: str | None = "direct_reynolds"
+    max_harmonic_l: int | None = None
+    embedding_metric_calibration: object = "isometric"
+    target_irreps: str = "full"
     decoder_cubochoric_resolution: int = 1
     decoder_method: str = "cubochoric"
     decoder_table_cache_dir: str | Path | None = "out/decoder_lookup_tables"
@@ -52,7 +59,7 @@ class DecoderVariant:
 ROUNDTRIP_FLOW = [
     "load one HR test scan",
     "flatten the scan to passive quaternions with shape (N, 4)",
-    "encode quaternions with LocalIsoCrystalEncoder.forward_a1(...)",
+    "encode quaternions with LocalIsoCrystalEncoder.forward_full(...) unless target_irreps='a1'",
     "decode features with CubochoricOptimizingLocalIsoDecoder(...)",
     "compute symmetry-aware dS(q_decoded, q_ref) in radians",
     "average dS within each scan, then report mean +/- std across scans",
@@ -64,18 +71,18 @@ def default_table1_datasets() -> list[DatasetSpec]:
     return [
         DatasetSpec(
             label="IN718 (FCC)",
-            dataset_root="/data/home/umang/Materials/Materials_data_mount/datasets/IN718",
+            dataset_root="/data/home/umang/Materials/Materials_data_mount/datasets/IN718_QSR_x4",
             crystal="fcc",
-            model_module="models.SR_double_conv_SRattn_a1",
-            decoder_table_cache_dir="out/decoder_lookup_tables/fcc",
+            max_harmonic_l=4,
+            decoder_table_cache_dir="out/decoder_lookup_tables/direct_reynolds_fcc_l4_full",
         ),
         DatasetSpec(
             label="Ti-6Al-4V (HCP)",
             dataset_root="/data/home/umang/Materials/Materials_data_mount/datasets/Ti_Al_1pct_QSR_x4",
             crystal="hcp",
             d6_convention="z_axis",
-            model_module="models.SR_double_conv_SRattn_a1",
-            decoder_table_cache_dir="out/decoder_lookup_tables/hcp",
+            max_harmonic_l=6,
+            decoder_table_cache_dir="out/decoder_lookup_tables/direct_reynolds_hcp_l6_full",
         ),
     ]
 
@@ -103,7 +110,7 @@ def _resolve_path(path_like: str | Path | None) -> Path | None:
         return None
     path = Path(path_like).expanduser()
     if not path.is_absolute():
-        path = (PROJECT_ROOT / path).resolve()
+        path = (REPO_ROOT / path).resolve()
     return path
 
 
@@ -204,12 +211,22 @@ def _build_encoder_decoder(
     encoder_cls = getattr(module, "LocalIsoCrystalEncoder")
     decoder_cls = getattr(module, "CubochoricOptimizingLocalIsoDecoder")
 
-    encoder = encoder_cls(
-        crystal=spec.crystal,
-        d6_convention=spec.d6_convention,
-        dtype=torch.float32,
-        device=device,
-    ).eval()
+    encoder_kwargs = {
+        "crystal": spec.crystal,
+        "d6_convention": spec.d6_convention,
+        "dtype": torch.float32,
+        "device": device,
+    }
+    if spec.embedding_mode is not None:
+        encoder_kwargs.update(
+            {
+                "embedding_mode": spec.embedding_mode,
+                "max_harmonic_l": spec.max_harmonic_l,
+                "embedding_metric_calibration": spec.embedding_metric_calibration,
+            }
+        )
+
+    encoder = encoder_cls(**encoder_kwargs).eval()
 
     decoder = decoder_cls(
         encoder=encoder,
@@ -218,10 +235,20 @@ def _build_encoder_decoder(
         num_starts=int(variant.num_starts),
         steps=int(variant.steps),
         lr=float(variant.lr),
-        target_irreps="a1",
+        target_irreps=str(spec.target_irreps),
         table_cache_dir=_resolve_path(spec.decoder_table_cache_dir),
     ).eval()
     return encoder, decoder, encoder.sym_ops_inv
+
+
+def _encode_for_spec(
+    encoder: torch.nn.Module,
+    spec: DatasetSpec,
+    quats_passive: torch.Tensor,
+) -> torch.Tensor:
+    if str(spec.target_irreps).lower() == "a1":
+        return encoder.forward_a1(quats_passive)
+    return encoder.forward_full(quats_passive)
 
 
 def evaluate_roundtrip(
@@ -267,7 +294,7 @@ def evaluate_roundtrip(
             q_ref = _normalize_quaternions(q_ref)
 
             with torch.no_grad():
-                feat = encoder.forward_a1(q_ref)
+                feat = _encode_for_spec(encoder, spec, q_ref)
             with torch.enable_grad():
                 q_pred = decoder(feat)
             with torch.no_grad():
@@ -358,3 +385,38 @@ def evaluate_default_table1(
     summary_df = summarize_scan_metrics(scan_df)
     table_df = pivot_paper_table(summary_df)
     return scan_df, summary_df, table_df
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Refresh Table 1 encoder round-trip metrics.")
+    parser.add_argument("--device", default=None, help="Torch device, e.g. cuda:0 or cpu.")
+    parser.add_argument("--take-first", type=int, default=None, help="Optional smoke-test scan count.")
+    parser.add_argument("--chunk-size", type=int, default=4096)
+    parser.add_argument(
+        "--out-dir",
+        default="analysis/Table1/out/table1_roundtrip_direct_reynolds",
+        help="Output directory for scan_metrics.csv, summary_metrics.csv and paper_table.csv.",
+    )
+    parser.add_argument("--no-progress", action="store_true")
+    args = parser.parse_args()
+
+    scan_df, summary_df, table_df = evaluate_default_table1(
+        device=args.device,
+        take_first=args.take_first,
+        chunk_size=args.chunk_size,
+        progress=not args.no_progress,
+    )
+
+    out_dir = _resolve_path(args.out_dir)
+    assert out_dir is not None
+    out_dir.mkdir(parents=True, exist_ok=True)
+    scan_df.to_csv(out_dir / "scan_metrics.csv", index=False)
+    summary_df.to_csv(out_dir / "summary_metrics.csv", index=False)
+    table_df.to_csv(out_dir / "paper_table.csv", index=False)
+    print(table_df.to_string(index=False))
+    print(f"Wrote {out_dir}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
