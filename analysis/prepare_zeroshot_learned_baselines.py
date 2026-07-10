@@ -16,6 +16,7 @@ CONI_ROOT = Path("/data/home/umang/Materials/Materials_data_mount/datasets/Scan1
 TI7_ROOT = Path("/data/home/umang/Materials/Materials_data_mount/datasets/Ti7_deformed_4x4")
 
 JANGID_METHODS = {
+    "EDSR": ("IN718/edsr_4x4_01", "inference/infer_jangid_baseline.py"),
     "QEDSR": ("IN718/qedsr_4x4_01", "inference/infer_jangid_baseline.py"),
     "Q-RBSA-adapted": ("IN718/qrbsa_4x4_300ep_01", "inference/infer_jangid_baseline.py"),
     "RCAN": ("IN718/rcan_4x4_300ep_01", "inference/infer_jangid_baseline.py"),

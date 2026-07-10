@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Export sample-0 4x4 qualitative comparisons with direct-Reynolds OCRP.
-
-The previous one-shot figures used the older Cartesian/tensor-decomposition OCRP
-summary. This exporter keeps that older OCRP as an explicit comparator and adds
-the current direct-Reynolds-isometric OCRP checkpoint outputs.
-"""
+"""Export selected 4x4 qualitative comparisons with direct-Reynolds OCRP."""
 from __future__ import annotations
 
 import csv
@@ -20,23 +15,43 @@ os.environ.setdefault("NUMBA_CACHE_DIR", "/tmp/numba")
 import matplotlib
 
 matplotlib.use("Agg")
+FIGURE_FONT = ["Arial", "Helvetica", "Liberation Sans", "Nimbus Sans", "DejaVu Sans"]
+matplotlib.rcParams.update(
+    {
+        "font.family": "sans-serif",
+        "font.sans-serif": FIGURE_FONT,
+        "font.size": 10,
+        "axes.titlecolor": "#1f2933",
+        "text.color": "#1f2933",
+        "text.antialiased": True,
+        "pdf.fonttype": 42,
+        "ps.fonttype": 42,
+    }
+)
 import matplotlib.pyplot as plt
+from matplotlib.gridspec import GridSpecFromSubplotSpec
 import numpy as np
 import torch
 from scipy.ndimage import binary_dilation
 
 ROOT = Path(__file__).resolve().parents[1]
-PAPER_DIR = ROOT / "Paper" / "EBSD_SR_Nature_v4"
+PAPER_DIR = Path(
+    os.environ.get(
+        "QSR_PAPER_DIR",
+        ROOT / "Paper" / "202608_Umang_EBSD_SR_fwd" / "EBSD_SR_Nature_NMI",
+    )
+)
 EVAL_DIR = PAPER_DIR / "evals"
 FIG_DIR = PAPER_DIR / "figs"
-for path in (ROOT, EVAL_DIR):
+HELPER_EVAL_DIR = ROOT / "Paper" / "EBSD_SR_Nature_v4" / "evals"
+for path in (ROOT, EVAL_DIR, HELPER_EVAL_DIR):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
 import evaluate_anchorless_test_metrics as orientation_eval
 import evaluate_new_learned_baselines as learned_eval
 from utils.symmetry_utils import proper_symmetry_quaternions, resolve_symmetry
-from visualization.ipf_render import render_ipf_rgb
+from visualization.ipf_render import add_ipf_key_panel, render_ipf_rgb
 
 
 MATERIALS = [
@@ -44,11 +59,18 @@ MATERIALS = [
         "tag": "in718",
         "label": "IN718",
         "symmetry": "Oh",
+        "sample_index": 0,
         "root": ROOT / "experiments" / "IN718",
-        "cartesian_summary": ROOT
-        / "experiments/IN718/seed_runs/ocrp_4x4_s42/inference/test/summary.json",
-        "direct_summary": ROOT
-        / "experiments/IN718/direct_reynolds_isometric_seed_runs/ocrp_direct_reynolds_isometric_l4_s42/inference/test_best/summary.json",
+        "direct_summary": [
+            ROOT
+            / "experiments/IN718/direct_reynolds_isometric_seed_runs/"
+            / "ocrp_direct_reynolds_isometric_l4_s42_fresh_allepochs_20260707_2205/"
+            / "inference/test_epoch_0012_fig3/summary.json",
+            ROOT
+            / "experiments/IN718/direct_reynolds_isometric_seed_runs/ocrp_direct_reynolds_isometric_l4_s42/inference/test_best/summary.json",
+            ROOT
+            / "experiments/IN718/direct_reynolds_isometric_seed_runs/ocrp_direct_reynolds_isometric_l4_s42/pre_corrected_seed_sweep_backup_corrected_feature_cluster_20260705_202111/inference/test_best/summary.json",
+        ],
         "saved_methods": OrderedDict(
             [
                 ("EDSR", ROOT / "experiments/IN718/edsr_4x4_01/inference/test/summary.json"),
@@ -71,9 +93,8 @@ MATERIALS = [
         "tag": "ti",
         "label": "Ti-6Al-4V",
         "symmetry": "D6h",
+        "sample_index": 7,
         "root": ROOT / "experiments" / "Ti_Al_1pct",
-        "cartesian_summary": ROOT
-        / "experiments/Ti_Al_1pct/seed_runs/ocrp_4x4_s42/inference/test/summary.json",
         "direct_summary": ROOT
         / "experiments/Ti_Al_1pct/direct_reynolds_isometric_seed_runs/ocrp_direct_reynolds_isometric_l6_s42/inference/test_best/summary.json",
         "saved_methods": OrderedDict(
@@ -98,6 +119,19 @@ MATERIALS = [
     },
 ]
 
+FIGURE_LAYOUT = [
+    ["LR", "HR", "Nearest", "Bicubic", "SLERP"],
+    ["Symm-SLERP", "Atindama", "Q-RBSA-adapted", "QEDSR", "EDSR"],
+    ["RCAN", "SAN", "HAN", "OCRP", "IPF key"],
+]
+
+PANEL_LETTER_FONTSIZE = 18.0
+PANEL_HEADER_FONTSIZE = 15.0
+PANEL_TITLE_FONTSIZE = 13.0
+IPF_KEY_TITLE_FONTSIZE = 12.5
+IPF_KEY_LABEL_FONTSIZE = 9.5
+FIGURE_DPI = 900
+
 
 def _load_summary(path: Path) -> dict:
     if not path.exists():
@@ -105,10 +139,25 @@ def _load_summary(path: Path) -> dict:
     return json.loads(path.read_text())
 
 
-def _load_record_array(record: dict, key: str) -> np.ndarray:
+def _resolve_existing_path(path_or_candidates) -> Path:
+    if isinstance(path_or_candidates, (list, tuple)):
+        candidates = [Path(path) for path in path_or_candidates]
+        for path in candidates:
+            if path.exists():
+                return path
+        joined = "\n  ".join(str(path) for path in candidates)
+        raise FileNotFoundError(f"No candidate path exists:\n  {joined}")
+    return Path(path_or_candidates)
+
+
+def _load_record_array(record: dict, key: str, summary_dir: Path | None = None) -> np.ndarray:
     path = Path(record[key])
     if not path.is_absolute():
         path = ROOT / path
+    if not path.exists() and summary_dir is not None:
+        moved_path = summary_dir / "sr_quaternions" / path.name
+        if moved_path.exists():
+            path = moved_path
     return np.load(path).astype(np.float32)
 
 
@@ -135,11 +184,13 @@ def _configure_symmetry(symmetry_name: str):
     return sym
 
 
-def _sample0_panels(spec: dict, sym) -> tuple[OrderedDict[str, np.ndarray], dict[str, str]]:
-    direct_summary = _load_summary(spec["direct_summary"])
-    direct_record = direct_summary["records"][0]
-    lr = _load_record_array(direct_record, "lr_npy")
-    hr = _load_record_array(direct_record, "hr_npy")
+def _sample_panels(spec: dict, sym) -> tuple[OrderedDict[str, np.ndarray], dict[str, str]]:
+    direct_summary_path = _resolve_existing_path(spec["direct_summary"])
+    direct_summary = _load_summary(direct_summary_path)
+    sample_index = int(spec.get("sample_index", 0))
+    direct_record = direct_summary["records"][sample_index]
+    lr = _load_record_array(direct_record, "lr_npy", direct_summary_path.parent)
+    hr = _load_record_array(direct_record, "hr_npy", direct_summary_path.parent)
     out_hw = tuple(hr.shape[:2])
 
     panels = OrderedDict(
@@ -147,32 +198,30 @@ def _sample0_panels(spec: dict, sym) -> tuple[OrderedDict[str, np.ndarray], dict
             ("LR", orientation_eval.upsample_nn(lr, out_hw)),
             ("Nearest", orientation_eval.upsample_nn(lr, out_hw)),
             ("Bicubic", orientation_eval.upsample_bicubic(lr, out_hw)),
+            ("SLERP", orientation_eval.upsample_slerp(lr, out_hw)),
             ("Symm-SLERP", orientation_eval.upsample_symm_slerp(lr, out_hw)),
         ]
     )
     sources = {
-        "LR": "direct summary sample 0, nearest display",
-        "Nearest": "computed from direct summary LR sample 0",
-        "Bicubic": "computed from direct summary LR sample 0",
-        "Symm-SLERP": "computed from direct summary LR sample 0",
+        "LR": f"direct summary sample {sample_index}, nearest display",
+        "Nearest": f"computed from direct summary LR sample {sample_index}",
+        "Bicubic": f"computed from direct summary LR sample {sample_index}",
+        "SLERP": f"computed from direct summary LR sample {sample_index}",
+        "Symm-SLERP": f"computed from direct summary LR sample {sample_index}",
     }
 
-    cartesian_summary = _load_summary(spec["cartesian_summary"])
-    panels["OCRP cartesian"] = _load_record_array(cartesian_summary["records"][0], "sr_npy")
-    sources["OCRP cartesian"] = str(spec["cartesian_summary"])
-
-    panels["OCRP direct"] = _load_record_array(direct_record, "sr_npy")
-    sources["OCRP direct"] = str(spec["direct_summary"])
+    panels["OCRP"] = _load_record_array(direct_record, "sr_npy", direct_summary_path.parent)
+    sources["OCRP"] = str(direct_summary_path)
 
     for method, summary_path in spec["saved_methods"].items():
         if not summary_path.exists():
-            continue
+            raise FileNotFoundError(f"Missing {spec['label']} baseline summary for {method}: {summary_path}")
         summary = _load_summary(summary_path)
-        panels[method] = _load_record_array(summary["records"][0], "sr_npy")
+        panels[method] = _load_record_array(summary["records"][sample_index], "sr_npy", summary_path.parent)
         sources[method] = str(summary_path)
 
     panels["HR"] = hr
-    sources["HR"] = "direct summary sample 0"
+    sources["HR"] = f"direct summary sample {sample_index}"
     return panels, sources
 
 
@@ -263,24 +312,220 @@ def _write_csv(path: Path, rows: list[dict]) -> None:
         writer.writerows(rows)
 
 
-def _export_figure(spec: dict, panels: OrderedDict[str, np.ndarray], sym) -> Path:
-    out_path = FIG_DIR / f"main_{spec['tag']}_new_learned_baselines_test0_4x4.png"
-    method_names = list(panels.keys())
-    fig, axes = plt.subplots(1, len(method_names), figsize=(2.05 * len(method_names), 2.35))
-    if len(method_names) == 1:
-        axes = [axes]
-    for ax, name in zip(axes, method_names):
-        ax.imshow(_render_ipfz(panels[name], sym), interpolation="nearest")
-        ax.set_title(name, fontsize=8)
-        ax.set_xticks([])
-        ax.set_yticks([])
-        for spine in ax.spines.values():
-            spine.set_linewidth(0.4)
-            spine.set_color("0.45")
-    fig.suptitle(f"{spec['label']} 4x4 test sample 0, IPF-Z", fontsize=11)
-    fig.subplots_adjust(left=0.01, right=0.995, top=0.78, bottom=0.02, wspace=0.035)
+def _read_csv_rows(path: Path) -> list[dict]:
+    if not path.exists():
+        raise FileNotFoundError(path)
+    with path.open(newline="", encoding="utf-8") as handle:
+        return list(csv.DictReader(handle))
+
+
+def _aggregate_ocrp_row(path: Path) -> dict:
+    rows = _read_csv_rows(path)
+    for row in rows:
+        if row.get("n_seeds") and row.get("mean_deg_mean"):
+            return {
+                "method": "OCRP",
+                "mean_deg": float(row["mean_deg_mean"]),
+                "boundary_f1": float(row["boundary_f1_mean"]),
+                "metric_source": str(path),
+                "metric_scope": "five-seed aggregate",
+            }
+    raise ValueError(f"Could not find aggregate OCRP row in {path}")
+
+
+def _table2_metric_rows(spec: dict) -> list[dict]:
+    """Load the same aggregate mean/F1 values used in Table 2."""
+    material = spec["label"]
+    by_method: dict[str, dict] = {}
+
+    classical_path = EVAL_DIR / "classical_4x4_breakdown_verified_20260707.csv"
+    for row in _read_csv_rows(classical_path):
+        if row.get("material") != material:
+            continue
+        method = row["method"]
+        by_method[method] = {
+            "method": method,
+            "mean_deg": float(row["mean_deg"]),
+            "boundary_f1": float(row["boundary_f1"]),
+            "metric_source": str(classical_path),
+            "metric_scope": "test-split aggregate",
+        }
+    if "Nearest" in by_method:
+        by_method["LR"] = {**by_method["Nearest"], "method": "LR"}
+
+    learned_path = EVAL_DIR / ("final_4x4_in718_summary.csv" if spec["tag"] == "in718" else "final_4x4_ti_summary.csv")
+    display_alias = {"Q-RBSA": "Q-RBSA-adapted"}
+    for row in _read_csv_rows(learned_path):
+        method = row["model"]
+        if method == "OCRP":
+            continue
+        display_name = display_alias.get(method, method)
+        by_method[display_name] = {
+            "method": display_name,
+            "mean_deg": float(row["mean_mean"]),
+            "boundary_f1": float(row["bf1_mean"]),
+            "metric_source": str(learned_path),
+            "metric_scope": "five-seed aggregate",
+        }
+
+    if spec["tag"] == "in718":
+        ocrp_path = EVAL_DIR / "IN718_direct_reynolds_isometric_calibrated_inference_20260706_092117.csv"
+    else:
+        ocrp_path = EVAL_DIR / "Ti_Al_1pct_direct_reynolds_isometric_calibrated_inference_20260706_092117.csv"
+    by_method["OCRP"] = _aggregate_ocrp_row(ocrp_path)
+
+    rows = []
+    for row in FIGURE_LAYOUT:
+        for name in row:
+            if name in ("HR", "IPF key"):
+                continue
+            if name not in by_method:
+                raise KeyError(f"Missing Table 2 metric for {material} panel '{name}'")
+            rows.append(by_method[name])
+    return rows
+
+
+def _panel_title(name: str, metric_by_method: dict[str, dict]) -> str:
+    if name == "HR":
+        return "HR target"
+    metric = metric_by_method.get(name)
+    if metric is None:
+        return name
+    return f"{name}\nmean {metric['mean_deg']:.2f} deg, F1 {metric['boundary_f1']:.3f}"
+
+
+def _draw_panel_grid(
+    fig,
+    subplot_spec,
+    spec: dict,
+    panels: OrderedDict[str, np.ndarray],
+    sym,
+    metric_rows: list[dict],
+    *,
+    panel_label: str | None = None,
+) -> None:
+    sample_index = int(spec.get("sample_index", 0))
+    metric_by_method = {row["method"]: row for row in metric_rows}
+    grid = GridSpecFromSubplotSpec(
+        len(FIGURE_LAYOUT) + 1,
+        len(FIGURE_LAYOUT[0]),
+        subplot_spec=subplot_spec,
+        height_ratios=[0.18, 1.0, 1.0, 1.0],
+        hspace=0.34,
+        wspace=0.055,
+    )
+
+    title_ax = fig.add_subplot(grid[0, :])
+    title_ax.set_facecolor("white")
+    title_ax.axis("off")
+    title = f"{spec['label']} test sample, IPF-Z"
+    if panel_label:
+        title_ax.text(
+            0.0,
+            0.55,
+            panel_label,
+            ha="left",
+            va="center",
+            fontsize=PANEL_LETTER_FONTSIZE,
+            fontweight="bold",
+            color="#111111",
+        )
+        title_ax.text(
+            0.028,
+            0.55,
+            title,
+            ha="left",
+            va="center",
+            fontsize=PANEL_HEADER_FONTSIZE,
+            fontweight="semibold",
+            color="#111111",
+        )
+    else:
+        title_ax.text(
+            0.0,
+            0.55,
+            title,
+            ha="left",
+            va="center",
+            fontsize=PANEL_HEADER_FONTSIZE,
+            fontweight="semibold",
+            color="#111111",
+        )
+
+    for row_index, row in enumerate(FIGURE_LAYOUT):
+        for col_index, name in enumerate(row):
+            cell = grid[row_index + 1, col_index]
+            if name == "IPF key":
+                add_ipf_key_panel(
+                    fig,
+                    cell,
+                    sym,
+                    title="IPF-Z key",
+                    title_fontsize=IPF_KEY_TITLE_FONTSIZE,
+                    label_fontsize=IPF_KEY_LABEL_FONTSIZE,
+                    title_height_ratio=0.24,
+                )
+                continue
+
+            ax = fig.add_subplot(cell)
+            if name not in panels:
+                ax.axis("off")
+                continue
+            ax.imshow(_render_ipfz(panels[name], sym), interpolation="nearest")
+            ax.set_title(_panel_title(name, metric_by_method), fontsize=PANEL_TITLE_FONTSIZE, pad=4.0)
+            ax.set_xticks([])
+            ax.set_yticks([])
+            ax.set_aspect("equal")
+            for spine in ax.spines.values():
+                if name == "OCRP":
+                    spine.set_linewidth(1.6)
+                    spine.set_color("#1b7f3a")
+                elif name == "HR":
+                    spine.set_linewidth(1.0)
+                    spine.set_color("#111111")
+                else:
+                    spine.set_linewidth(0.45)
+                    spine.set_color("0.45")
+
+
+def _export_figure(
+    spec: dict,
+    panels: OrderedDict[str, np.ndarray],
+    sym,
+    metric_rows: list[dict],
+) -> Path:
+    sample_index = int(spec.get("sample_index", 0))
+    out_path = FIG_DIR / f"main_{spec['tag']}_new_learned_baselines_test{sample_index}_4x4.png"
+    fig = plt.figure(figsize=(13.2, 8.4), dpi=FIGURE_DPI)
+    outer = fig.add_gridspec(1, 1)
+    _draw_panel_grid(fig, outer[0, 0], spec, panels, sym, metric_rows)
+    fig.subplots_adjust(left=0.025, right=0.995, top=0.985, bottom=0.025)
     FIG_DIR.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=300, bbox_inches="tight")
+    fig.savefig(out_path, dpi=FIGURE_DPI, bbox_inches="tight", facecolor="white")
+    fig.savefig(out_path.with_suffix(".pdf"), dpi=FIGURE_DPI, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+    return out_path
+
+
+def _export_combined_figure(results: list[dict]) -> Path:
+    out_path = FIG_DIR / "main_combined_new_learned_baselines_4x4.png"
+    fig = plt.figure(figsize=(13.2, 15.7), dpi=FIGURE_DPI)
+    outer = fig.add_gridspec(2, 1, hspace=0.06)
+    panel_labels = ["a", "b"]
+    for index, result in enumerate(results):
+        _draw_panel_grid(
+            fig,
+            outer[index, 0],
+            result["spec"],
+            result["panels"],
+            result["sym"],
+            result["rows"],
+            panel_label=panel_labels[index],
+        )
+    fig.subplots_adjust(left=0.025, right=0.995, top=0.995, bottom=0.016)
+    FIG_DIR.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=FIGURE_DPI, bbox_inches="tight", facecolor="white")
+    fig.savefig(out_path.with_suffix(".pdf"), dpi=FIGURE_DPI, bbox_inches="tight", facecolor="white")
     plt.close(fig)
     return out_path
 
@@ -288,22 +533,37 @@ def _export_figure(spec: dict, panels: OrderedDict[str, np.ndarray], sym) -> Pat
 def main() -> int:
     EVAL_DIR.mkdir(parents=True, exist_ok=True)
     FIG_DIR.mkdir(parents=True, exist_ok=True)
+    results = []
     for spec in MATERIALS:
         sym = _configure_symmetry(spec["symmetry"])
-        panels, sources = _sample0_panels(spec, sym)
+        sample_index = int(spec.get("sample_index", 0))
+        suffix = "" if sample_index == 0 else f"_sample{sample_index}"
+        panels, sources = _sample_panels(spec, sym)
         rows = _panel_metrics(panels, sym)
         for row in rows:
             row["material"] = spec["label"]
             row["symmetry"] = spec["symmetry"]
+            row["sample_index"] = sample_index
             row["source"] = sources.get(row["method"], "")
-        metrics_path = EVAL_DIR / f"direct_reynolds_oneshot_4x4_{spec['tag']}_metrics.csv"
+        display_rows = _table2_metric_rows(spec)
+        for row in display_rows:
+            row["material"] = spec["label"]
+            row["symmetry"] = spec["symmetry"]
+            row["sample_index"] = sample_index
+        metrics_path = EVAL_DIR / f"direct_reynolds_oneshot_4x4_{spec['tag']}{suffix}_metrics.csv"
         _write_csv(metrics_path, rows)
-        figure_path = _export_figure(spec, panels, sym)
-        source_path = EVAL_DIR / f"direct_reynolds_oneshot_4x4_{spec['tag']}_sources.json"
+        display_metrics_path = EVAL_DIR / f"direct_reynolds_oneshot_4x4_{spec['tag']}{suffix}_figure6_table2_metrics.csv"
+        _write_csv(display_metrics_path, display_rows)
+        figure_path = _export_figure(spec, panels, sym, display_rows)
+        source_path = EVAL_DIR / f"direct_reynolds_oneshot_4x4_{spec['tag']}{suffix}_sources.json"
         source_path.write_text(json.dumps(sources, indent=2) + "\n")
         print(f"Wrote {metrics_path}")
+        print(f"Wrote {display_metrics_path}")
         print(f"Wrote {source_path}")
         print(f"Wrote {figure_path}")
+        results.append({"spec": spec, "panels": panels, "sym": sym, "rows": display_rows})
+    combined_path = _export_combined_figure(results)
+    print(f"Wrote {combined_path}")
     return 0
 
 

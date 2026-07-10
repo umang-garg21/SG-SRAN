@@ -413,6 +413,7 @@ PANEL_COLOR = "#1f2933"
 FCC_COLOR = "#3f6f9f"
 HCP_COLOR = "#b96f5d"
 LIMIT_COLOR = "#7a4e3a"
+NMI_FONT = ["Nimbus Sans", "Arial", "Helvetica", "Liberation Sans", "DejaVu Sans"]
 
 
 def _panel_letter(ax, letter: str, *, x: float = -0.12, y: float = 1.04) -> None:
@@ -532,6 +533,11 @@ def plot_corrected_figure(
     phi_np = phi.numpy()
     plt.rcParams.update(
         {
+            "font.family": "sans-serif",
+            "font.sans-serif": NMI_FONT,
+            "mathtext.fontset": "dejavusans",
+            "pdf.fonttype": 42,
+            "ps.fonttype": 42,
             "axes.edgecolor": "#52616b",
             "axes.labelcolor": PANEL_COLOR,
             "xtick.color": "#52616b",

@@ -80,6 +80,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", default="config.json", help="Config filename inside exp_dir")
     parser.add_argument("--gpu", default=None, help="Optional CUDA_VISIBLE_DEVICES value, e.g. '0'")
     parser.add_argument("--resume", action="store_true", help="Resume from checkpoints/last_checkpoint.pt")
+    parser.add_argument(
+        "--init_checkpoint",
+        default=None,
+        help="Load model weights from this checkpoint, but start a fresh optimizer/scheduler.",
+    )
     parser.add_argument("--max_train_batches", type=int, default=None, help="Optional debugging cap")
     parser.add_argument("--max_val_batches", type=int, default=None, help="Optional debugging cap")
     parser.add_argument("--skip_viz", action="store_true", help="Skip IPF visualization during training")
@@ -388,6 +393,12 @@ def _load_checkpoint(path: Path, *, model, optimizer, scheduler, device):
     return start_epoch, best_val, history
 
 
+def _load_model_init_checkpoint(path: Path, *, model, device) -> None:
+    ckpt = torch.load(path, map_location=device)
+    state_dict = ckpt.get("model_state_dict", ckpt)
+    model.load_state_dict(state_dict)
+
+
 def _save_loss_plot(path: Path, history: dict, exp_name: str) -> None:
     try:
         train = history.get("train", [])
@@ -489,6 +500,7 @@ def _make_loader(cfg: dict, split: str, batch_size: int, shuffle: bool):
         prefetch_factor=int(cfg.get("prefetch_factor", 2)),
         pin_memory=bool(cfg.get("pin_memory", True)),
         take_first=int(take_first) if take_first is not None else None,
+        drop_last=bool(shuffle and cfg.get("drop_last", False)),
     )
 
 
@@ -518,6 +530,8 @@ def main() -> None:
     warmup_epochs = int(cfg.get("warmup_epochs", cfg.get("scheduler", {}).get("warmup_epochs", 2)))
     min_lr = float(cfg.get("min_lr", cfg.get("scheduler", {}).get("min_lr", 1e-6)))
     val_freq = int(cfg.get("val_freq", 1))
+    save_last_checkpoint = bool(cfg.get("save_last_checkpoint", True))
+    save_epoch_checkpoints = bool(cfg.get("save_epoch_checkpoints", True))
 
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -576,6 +590,14 @@ def main() -> None:
             last_ckpt, model=model, optimizer=optimizer, scheduler=scheduler, device=device
         )
         print(f"Resumed from epoch {start_epoch} (best_val={best_val_loss:.6e})")
+    elif args.init_checkpoint:
+        init_checkpoint = Path(args.init_checkpoint)
+        if not init_checkpoint.is_absolute():
+            init_checkpoint = exp_dir / "checkpoints" / init_checkpoint
+        if not init_checkpoint.exists():
+            raise FileNotFoundError(f"Initial checkpoint missing: {init_checkpoint}")
+        _load_model_init_checkpoint(init_checkpoint, model=model, device=device)
+        print(f"Initialized model weights from {init_checkpoint}")
 
     resolved_config = {
         **cfg,
@@ -640,8 +662,9 @@ def main() -> None:
             writer.add_scalar("LR", current_lr, epoch_1)
 
         log(f"Epoch {epoch_1:04d}/{epochs} | train={train_loss:.6e} val={val_loss:.6e} lr={current_lr:.2e}")
-        _save_checkpoint(last_ckpt, epoch=epoch, model=model, optimizer=optimizer, scheduler=scheduler,
-                         best_val_loss=best_val_loss, history=history)
+        if save_last_checkpoint:
+            _save_checkpoint(last_ckpt, epoch=epoch, model=model, optimizer=optimizer, scheduler=scheduler,
+                             best_val_loss=best_val_loss, history=history)
 
         if val_loss < best_val_loss:
             best_val_loss = float(val_loss)
@@ -649,7 +672,7 @@ def main() -> None:
                              best_val_loss=best_val_loss, history=history)
             log(f"  -> new best model saved (val={best_val_loss:.6e})")
 
-        if save_every > 0 and epoch_1 % save_every == 0:
+        if save_epoch_checkpoints and save_every > 0 and epoch_1 % save_every == 0:
             _save_checkpoint(ckpt_dir / f"epoch_{epoch_1:04d}.pt", epoch=epoch, model=model,
                              optimizer=optimizer, scheduler=scheduler,
                              best_val_loss=best_val_loss, history=history)

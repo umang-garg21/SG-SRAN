@@ -17,6 +17,7 @@ for path in (ROOT, EVAL_DIR):
         sys.path.insert(0, str(path))
 
 import evaluate_anchorless_test_metrics as anchor_eval
+import export_test_psnr_ssim_ipf as ipf_eval
 from analysis.evaluate_zeroshot_learned_baselines import (  # noqa: E402
     _evaluate_summary,
     _load_summary,
@@ -27,6 +28,7 @@ from utils.symmetry_utils import proper_symmetry_quaternions, resolve_symmetry
 METHODS = OrderedDict(
     [
         ("Atindama inpainting", "atindama_inpainting"),
+        ("EDSR", "edsr"),
         ("QEDSR", "qedsr"),
         ("Q-RBSA-adapted", "qrbsaadapted"),
         ("RCAN", "rcan"),
@@ -54,8 +56,8 @@ TARGETS = OrderedDict(
         (
             "ti64_dic_mclean",
             {
-                "task": "Ti-6Al-4V -> Ti64 DIC Mclean 4x4",
-                "target": "Ti64_DIC_Mclean_QSR_x4, HCP D6h, zero-shot Test split",
+                "task": "Ti-6Al-4V -> Ti64 4x4",
+                "target": "Ti64, HCP D6h, zero-shot Test split",
                 "source": "Ti-6Al-4V-trained 4x4 checkpoints without target retraining",
                 "split": "Test",
                 "prefix": "zeroshot_ti64_dic_mclean_4x4_all_baselines",
@@ -79,6 +81,7 @@ def _learned_summaries(out_root: Path) -> OrderedDict[str, Path]:
 def _configure_hcp_symmetry(device: torch.device) -> torch.Tensor:
     symmetry = resolve_symmetry("D6h")
     anchor_eval.SYM = symmetry
+    ipf_eval.SYM = symmetry
     anchor_eval.SYM_QUATS = proper_symmetry_quaternions(symmetry)
     anchor_eval._SLERP_SYM_OPS_4X4 = anchor_eval.make_symmetry_4x4(
         "D6h", device="cpu", dtype=torch.float32
@@ -118,6 +121,9 @@ def evaluate_target(target_key: str, device: torch.device) -> tuple[list[dict], 
         samples.extend(sample_rows)
 
     for method, path in _learned_summaries(Path(target["out_root"])).items():
+        if not Path(path).exists():
+            print(f"[{target_key}] Skipping {method}: missing {path}", flush=True)
+            continue
         print(f"[{target_key}] Evaluating {method}", flush=True)
         summary = _load_summary(path, task=str(target["task"]))
         row, sample_rows = _evaluate_summary(summary, method, device, symmetry_ops)

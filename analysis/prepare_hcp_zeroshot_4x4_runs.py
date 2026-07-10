@@ -34,8 +34,8 @@ TARGETS = OrderedDict(
         (
             "ti64_dic_mclean",
             {
-                "name": "Ti64_DIC_Mclean_QSR_x4",
-                "task": "Ti-6Al-4V -> Ti64 DIC Mclean 4x4",
+                "name": "Ti64",
+                "task": "Ti-6Al-4V -> Ti64 4x4",
                 "dataset_root": Path(
                     "/data/home/umang/Materials/Materials_data_mount/datasets/Ti64_DIC_Mclean_QSR_x4"
                 ),
@@ -56,6 +56,15 @@ METHODS = OrderedDict(
                 "config": "config.json",
                 "script": "inference/infer_atindama_inpainting.py",
                 "kind": "atindama",
+            },
+        ),
+        (
+            "EDSR",
+            {
+                "source_rel": "Ti_Al_1pct/edsr_4x4_01",
+                "config": "config.json",
+                "script": "inference/infer_jangid_baseline.py",
+                "kind": "jangid",
             },
         ),
         (

@@ -72,6 +72,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Resume from checkpoints/last_checkpoint.pt if present",
     )
+    parser.add_argument(
+        "--init_checkpoint",
+        type=str,
+        default=None,
+        help="Load model weights from this checkpoint, but start a fresh optimizer/scheduler.",
+    )
     return parser.parse_args()
 
 
@@ -948,6 +954,17 @@ def _load_checkpoint(
     best_val_loss = float(ckpt.get("best_val_loss", float("inf")))
     history = _normalize_history(ckpt.get("history"))
     return start_epoch, best_val_loss, history
+
+
+def _load_model_init_checkpoint(
+    ckpt_path: Path,
+    *,
+    model: torch.nn.Module,
+    device: torch.device,
+) -> None:
+    ckpt = torch.load(ckpt_path, map_location=device)
+    state_dict = ckpt.get("model_state_dict", ckpt)
+    _unwrap_model(model).load_state_dict(state_dict)
 
 
 def _train_one_epoch(
@@ -1972,6 +1989,7 @@ def main() -> None:
         "kmax_slots": int(getattr(cfg, "kmax_slots", 10)),
         "cluster_threshold_deg": float(getattr(cfg, "cluster_threshold_deg", 2.0)),
         "cluster_feature_l2_threshold": getattr(cfg, "cluster_feature_l2_threshold", None),
+        "cluster_source": str(getattr(cfg, "cluster_source", "quaternion")),
         "cluster_connectivity": int(getattr(cfg, "cluster_connectivity", 8)),
         "num_experts": int(getattr(cfg, "num_experts", 12)),
         "top_k_experts": int(getattr(cfg, "top_k_experts", 2)),
@@ -2063,6 +2081,14 @@ def main() -> None:
             device=device,
         )
         print(f"Resumed from {last_ckpt} at epoch {start_epoch}")
+    elif args.init_checkpoint:
+        init_checkpoint = Path(args.init_checkpoint)
+        if not init_checkpoint.is_absolute():
+            init_checkpoint = checkpoints_dir / init_checkpoint
+        if not init_checkpoint.exists():
+            raise FileNotFoundError(f"Initial checkpoint missing: {init_checkpoint}")
+        _load_model_init_checkpoint(init_checkpoint, model=model, device=device)
+        print(f"Initialized model weights from {init_checkpoint}")
 
     clip = float(getattr(cfg, "clip", 1.0))
     tv_loss_weight = float(getattr(cfg, "tv_loss_weight", 0.0))

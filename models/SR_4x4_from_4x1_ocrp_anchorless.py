@@ -207,6 +207,38 @@ def _resolve_ocrp_mode(ocrp_mode: str) -> str:
     return mode
 
 
+def _resolve_cluster_source(cluster_source: str) -> str:
+    source = str(cluster_source).strip().lower()
+    aliases = {
+        "quat": "quaternion",
+        "quats": "quaternion",
+        "lr": "quaternion",
+        "lr_quat": "quaternion",
+        "lr_quaternion": "quaternion",
+        "embedding": "feature",
+        "features": "feature",
+        "latent": "feature",
+        "latent_feature": "feature",
+        "latent_features": "feature",
+    }
+    source = aliases.get(source, source)
+    if source not in {"quaternion", "feature"}:
+        raise ValueError(
+            "cluster_source must be 'quaternion' or 'feature', "
+            f"got {cluster_source!r}"
+        )
+    return source
+
+
+def _resolve_cluster_feature_l2_threshold(
+    cluster_feature_l2_threshold: float | None,
+    legacy_cluster_threshold_deg: float,
+) -> float:
+    if cluster_feature_l2_threshold is not None:
+        return float(cluster_feature_l2_threshold)
+    return float(np.deg2rad(float(legacy_cluster_threshold_deg)))
+
+
 def _validate_odd_positive_int(name: str, value: int) -> int:
     value_int = int(value)
     if value_int < 1 or value_int % 2 == 0:
@@ -869,6 +901,101 @@ class QuaternionBankClusterer(nn.Module):
         return labels
 
 
+class FeatureBankClusterer(nn.Module):
+    """Cluster a local LR feature bank into connected components using pairwise L2 edges."""
+
+    def __init__(
+        self,
+        threshold_l2: float = 0.035,
+        connectivity: int = 8,
+        window_size: int = 5,
+        eps: float = 1e-8,
+    ):
+        super().__init__()
+        if int(window_size) < 3 or int(window_size) % 2 == 0:
+            raise ValueError(f"OCRP expects an odd window_size >= 3, got {window_size}")
+        if int(connectivity) not in (4, 8):
+            raise ValueError(f"OCRP currently expects 4- or 8-neighbor clustering, got {connectivity}")
+        self.threshold_l2 = float(threshold_l2)
+        self.connectivity = int(connectivity)
+        self.window_size = int(window_size)
+        self.num_nodes = int(self.window_size * self.window_size)
+        self.eps = float(eps)
+
+        edges: list[tuple[int, int]] = []
+        for y in range(self.window_size):
+            for x in range(self.window_size):
+                idx = y * self.window_size + x
+                if x + 1 < self.window_size:
+                    edges.append((idx, idx + 1))
+                if y + 1 < self.window_size:
+                    edges.append((idx, idx + self.window_size))
+                if self.connectivity == 8 and y + 1 < self.window_size:
+                    if x + 1 < self.window_size:
+                        edges.append((idx, idx + self.window_size + 1))
+                    if x - 1 >= 0:
+                        edges.append((idx, idx + self.window_size - 1))
+        edge_idx_a = torch.tensor([a for a, _ in edges], dtype=torch.long)
+        edge_idx_b = torch.tensor([b for _, b in edges], dtype=torch.long)
+        self.register_buffer("edge_idx_a", edge_idx_a, persistent=False)
+        self.register_buffer("edge_idx_b", edge_idx_b, persistent=False)
+
+    def forward(self, bank_f: torch.Tensor) -> torch.Tensor:
+        batched = bank_f.dim() == 4
+        if not batched:
+            bank_f = bank_f.unsqueeze(0)
+        bsz, nwin, nnode, cdim = bank_f.shape
+        if nnode != self.num_nodes:
+            raise ValueError(
+                f"Expected bank_f shape (B,N,{self.num_nodes},C), got {tuple(bank_f.shape)}"
+            )
+        if cdim < 1:
+            raise ValueError(f"Expected bank_f feature dim >= 1, got {cdim}")
+
+        flat = bank_f.to(dtype=torch.float32).reshape(bsz * nwin, nnode, cdim)
+        idx_a = self.edge_idx_a.to(device=flat.device)
+        idx_b = self.edge_idx_b.to(device=flat.device)
+        f1 = flat.index_select(1, idx_a)
+        f2 = flat.index_select(1, idx_b)
+        l2 = (f1 - f2).pow(2).sum(dim=-1).clamp_min(self.eps).sqrt()
+        keep_edges = l2 <= self.threshold_l2
+
+        num_windows = int(flat.shape[0])
+        labels_flat = (
+            torch.arange(nnode, device=flat.device, dtype=torch.long)
+            .view(1, nnode)
+            .expand(num_windows, -1)
+            .clone()
+        )
+        edge_a = idx_a.view(1, -1).expand(num_windows, -1)
+        edge_b = idx_b.view(1, -1).expand(num_windows, -1)
+        inactive_label = torch.full_like(edge_a, fill_value=nnode)
+
+        for _ in range(nnode - 1):
+            new_labels = labels_flat.clone()
+
+            la = labels_flat.gather(1, edge_a)
+            lb = labels_flat.gather(1, edge_b)
+            edge_min = torch.minimum(la, lb)
+            masked_min_a = torch.where(keep_edges, edge_min, inactive_label)
+            new_labels.scatter_reduce_(1, edge_a, masked_min_a, reduce="amin", include_self=True)
+
+            la_updated = new_labels.gather(1, edge_a)
+            lb = labels_flat.gather(1, edge_b)
+            edge_min_b = torch.minimum(la_updated, lb)
+            masked_min_b = torch.where(keep_edges, edge_min_b, inactive_label)
+            new_labels.scatter_reduce_(1, edge_b, masked_min_b, reduce="amin", include_self=True)
+
+            if torch.equal(new_labels, labels_flat):
+                break
+            labels_flat = new_labels
+
+        labels = labels_flat.view(bsz, nwin, nnode)
+        if not batched:
+            labels = labels.squeeze(0)
+        return labels
+
+
 class ClusterSlotBuilder(nn.Module):
     """Pack top-ranked clusters into deterministic slots and emit cheap metadata."""
 
@@ -1364,6 +1491,8 @@ class OCRP4x1PatchUpsampler(nn.Module):
         window_size: int = 5,
         kmax_slots: int = 6,
         cluster_threshold_deg: float = 2.0,
+        cluster_feature_l2_threshold: float | None = None,
+        cluster_source: str = "quaternion",
         cluster_connectivity: int = 8,
         cluster_window_size: int | None = None,
         phase_dim: int = 32,
@@ -1400,6 +1529,11 @@ class OCRP4x1PatchUpsampler(nn.Module):
         self.upsample_factor = _as_scale_tuple(upsample_factor)
         self.window_size = int(window_size)
         self.kmax_slots = int(kmax_slots)
+        self.cluster_source = _resolve_cluster_source(cluster_source)
+        self.cluster_feature_l2_threshold = _resolve_cluster_feature_l2_threshold(
+            cluster_feature_l2_threshold=cluster_feature_l2_threshold,
+            legacy_cluster_threshold_deg=cluster_threshold_deg,
+        )
         # Cluster (sub)window: clustering only over a central cw x cw subwindow.
         cw = int(cluster_window_size) if cluster_window_size is not None else self.window_size
         if cw < 1 or cw > self.window_size or (cw % 2 == 0 and cw != self.window_size):
@@ -1461,6 +1595,12 @@ class OCRP4x1PatchUpsampler(nn.Module):
             connectivity=int(cluster_connectivity),
             window_size=int(window_size),
         )
+        self.quat_clusterer = self.clusterer
+        self.feature_clusterer = FeatureBankClusterer(
+            threshold_l2=self.cluster_feature_l2_threshold,
+            connectivity=int(cluster_connectivity),
+            window_size=int(window_size),
+        )
         self.slot_builder = ClusterSlotBuilder(
             kmax_slots=int(kmax_slots),
             window_size=int(window_size),
@@ -1514,36 +1654,65 @@ class OCRP4x1PatchUpsampler(nn.Module):
         lr_quats: torch.Tensor,
         feat_lr: torch.Tensor,
         lr_shape: tuple[int, int],
-    ) -> tuple[torch.Tensor, torch.Tensor, dict[str, tuple[int, int]]]:
+        need_quat_bank: bool = True,
+        cluster_feat_lr: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor | None, torch.Tensor, torch.Tensor, dict[str, tuple[int, int]]]:
         if self.ocrp_mode == "pixel_patch":
-            bank_q = _build_local_patch_bank(lr_quats, img_shape=lr_shape, window_size=self.window_size)
+            bank_q = (
+                _build_local_patch_bank(lr_quats, img_shape=lr_shape, window_size=self.window_size)
+                if need_quat_bank
+                else None
+            )
             bank_f = _build_local_patch_bank(feat_lr, img_shape=lr_shape, window_size=self.window_size)
+            cluster_bank_f = (
+                _build_local_patch_bank(cluster_feat_lr, img_shape=lr_shape, window_size=self.window_size)
+                if cluster_feat_lr is not None
+                else bank_f
+            )
             support_meta = {
                 "grid_shape": (int(lr_shape[0]), int(lr_shape[1])),
                 "padded_shape": (int(lr_shape[0]), int(lr_shape[1])),
             }
-            return bank_q, bank_f, support_meta
+            return bank_q, bank_f, cluster_bank_f, support_meta
 
-        bank_q, meta_q = _build_macro_stride_patch_bank(
-            lr_quats,
-            img_shape=lr_shape,
-            window_size=self.window_size,
-            stride_shape=self.macro_lr_stride_shape,
-        )
+        bank_q = None
+        meta_q = None
+        if need_quat_bank:
+            bank_q, meta_q = _build_macro_stride_patch_bank(
+                lr_quats,
+                img_shape=lr_shape,
+                window_size=self.window_size,
+                stride_shape=self.macro_lr_stride_shape,
+            )
         bank_f, meta_f = _build_macro_stride_patch_bank(
             feat_lr,
             img_shape=lr_shape,
             window_size=self.window_size,
             stride_shape=self.macro_lr_stride_shape,
         )
-        if meta_q != meta_f:
+        if cluster_feat_lr is None:
+            cluster_bank_f = bank_f
+            meta_cluster = meta_f
+        else:
+            cluster_bank_f, meta_cluster = _build_macro_stride_patch_bank(
+                cluster_feat_lr,
+                img_shape=lr_shape,
+                window_size=self.window_size,
+                stride_shape=self.macro_lr_stride_shape,
+            )
+            if meta_cluster != meta_f:
+                raise ValueError(
+                    "Cluster-feature and synthesis-feature macro-tile banks disagree on support metadata: "
+                    f"{meta_cluster} vs {meta_f}"
+                )
+        if meta_q is not None and meta_q != meta_f:
             raise ValueError(
                 "Quaternion and feature macro-tile banks disagree on support metadata: "
                 f"{meta_q} vs {meta_f}"
             )
-        return bank_q, bank_f, {
-            "grid_shape": meta_q["tile_shape"],
-            "padded_shape": meta_q["padded_shape"],
+        return bank_q, bank_f, cluster_bank_f, {
+            "grid_shape": meta_f["tile_shape"],
+            "padded_shape": meta_f["padded_shape"],
         }
 
     def _assemble_patch_tokens(
@@ -1606,22 +1775,37 @@ class OCRP4x1PatchUpsampler(nn.Module):
         lr_quats: torch.Tensor,
         feat_lr: torch.Tensor,
         lr_shape: tuple[int, int],
+        cluster_feat_lr: torch.Tensor | None = None,
         return_aux: bool = False,
     ):
         batched = feat_lr.dim() == 3
         if not batched:
             feat_lr = feat_lr.unsqueeze(0)
             lr_quats = lr_quats.unsqueeze(0)
+            if cluster_feat_lr is not None:
+                cluster_feat_lr = cluster_feat_lr.unsqueeze(0)
         if feat_lr.shape[:2] != lr_quats.shape[:2]:
             raise ValueError("lr_quats and feat_lr must agree on batch and LR token count")
+        if cluster_feat_lr is not None and cluster_feat_lr.shape != feat_lr.shape:
+            raise ValueError(
+                "cluster_feat_lr must match feat_lr shape when provided, "
+                f"got {tuple(cluster_feat_lr.shape)} vs {tuple(feat_lr.shape)}"
+            )
 
-        bank_q, bank_f, support_meta = self._build_support_banks(
+        bank_q, bank_f, cluster_bank_f, support_meta = self._build_support_banks(
             lr_quats=lr_quats,
             feat_lr=feat_lr,
             lr_shape=lr_shape,
+            need_quat_bank=self.cluster_source == "quaternion",
+            cluster_feat_lr=cluster_feat_lr if self.cluster_source == "feature" else None,
         )
 
-        cluster_ids = self.clusterer(bank_q)
+        if self.cluster_source == "quaternion":
+            if bank_q is None:
+                raise RuntimeError("Quaternion clustering requested but no quaternion bank was built.")
+            cluster_ids = self.quat_clusterer(bank_q)
+        else:
+            cluster_ids = self.feature_clusterer(cluster_bank_f)
         slot_info = self.slot_builder(
             cluster_ids,
             valid_mask=(
@@ -1681,7 +1865,10 @@ class OCRP4x1PatchUpsampler(nn.Module):
         aux = {
             "bank_q": bank_q,
             "bank_f": bank_f,
+            "cluster_bank_f": cluster_bank_f,
             "cluster_ids": cluster_ids,
+            "cluster_source": self.cluster_source,
+            "cluster_feature_l2_threshold": self.cluster_feature_l2_threshold,
             "slot_mask": slot_mask,
             "slot_valid": slot_valid,
             "slot_meta": slot_meta,
@@ -1741,6 +1928,8 @@ class IsoEmbedding4x1SROCRP(nn.Module):
         window_size: int = 5,
         kmax_slots: int = 6,
         cluster_threshold_deg: float = 2.0,
+        cluster_feature_l2_threshold: float | None = None,
+        cluster_source: str = "quaternion",
         cluster_connectivity: int = 8,
         cluster_window_size: int | None = None,
         phase_dim: int = 32,
@@ -1910,6 +2099,8 @@ class IsoEmbedding4x1SROCRP(nn.Module):
             window_size=int(window_size),
             kmax_slots=int(kmax_slots),
             cluster_threshold_deg=float(cluster_threshold_deg),
+            cluster_feature_l2_threshold=cluster_feature_l2_threshold,
+            cluster_source=str(cluster_source),
             cluster_connectivity=int(cluster_connectivity),
             cluster_window_size=cluster_window_size,
             phase_dim=int(phase_dim),
@@ -2068,6 +2259,7 @@ class IsoEmbedding4x1SROCRP(nn.Module):
         out = self.ocrp(
             lr_quats=lr_quats,
             feat_lr=feat_pre,
+            cluster_feat_lr=feat_lr,
             lr_shape=lr_shape,
             return_aux=return_aux,
         )
@@ -2307,6 +2499,7 @@ __all__ = [
     "CosineMaskedEquivariantSpatialConv",
     "PhaseEmbeddingGrid",
     "QuaternionBankClusterer",
+    "FeatureBankClusterer",
     "ClusterSlotBuilder",
     "InvariantSlotSummary",
     "PatchSlotRouter",

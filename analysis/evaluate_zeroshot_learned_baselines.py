@@ -24,12 +24,13 @@ for path in (ROOT, EVAL_DIR):
         sys.path.insert(0, str(path))
 
 import evaluate_anchorless_test_metrics as anchor_eval
+import export_test_psnr_ssim_ipf as ipf_eval
 from utils.symmetry_utils import proper_symmetry_quaternions, resolve_symmetry
 
 OCRP_SUMMARY = (
     ROOT
-    / "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_01/"
-    / "inference/train_epoch0024_anchorless/summary.json"
+    / "experiments/Zero_shot_performance_CoNi_x250/ocrp_direct_reynolds_isometric_l4_s42/"
+    / "inference/train_best/summary.json"
 )
 LEARNED_SUMMARIES = OrderedDict(
     [
@@ -38,6 +39,12 @@ LEARNED_SUMMARIES = OrderedDict(
             ROOT
             / "experiments/Zero_shot_performance_CoNi_x250/learned_baselines_4x4/"
             / "atindama_inpainting/summary.json",
+        ),
+        (
+            "EDSR",
+            ROOT
+            / "experiments/Zero_shot_performance_CoNi_x250/learned_baselines_4x4/"
+            / "edsr/summary.json",
         ),
         (
             "QEDSR",
@@ -79,7 +86,7 @@ OUT_PAPER_CSV = EVAL_DIR / "zeroshot_coni_4x4_all_baselines_summary.csv"
 OUT_PAPER_SAMPLE_CSV = EVAL_DIR / "zeroshot_coni_4x4_all_baselines_persample.csv"
 
 STALE_OCRP_DIR = "iso_embedding_4x4_ocrp_direct_routing_01"
-CURRENT_OCRP_DIR = "iso_embedding_4x4_ocrp_01"
+CURRENT_OCRP_DIR = "ocrp_direct_reynolds_isometric_l4_s42"
 
 
 def _resolve_path(path_value: str) -> Path:
@@ -193,6 +200,14 @@ def _f1(tp: int, fp: int, fn: int) -> tuple[float, float, float]:
     return precision, recall, f1
 
 
+def _ipf_xyz_metrics(sr: np.ndarray, hr: np.ndarray) -> tuple[float, float]:
+    hr_rgbs = ipf_eval.render_three_ipf(hr)
+    sr_rgbs = ipf_eval.render_three_ipf(sr)
+    psnr_vals = [ipf_eval.psnr_uint8(hr_rgbs[axis], sr_rgbs[axis]) for axis in ("X", "Y", "Z")]
+    ssim_vals = [ipf_eval.ssim_uint8(hr_rgbs[axis], sr_rgbs[axis]) for axis in ("X", "Y", "Z")]
+    return float(np.mean(psnr_vals)), float(np.mean(ssim_vals))
+
+
 def _evaluate_summary(
     summary: dict,
     method: str,
@@ -204,6 +219,8 @@ def _evaluate_summary(
     interior_values: list[np.ndarray] = []
     boundary_values: list[np.ndarray] = []
     sample_rows: list[dict] = []
+    psnr_values: list[float] = []
+    ssim_values: list[float] = []
     tp_total = fp_total = fn_total = 0
     invalid_target_total = 0
     invalid_prediction_total = 0
@@ -247,6 +264,9 @@ def _evaluate_summary(
         mis_valid = mis_np[valid_metric]
         interior = mis_np[interior_mask]
         boundary = mis_np[boundary_mask]
+        psnr_ipf, ssim_ipf = _ipf_xyz_metrics(sr_np, hr_np)
+        psnr_values.append(psnr_ipf)
+        ssim_values.append(ssim_ipf)
 
         sample_rows.append(
             {
@@ -259,11 +279,15 @@ def _evaluate_summary(
                 "mis_mean_deg": float(np.mean(mis_valid)),
                 "mis_median_deg": float(np.median(mis_valid)),
                 "mis_p90_deg": float(np.percentile(mis_valid, 90)),
+                "mis_p95_deg": float(np.percentile(mis_valid, 95)),
+                "mis_p99_deg": float(np.percentile(mis_valid, 99)),
                 "boundary_precision": precision,
                 "boundary_recall": recall,
                 "boundary_f1": boundary_f1,
                 "interior_mean_deg": float(np.mean(interior)),
                 "boundary_band_mean_deg": float(np.mean(boundary)),
+                "psnr_ipf_xyz_db": psnr_ipf,
+                "ssim_ipf_xyz": ssim_ipf,
             }
         )
         mis_values.append(mis_valid.reshape(-1))
@@ -284,6 +308,8 @@ def _evaluate_summary(
         "mis_mean_deg": float(np.mean(all_mis)),
         "mis_median_deg": float(np.median(all_mis)),
         "mis_p90_deg": float(np.percentile(all_mis, 90)),
+        "mis_p95_deg": float(np.percentile(all_mis, 95)),
+        "mis_p99_deg": float(np.percentile(all_mis, 99)),
         "boundary_precision": precision,
         "boundary_recall": recall,
         "boundary_f1": boundary_f1,
@@ -292,6 +318,8 @@ def _evaluate_summary(
         "boundary_fn": fn_total,
         "interior_mean_deg": float(np.mean(all_interior)),
         "boundary_band_mean_deg": float(np.mean(all_boundary)),
+        "psnr_ipf_xyz_db": float(np.mean(psnr_values)),
+        "ssim_ipf_xyz": float(np.mean(ssim_values)),
     }
     return result, sample_rows
 
@@ -313,6 +341,7 @@ def main() -> None:
     task = "IN718 -> CoNi 4x4"
     symmetry = resolve_symmetry("Oh")
     anchor_eval.SYM = symmetry
+    ipf_eval.SYM = symmetry
     anchor_eval.SYM_QUATS = proper_symmetry_quaternions(symmetry)
     anchor_eval._SLERP_SYM_OPS_4X4 = anchor_eval.make_symmetry_4x4(
         "Oh", device="cpu", dtype=torch.float32

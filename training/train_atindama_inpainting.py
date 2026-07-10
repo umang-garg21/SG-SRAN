@@ -52,6 +52,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", default="config.json")
     parser.add_argument("--gpu", default=None)
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument(
+        "--init_checkpoint",
+        default=None,
+        help="Load model weights from this checkpoint, but start a fresh optimizer.",
+    )
     parser.add_argument("--max_train_batches", type=int, default=None)
     parser.add_argument("--max_val_batches", type=int, default=None)
     return parser.parse_args()
@@ -402,6 +407,15 @@ def main() -> None:
         start_epoch = int(checkpoint["epoch"]) + 1
         best_val = float(checkpoint.get("best_val_loss", best_val))
         history = checkpoint.get("history", history)
+    elif args.init_checkpoint:
+        init_checkpoint = Path(args.init_checkpoint)
+        if not init_checkpoint.is_absolute():
+            init_checkpoint = exp_dir / "checkpoints" / init_checkpoint
+        if not init_checkpoint.exists():
+            raise FileNotFoundError(f"Initial checkpoint missing: {init_checkpoint}")
+        checkpoint = torch.load(init_checkpoint, map_location=device)
+        model.load_state_dict(checkpoint.get("model_state_dict", checkpoint))
+        print(f"Initialized model weights from {init_checkpoint}", flush=True)
 
     resolved = {
         **cfg,
@@ -427,6 +441,8 @@ def main() -> None:
 
     epochs = int(cfg.get("epochs", 150))
     save_every = int(cfg.get("save_every", 10))
+    save_last_checkpoint = bool(cfg.get("save_last_checkpoint", True))
+    save_epoch_checkpoints = bool(cfg.get("save_epoch_checkpoints", True))
     log(
         f"Atindama authors Model: {parameter_count:,} parameters | "
         f"device={device} | scale={cfg['scale']}"
@@ -461,12 +477,13 @@ def main() -> None:
             f"train={train_loss:.8e} val={val_loss:.8e}"
         )
 
-        _save_checkpoint(last_path, epoch, model, optimizer, best_val, history)
+        if save_last_checkpoint:
+            _save_checkpoint(last_path, epoch, model, optimizer, best_val, history)
         if val_loss < best_val:
             best_val = val_loss
             _save_checkpoint(best_path, epoch, model, optimizer, best_val, history)
             log(f"  -> best_model.pt updated (val={best_val:.8e})")
-        if save_every > 0 and epoch_number % save_every == 0:
+        if save_epoch_checkpoints and save_every > 0 and epoch_number % save_every == 0:
             _save_checkpoint(
                 checkpoints_dir / f"epoch_{epoch_number:04d}.pt",
                 epoch,
