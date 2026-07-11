@@ -235,6 +235,16 @@ def _load_model_from_checkpoint(
         "conv_feature_mask_temperature": float(
             getattr(cfg, "conv_feature_mask_temperature", 32.0)
         ),
+        "phase_kernel_size": int(getattr(cfg, "phase_kernel_size", 3)),
+        "phase_use_residual": bool(getattr(cfg, "phase_use_residual", True)),
+        "phase_residual_weight": float(getattr(cfg, "phase_residual_weight", 1.0)),
+        "phase_feature_mask_cosine_threshold": getattr(
+            cfg, "phase_feature_mask_cosine_threshold", None
+        ),
+        "phase_feature_mask_soft": getattr(cfg, "phase_feature_mask_soft", None),
+        "phase_feature_mask_temperature": getattr(
+            cfg, "phase_feature_mask_temperature", None
+        ),
         "hr_conv_feature_mask_cosine_threshold": getattr(
             cfg, "hr_conv_feature_mask_cosine_threshold", None
         ),

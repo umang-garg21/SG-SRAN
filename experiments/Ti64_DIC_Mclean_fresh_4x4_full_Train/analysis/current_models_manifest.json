@@ -1,0 +1,57 @@
+{
+  "experiment": "Ti64_DIC_Mclean_fresh_4x4_full_Train",
+  "experiment_root": "/data/home/umang/Materials/Reynolds-QSR_paper/experiments/Ti64_DIC_Mclean_fresh_4x4_full_Train",
+  "analysis_out": "/data/home/umang/Materials/Reynolds-QSR_paper/experiments/Ti64_DIC_Mclean_fresh_4x4_full_Train/analysis",
+  "material_symmetry": "D6h",
+  "split_policy": "Use the existing Train/Val/Test split already present in the dataset.",
+  "runs": [
+    {
+      "name": "Atindama",
+      "slug": "atindama_inpainting_4x4_fresh_ti64_dic_mclean",
+      "inference_dir": "/data/home/umang/Materials/Reynolds-QSR_paper/experiments/Ti64_DIC_Mclean_fresh_4x4_full_Train/atindama_inpainting_4x4_fresh_ti64_dic_mclean/inference/test_best",
+      "summary": "/data/home/umang/Materials/Reynolds-QSR_paper/experiments/Ti64_DIC_Mclean_fresh_4x4_full_Train/atindama_inpainting_4x4_fresh_ti64_dic_mclean/inference/test_best/summary.json"
+    },
+    {
+      "name": "EDSR",
+      "slug": "edsr_4x4_fresh_ti64_dic_mclean",
+      "inference_dir": "/data/home/umang/Materials/Reynolds-QSR_paper/experiments/Ti64_DIC_Mclean_fresh_4x4_full_Train/edsr_4x4_fresh_ti64_dic_mclean/inference/test_best",
+      "summary": "/data/home/umang/Materials/Reynolds-QSR_paper/experiments/Ti64_DIC_Mclean_fresh_4x4_full_Train/edsr_4x4_fresh_ti64_dic_mclean/inference/test_best/summary.json"
+    },
+    {
+      "name": "HAN",
+      "slug": "han_4x4_fresh_ti64_dic_mclean",
+      "inference_dir": "/data/home/umang/Materials/Reynolds-QSR_paper/experiments/Ti64_DIC_Mclean_fresh_4x4_full_Train/han_4x4_fresh_ti64_dic_mclean/inference/test_best",
+      "summary": "/data/home/umang/Materials/Reynolds-QSR_paper/experiments/Ti64_DIC_Mclean_fresh_4x4_full_Train/han_4x4_fresh_ti64_dic_mclean/inference/test_best/summary.json"
+    },
+    {
+      "name": "RCAN",
+      "slug": "rcan_4x4_fresh_ti64_dic_mclean",
+      "inference_dir": "/data/home/umang/Materials/Reynolds-QSR_paper/experiments/Ti64_DIC_Mclean_fresh_4x4_full_Train/rcan_4x4_fresh_ti64_dic_mclean/inference/test_best",
+      "summary": "/data/home/umang/Materials/Reynolds-QSR_paper/experiments/Ti64_DIC_Mclean_fresh_4x4_full_Train/rcan_4x4_fresh_ti64_dic_mclean/inference/test_best/summary.json"
+    },
+    {
+      "name": "SAN",
+      "slug": "san_4x4_fresh_ti64_dic_mclean",
+      "inference_dir": "/data/home/umang/Materials/Reynolds-QSR_paper/experiments/Ti64_DIC_Mclean_fresh_4x4_full_Train/san_4x4_fresh_ti64_dic_mclean/inference/test_best",
+      "summary": "/data/home/umang/Materials/Reynolds-QSR_paper/experiments/Ti64_DIC_Mclean_fresh_4x4_full_Train/san_4x4_fresh_ti64_dic_mclean/inference/test_best/summary.json"
+    },
+    {
+      "name": "Q-RBSA",
+      "slug": "qrbsa_adapted_4x4_fresh_ti64_dic_mclean",
+      "inference_dir": "/data/home/umang/Materials/Reynolds-QSR_paper/experiments/Ti64_DIC_Mclean_fresh_4x4_full_Train/qrbsa_adapted_4x4_fresh_ti64_dic_mclean/inference/test_best",
+      "summary": "/data/home/umang/Materials/Reynolds-QSR_paper/experiments/Ti64_DIC_Mclean_fresh_4x4_full_Train/qrbsa_adapted_4x4_fresh_ti64_dic_mclean/inference/test_best/summary.json"
+    },
+    {
+      "name": "QEDSR",
+      "slug": "qedsr_4x4_fresh_ti64_dic_mclean",
+      "inference_dir": "/data/home/umang/Materials/Reynolds-QSR_paper/experiments/Ti64_DIC_Mclean_fresh_4x4_full_Train/qedsr_4x4_fresh_ti64_dic_mclean/inference/test_best",
+      "summary": "/data/home/umang/Materials/Reynolds-QSR_paper/experiments/Ti64_DIC_Mclean_fresh_4x4_full_Train/qedsr_4x4_fresh_ti64_dic_mclean/inference/test_best/summary.json"
+    },
+    {
+      "name": "OCRP w5-local",
+      "slug": "ocrp_direct_reynolds_isometric_l6_w5local_4x4_fresh_ti64_dic_mclean",
+      "inference_dir": "/data/home/umang/Materials/Reynolds-QSR_paper/experiments/Ti64_DIC_Mclean_fresh_4x4_full_Train/ocrp_direct_reynolds_isometric_l6_w5local_4x4_fresh_ti64_dic_mclean/inference/test_best",
+      "summary": "/data/home/umang/Materials/Reynolds-QSR_paper/experiments/Ti64_DIC_Mclean_fresh_4x4_full_Train/ocrp_direct_reynolds_isometric_l6_w5local_4x4_fresh_ti64_dic_mclean/inference/test_best/summary.json"
+    }
+  ]
+}
