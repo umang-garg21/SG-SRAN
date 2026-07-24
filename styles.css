@@ -102,7 +102,7 @@ nav a:focus-visible {
   align-items: center;
   overflow: hidden;
   color: white;
-  background-image: url("assets/in718-reconstruction.webp");
+  background-image: url("docs/assets/in718-reconstruction.webp");
   background-position: center 58%;
   background-size: cover;
 }
