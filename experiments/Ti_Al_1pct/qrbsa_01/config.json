@@ -1,0 +1,17 @@
+{
+  "dataset_root": "/data/home/umang/Materials/Materials_data_mount/datasets/Ti_Al_1pct_QSR_4x1",
+  "scale": 4,
+  "epochs": 200,
+  "batch_size": 4,
+  "num_workers": 4,
+  "lr": 0.0002,
+  "weight_decay": 0.0001,
+  "warmup_epochs": 3,
+  "min_lr": 1e-6,
+  "seed": 42,
+  "save_every": 10,
+  "viz_every": 1,
+  "val_freq": 1,
+  "n_resblocks": 16,
+  "n_feats": 64
+}

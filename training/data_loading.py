@@ -7,20 +7,9 @@ Contact:     wzamudio@ucsb.edu
 Description: Data loading utilities for quaternion super-resolution using the quaternion_dataset object.
 """
 
-import os
-import re
-import glob
-import json
-import torch
-import numpy as np
-from typing import List, Tuple, Optional
-from torch.utils.data import Dataset
-from concurrent.futures import ThreadPoolExecutor
-from utils.quat_ops import to_spatial_quat
-
-import torch
 import random
 import numpy as np
+import torch
 from torch.utils.data import DataLoader
 from typing import Optional
 
@@ -56,11 +45,15 @@ def build_dataloader(
     preload_torch: bool = False,
     persistent_workers: bool = False,
     prefetch_factor: int = 2,
+    drop_last: bool = False,
     take_first: Optional[int] = None,
     distributed: bool = False,
     rank: int = 0,
     world_size: int = 1,
     seed: int = 42,  # Seed parameter for reproducibility
+    return_lr_boundary_map: bool = False,
+    lr_boundary_angle_deg: float = 5.0,
+    lr_boundary_mark_both_sides: bool = True,
 ) -> DataLoader:
     """
     Build a DataLoader for quaternion SR datasets.
@@ -97,7 +90,12 @@ def build_dataloader(
         Total number of processes for DDP
     seed : int
         Random seed for reproducibility (default: 42)
-
+    return_lr_boundary_map : bool
+        If True, dataset returns (lr, hr, lr_boundary_map) batches.
+    lr_boundary_angle_deg : float
+        Quaternion-angle threshold (degrees) used to extract LR boundaries.
+    lr_boundary_mark_both_sides : bool
+        If True, mark both pixels adjacent to a boundary edge.
     Returns
     -------
     DataLoader
@@ -109,6 +107,9 @@ def build_dataloader(
         preload_torch=preload_torch,
         pin_memory=pin_memory,
         take_first=take_first,
+        return_lr_boundary_map=return_lr_boundary_map,
+        lr_boundary_angle_deg=lr_boundary_angle_deg,
+        lr_boundary_mark_both_sides=lr_boundary_mark_both_sides,
     )
 
     # Generator for deterministic shuffling
@@ -133,6 +134,7 @@ def build_dataloader(
         ds,
         batch_size=batch_size,
         shuffle=shuffle if split == "Train" and sampler is None else False,
+        drop_last=bool(drop_last),
         num_workers=num_workers,
         pin_memory=pin_memory,
         persistent_workers=persistent_workers and num_workers > 0,

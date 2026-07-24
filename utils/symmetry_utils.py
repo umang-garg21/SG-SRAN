@@ -28,6 +28,7 @@ _SYM_ALIASES = {
     "hcp": "D6h",
     "hex": "D6h",
     "6/mmm": "D6h",
+    "d6": "D6h",
     "d6h": "D6h",
     # tetragonal / orthorhombic
     "d4h": "D4h",
@@ -59,6 +60,31 @@ def resolve_symmetry(sym):
     if hasattr(SYM, canon):
         return getattr(SYM, canon)
     raise ValueError(f"Unknown symmetry: {sym}")
+
+
+def proper_symmetry_quaternions(sym, decimals: int = 7) -> np.ndarray:
+    """Return unique proper rotation quaternions, identifying q and -q.
+
+    Centrosymmetric orix point groups such as Oh and D6h contain inversion-
+    related duplicates in ``sym.data``. Crystal-orientation misorientation uses
+    only the proper rotational subgroup: O (24 rotations) or D6 (12 rotations).
+    """
+    symmetry = resolve_symmetry(sym)
+    quaternions = np.asarray(symmetry.data, dtype=np.float64).copy()
+    improper = np.asarray(
+        getattr(symmetry, "improper", np.zeros(len(quaternions), dtype=bool)),
+        dtype=bool,
+    )
+    if improper.shape == (len(quaternions),):
+        quaternions = quaternions[~improper]
+    quaternions /= np.maximum(
+        np.linalg.norm(quaternions, axis=-1, keepdims=True), 1e-12
+    )
+    flip = quaternions[:, 0] < 0.0
+    quaternions[flip] *= -1.0
+    rounded = np.round(quaternions, decimals=decimals)
+    _, unique_indices = np.unique(rounded, axis=0, return_index=True)
+    return quaternions[np.sort(unique_indices)].astype(np.float32)
 
 
 def quaternion_left_matrix(q: np.ndarray) -> np.ndarray:

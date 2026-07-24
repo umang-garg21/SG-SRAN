@@ -1,36 +1,25 @@
-# training/__init__.py
-"""
-Training package for Reynolds-QSR.
+"""Training package bootstrap and shared exports."""
 
-This package provides:
-- Dataloading utilities for quaternion super-resolution
-- Training loops and Trainer class
-- Loss functions
-- Optimizer and scheduler builders
-- Config and symmetry handling helpers
-"""
+import os
+from pathlib import Path
 
-from training.trainer import Trainer
+# `orix` pulls in numba-cached helpers during import. Some environments do not
+# provide a writable/default cache locator, so we force a safe cache root early
+# before importing the rest of the training stack.
+os.environ.setdefault("NUMBA_CACHE_DIR", "/tmp/numba_cache")
+Path(os.environ["NUMBA_CACHE_DIR"]).mkdir(parents=True, exist_ok=True)
+
+from training.config_utils import load_and_prepare_config
 from training.data_loading import build_dataloader
-from training.loss_functions import build_loss
-from training.schedulers import build_scheduler
 from training.optimizer_utils import build_optimizer
-from training.config_utils import (
-    load_config,
-    preprocess_config,
-    print_config_diff,
-)
-
-# from training.symmetry_utils import prepare_symmetry_files
+from training.schedulers import build_scheduler
+from training.seed_utils import get_seed_from_config, set_seed
 
 __all__ = [
-    "Trainer",
     "build_dataloader",
-    "build_loss",
-    "build_scheduler",
     "build_optimizer",
-    "load_config",
-    "preprocess_config",
-    "print_config_diff",
-    # "prepare_symmetry_files",
+    "build_scheduler",
+    "get_seed_from_config",
+    "load_and_prepare_config",
+    "set_seed",
 ]

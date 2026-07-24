@@ -13,6 +13,3 @@ def build_optimizer(model, cfg):
         return torch.optim.Adam(model.parameters(), lr=cfg["lr"])
     else:
         raise ValueError(f"Unknown optimizer: {opt_cfg['type']}")
-
-
-from training.schedulers import build_scheduler

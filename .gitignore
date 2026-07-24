@@ -2,9 +2,6 @@ mount_data.sh
 experiments/**/runs
 experiments/**/logs
 experiments/**/checkpoints
-experiments/**/visualizations
-experiments/**/visualizations_no_SR_residual
-experiments/**/test/
 **/visualizations/
 *.npy
 # Byte-compiled / optimized / DLL files
@@ -239,3 +236,26 @@ checkpoint_*/*.npy
 # model artifacts
 *.npy
 *.npy
+*.onnx
+*.safetensors
+*.bin
+*.model
+*.weights
+*.png
+out/tmp_hcp_export.csv
+
+# Generated figures and diagnostics
+diagnostics/
+outputs/
+out/
+analysis/out/
+analysis/_dataset_comparison_tmp/
+analysis/test_dataset_comparison_outputs/
+analysis/test_dataset_comparison_resume/
+experiments/**/inference/
+**/checkpoints_*/
+**/visualizations_*/
+third_party/
+
+# Ignore the entire Paper folder
+Paper/

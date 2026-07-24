@@ -1,0 +1,43 @@
+{
+  "exp_dir": "experiments/IN718/iso_embedding_4x1_ocrp_anchorless_01",
+  "config": "experiments/IN718/iso_embedding_4x1_ocrp_anchorless_01/config_new.json",
+  "checkpoint": "experiments/IN718/iso_embedding_4x1_ocrp_anchorless_01/checkpoints/best_model.pt",
+  "split": "Test",
+  "num_samples": 2,
+  "records": [
+    {
+      "sample_id": 0,
+      "batch_index": 0,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "experiments/IN718/iso_embedding_4x1_ocrp_anchorless_01/inference/test_best_smoke/sr_quaternions/sample_000000_sr.npy",
+      "lr_npy": "experiments/IN718/iso_embedding_4x1_ocrp_anchorless_01/inference/test_best_smoke/sr_quaternions/sample_000000_lr.npy",
+      "hr_npy": "experiments/IN718/iso_embedding_4x1_ocrp_anchorless_01/inference/test_best_smoke/sr_quaternions/sample_000000_hr.npy",
+      "ipf_png": "experiments/IN718/iso_embedding_4x1_ocrp_anchorless_01/inference/test_best_smoke/ipf/sample_000000_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 1,
+      "batch_index": 0,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        256
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "experiments/IN718/iso_embedding_4x1_ocrp_anchorless_01/inference/test_best_smoke/sr_quaternions/sample_000001_sr.npy",
+      "lr_npy": "experiments/IN718/iso_embedding_4x1_ocrp_anchorless_01/inference/test_best_smoke/sr_quaternions/sample_000001_lr.npy",
+      "hr_npy": "experiments/IN718/iso_embedding_4x1_ocrp_anchorless_01/inference/test_best_smoke/sr_quaternions/sample_000001_hr.npy",
+      "ipf_png": "experiments/IN718/iso_embedding_4x1_ocrp_anchorless_01/inference/test_best_smoke/ipf/sample_000001_lr_sr_hr_ipf.png"
+    }
+  ]
+}

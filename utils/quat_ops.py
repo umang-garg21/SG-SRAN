@@ -313,6 +313,48 @@ def enforce_hemisphere(
 # ----------------------
 
 
+def quat_conjugate(q: np.ndarray) -> np.ndarray:
+    """
+    Quaternion conjugate for scalar-first quaternions (w, x, y, z).
+
+    Supports arbitrary leading dimensions with final axis size 4.
+    """
+    q = np.asarray(q, dtype=np.float32)
+    if q.shape[-1] != 4:
+        raise ValueError(f"Expected quaternion-last shape (...,4), got {q.shape}")
+    out = q.copy()
+    out[..., 1:] *= -1.0
+    return out
+
+
+def quat_mul_np(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """
+    Hamilton product for scalar-first quaternions (w, x, y, z).
+
+    Inputs are broadcast against each other; output shape is broadcast(..., 4).
+    """
+    a = np.asarray(a, dtype=np.float32)
+    b = np.asarray(b, dtype=np.float32)
+    if a.shape[-1] != 4 or b.shape[-1] != 4:
+        raise ValueError(
+            f"Expected quaternion-last inputs (...,4); got {a.shape} and {b.shape}"
+        )
+
+    aw, ax, ay, az = a[..., 0], a[..., 1], a[..., 2], a[..., 3]
+    bw, bx, by, bz = b[..., 0], b[..., 1], b[..., 2], b[..., 3]
+
+    out = np.stack(
+        [
+            aw * bw - ax * bx - ay * by - az * bz,
+            aw * bx + ax * bw + ay * bz - az * by,
+            aw * by - ax * bz + ay * bw + az * bx,
+            aw * bz + ax * by - ay * bx + az * bw,
+        ],
+        axis=-1,
+    )
+    return out.astype(np.float32, copy=False)
+
+
 def quat_left_multiply_numpy(
     q_right: np.ndarray,
     q_left: np.ndarray,
@@ -572,13 +614,24 @@ def reduce_to_fz_min_angle(
 
     # 4. Select candidate with max scalar (min misorientation angle)
     cand_2d = cand.reshape(M, N, 4)
-    w_vals = cand_2d[..., 0]
+    # Copy before masking: this scalar slice is otherwise a view into
+    # ``cand_2d``. Mutating the view used to write ``-inf`` into an output
+    # quaternion when strict floating-point FZ membership rejected all of its
+    # symmetry-equivalent candidates.
+    w_vals = cand_2d[..., 0].copy()
+    has_inside = inside_mask.any(axis=0)
     w_vals[~inside_mask] = -np.inf
 
     best_idx = np.argmax(w_vals, axis=0)
+    # A point numerically on an FZ boundary can have no candidate accepted by
+    # the strict region predicate. Select the equivalent with minimum rotation
+    # angle in that case instead of returning an invalid quaternion.
+    fallback_idx = np.argmax(np.abs(cand_2d[..., 0]), axis=0)
+    best_idx = np.where(has_inside, best_idx, fallback_idx)
     best_idx_exp = best_idx[np.newaxis, :, np.newaxis]
     q_fz = np.take_along_axis(cand_2d, best_idx_exp, axis=0).squeeze(0)
     q_fz = q_fz.reshape(q_spatial.shape)
+    enforce_hemisphere(q_fz, scalar_first=True)
 
     # 5. Return in original layout
     q_fz_out = to_quat_spatial(q_fz) if orig_first else q_fz
@@ -595,7 +648,7 @@ def format_quaternions(
     hemisphere: bool = True,
     reduce_fz: bool = False,
     sym=None,
-    quat_first: bool = False,
+    to_quat_first: bool = False,
     eps: float = 1e-12,
 ) -> np.ndarray:
     """
@@ -652,9 +705,10 @@ def format_quaternions(
             return_op_map=False,
             eps=eps,
         )
+        q_out = q_fz
 
     # 5. Final layout
-    if quat_first:
+    if to_quat_first:
         q_out = to_quat_spatial(q_out)
     else:
         q_out = to_spatial_quat(q_out)

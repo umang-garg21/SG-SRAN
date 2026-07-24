@@ -1,82 +1,78 @@
-# -*- coding:utf-8 -*-
-"""
-Unit tests for training utilities: config loading, symmetry file generation,
-and optimizer building.
-Run with: `pytest -q tests/test_training_utils.py`
-"""
+from __future__ import annotations
 
-import json
-from pathlib import Path
-import torch
+import types
+
 import numpy as np
-import training.symmetry_utils as sym_utils
-from training.config_utils import load_and_prepare_config
-from training.symmetry_utils import prepare_symmetry_files
-from training.optimizer_utils import build_optimizer
-from models.reynolds_qsr import Reynolds_QSR
+import torch
+
+from training.config_utils import deep_update, flatten_model_config, preprocess_config
+from training.seed_utils import get_seed_from_config, set_seed
+from utils.quat_ops import reduce_to_fz_min_angle
+from utils.symmetry_utils import (
+    canon_symmetry_str,
+    proper_symmetry_quaternions,
+    resolve_symmetry,
+)
 
 
-# -------------------------------------------------------------------------
-# 1. Test Config Loader
-# -------------------------------------------------------------------------
-def test_load_config_with_defaults(tmp_path):
-    user_config = {"epochs": 1, "lr": 1e-4}
-    cfg_path = tmp_path / "config.json"
-    with open(cfg_path, "w") as f:
-        json.dump(user_config, f)
-
-    cfg = load_and_prepare_config(cfg_path)
-    assert cfg["epochs"] == 1
-    assert cfg["lr"] == 1e-4
-    # ✅ merged defaults should be here
-    assert "group" in cfg
+def test_deep_update_merges_nested_dicts() -> None:
+    base = {"a": 1, "nested": {"x": 1, "y": 2}}
+    override = {"nested": {"y": 20, "z": 30}, "b": 2}
+    out = deep_update(base, override)
+    assert out["a"] == 1
+    assert out["b"] == 2
+    assert out["nested"] == {"x": 1, "y": 20, "z": 30}
 
 
-# -------------------------------------------------------------------------
-# 2. Test Symmetry File Preparation
-# -------------------------------------------------------------------------
-def test_prepare_symmetry_files(tmp_path):
-    cfg = {"group": "432"}
-
-    # ✅ Pass tmp_path to avoid writing to project folders
-    cfg_out = prepare_symmetry_files(cfg, base_dir=tmp_path)
-    sym_path = Path(cfg_out["sym_np_path"])
-    sym_inv_path = Path(cfg_out["sym_inv_np_path"])
-
-    # ✅ Assert files are inside tmp_path
-    assert sym_path.exists()
-    assert sym_inv_path.exists()
-    assert sym_path.parent == tmp_path
-    assert sym_inv_path.parent == tmp_path
-
-    # ✅ Basic shape check
-    group = np.load(sym_path)
-    group_inv = np.load(sym_inv_path)
-    assert group.shape[1:] == (4, 4)
-    assert group_inv.shape[1:] == (4, 4)
+def test_preprocess_and_flatten_model_config() -> None:
+    cfg = preprocess_config(
+        {
+            "epochs": 3,
+            "model": {"type": "iso_embedding_sr_attn"},
+            "scheduler": {"type": "step", "step_size": 7, "gamma": 0.5},
+        }
+    )
+    cfg = flatten_model_config(cfg)
+    assert cfg["epochs"] == 3
+    assert cfg["model_type"] == "iso_embedding_sr_attn"
+    assert cfg["scheduler"]["type"] == "step"
+    assert cfg["scheduler"]["step_size"] == 7
+    assert cfg["scheduler"]["gamma"] == 0.5
+    assert "lr" in cfg
 
 
-# -------------------------------------------------------------------------
-# 3. Test Optimizer Builder
-# -------------------------------------------------------------------------
-def test_build_optimizer(tmp_path):
-    cfg = {
-        "lr": 0.001,
-        "optimizer": {"type": "AdamW", "weight_decay": 0.01},
-        "n_feats": 8,
-        "scale": 2,
-        "kernel_size": 3,
-        "group": "432",
-        "sym_np_path": str(tmp_path / "sym.npy"),
-        "sym_inv_np_path": str(tmp_path / "sym_inv.npy"),
-    }
+def test_get_seed_from_config_dict_and_namespace() -> None:
+    assert get_seed_from_config({"seed": 7}) == 7
+    ns = types.SimpleNamespace(seed=13)
+    assert get_seed_from_config(ns) == 13
+    assert get_seed_from_config({}, default=19) == 19
 
-    np.save(cfg["sym_np_path"], np.eye(4, dtype=np.float32))
-    np.save(cfg["sym_inv_np_path"], np.eye(4, dtype=np.float32))
 
-    model = Reynolds_QSR(cfg)
-    opt = build_optimizer(model, cfg)
+def test_set_seed_is_deterministic_for_torch() -> None:
+    set_seed(123)
+    a = torch.randn(5)
+    set_seed(123)
+    b = torch.randn(5)
+    assert torch.allclose(a, b)
 
-    assert isinstance(opt, torch.optim.AdamW)
-    assert opt.defaults["lr"] == 0.001
-    assert opt.defaults["weight_decay"] == 0.01
+
+def test_proper_rotation_subgroups_for_hcp_and_cubic() -> None:
+    assert canon_symmetry_str("D6") == "D6h"
+    assert proper_symmetry_quaternions("D6h").shape == (12, 4)
+    assert proper_symmetry_quaternions("Oh").shape == (24, 4)
+
+
+def test_fz_reduction_never_emits_nonfinite_quaternions() -> None:
+    rng = np.random.default_rng(7)
+    quaternions = rng.normal(size=(64, 64, 4)).astype(np.float32)
+    for symmetry_name in ("Oh", "D6h"):
+        reduced = reduce_to_fz_min_angle(
+            quaternions.copy(),
+            sym=resolve_symmetry(symmetry_name).proper_subgroup,
+        )
+        assert np.isfinite(reduced).all()
+        np.testing.assert_allclose(
+            np.linalg.norm(reduced, axis=-1),
+            1.0,
+            atol=2e-5,
+        )

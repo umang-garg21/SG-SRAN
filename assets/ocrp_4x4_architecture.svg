@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="520" viewBox="0 0 1200 520">
+  <defs>
+    <style>
+      .title { font: 700 20px 'DejaVu Sans', sans-serif; fill: #1f2a44; }
+      .label { font: 600 14px 'DejaVu Sans', sans-serif; fill: #1f2a44; }
+      .note { font: 400 12px 'DejaVu Sans', sans-serif; fill: #1f2a44; }
+      .box { fill: #f4f6fb; stroke: #1f2a44; stroke-width: 2; rx: 12; ry: 12; }
+      .box2 { fill: #eef7f1; stroke: #1f2a44; stroke-width: 2; rx: 12; ry: 12; }
+      .box3 { fill: #fdf4ea; stroke: #1f2a44; stroke-width: 2; rx: 12; ry: 12; }
+      .arrow { stroke: #1f2a44; stroke-width: 2; fill: none; marker-end: url(#arrow); }
+    </style>
+    <marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <path d="M0,0 L10,4 L0,8 Z" fill="#1f2a44" />
+    </marker>
+  </defs>
+
+  <text x="40" y="40" class="title">OCRP 4x4 Super-Resolution Flow</text>
+
+  <rect x="40" y="80" width="210" height="70" class="box" />
+  <text x="55" y="110" class="label">LR Quaternions</text>
+  <text x="55" y="130" class="note">(H x W x 4)</text>
+
+  <rect x="300" y="80" width="220" height="70" class="box" />
+  <text x="315" y="110" class="label">Local Iso Encoder</text>
+  <text x="315" y="130" class="note">Symmetry-aware features</text>
+
+  <rect x="580" y="80" width="230" height="70" class="box" />
+  <text x="595" y="110" class="label">LR Feature Map</text>
+  <text x="595" y="130" class="note">Equivariant tokens</text>
+
+  <rect x="40" y="200" width="320" height="130" class="box2" />
+  <text x="55" y="225" class="label">OCRP Routing</text>
+  <text x="55" y="248" class="note">Patch bank + quaternion clusters</text>
+  <text x="55" y="270" class="note">Slot builder + pooled contexts</text>
+  <text x="55" y="292" class="note">Router assigns HR patch tokens</text>
+
+  <rect x="420" y="200" width="230" height="130" class="box2" />
+  <text x="435" y="225" class="label">Patch Proposals</text>
+  <text x="435" y="248" class="note">Slot-conditioned HR patches</text>
+  <text x="435" y="270" class="note">Straight-through routing</text>
+  <text x="435" y="292" class="note">Assemble HR features</text>
+
+  <rect x="700" y="200" width="250" height="130" class="box3" />
+  <text x="715" y="225" class="label">HR Refinement</text>
+  <text x="715" y="248" class="note">Masked equivariant convs</text>
+  <text x="715" y="270" class="note">Residual feature mixing</text>
+
+  <rect x="980" y="200" width="200" height="130" class="box" />
+  <text x="995" y="225" class="label">Decoder</text>
+  <text x="995" y="248" class="note">Cubochoric sampling</text>
+  <text x="995" y="270" class="note">Optimize to quaternions</text>
+
+  <rect x="980" y="360" width="200" height="70" class="box" />
+  <text x="995" y="390" class="label">SR Quaternions</text>
+  <text x="995" y="410" class="note">(4H x 4W x 4)</text>
+
+  <line x1="250" y1="115" x2="300" y2="115" class="arrow" />
+  <line x1="520" y1="115" x2="580" y2="115" class="arrow" />
+  <line x1="695" y1="150" x2="200" y2="200" class="arrow" />
+  <line x1="360" y1="265" x2="420" y2="265" class="arrow" />
+  <line x1="650" y1="265" x2="700" y2="265" class="arrow" />
+  <line x1="950" y1="265" x2="980" y2="265" class="arrow" />
+  <line x1="1080" y1="330" x2="1080" y2="360" class="arrow" />
+</svg>

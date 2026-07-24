@@ -1,0 +1,41 @@
+{
+  "mode": "data",
+  "input_path": "/data/warren/materials/materials_data_mount/x_slice_0100.npy",
+  "input_source": "npy:data",
+  "features_path": "out/x_slice_0100_irreps.npz",
+  "features_source": "file:out/x_slice_0100_irreps.npz",
+  "features_key": "features",
+  "quaternion_shape": [
+    420,
+    549,
+    4
+  ],
+  "feature_shape": [
+    420,
+    549,
+    220
+  ],
+  "n_total": 230580,
+  "n_scatter": 40000,
+  "symmetry": "m-3m",
+  "ref_dir": "Z",
+  "bins": 30,
+  "pca_var_ratio": [
+    0.05981940531312938,
+    0.0504450666954996
+  ],
+  "scalar_order_input": "xyzw",
+  "quaternion_convention_after_conversion": "bunge_passive_wxyz",
+  "basis_ranks": null,
+  "verify_symmetry": false,
+  "invariance_stats": null,
+  "saved_plots": [
+    "out/x_slice_0100_irrep_mapping/quat_irrep_mapping_overview.png",
+    "out/x_slice_0100_irrep_mapping/quat_irrep_feature_surface.png",
+    "out/x_slice_0100_irrep_mapping/quat_irrep_feature_hexbin.png",
+    "out/x_slice_0100_irrep_mapping/quat_irrep_stereo_density.png",
+    "out/x_slice_0100_irrep_mapping/quat_irrep_feature_marginals.png",
+    "out/x_slice_0100_irrep_mapping/quat_irrep_bin_centroid_correspondence.png",
+    "out/x_slice_0100_irrep_mapping/quat_irrep_spatial_bin_id_map.png"
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "ls": [
+    4,
+    6,
+    8,
+    10,
+    12
+  ],
+  "basis_ranks": {
+    "4": 1,
+    "6": 1,
+    "8": 1,
+    "10": 1,
+    "12": 2
+  },
+  "n_theta": 181,
+  "n_phi": 361,
+  "heatmap_enabled": true,
+  "lobe3d_enabled": true,
+  "lobe_elev": 24.0,
+  "lobe_azim": 42.0,
+  "symmetry_group": "proper cubic O (24)",
+  "quaternion_convention": "Bunge passive inverse symmetries [w,x,y,z]"
+}

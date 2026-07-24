@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta
+      name="description"
+      content="SG-SRAN performs crystal-symmetry-aware super-resolution of EBSD orientation maps in an invariant latent space."
+    >
+    <meta property="og:title" content="SG-SRAN">
+    <meta
+      property="og:description"
+      content="Symmetry-aware super-resolution of crystal orientation maps via invariant latent-space learning."
+    >
+    <meta property="og:image" content="assets/in718-reconstruction.webp">
+    <meta name="theme-color" content="#173f35">
+    <title>SG-SRAN | Symmetry-aware EBSD super-resolution</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="site-header">
+      <a class="wordmark" href="#top" aria-label="SG-SRAN home">SG-SRAN</a>
+      <nav aria-label="Primary navigation">
+        <a href="#method">Method</a>
+        <a href="#evidence">Evidence</a>
+        <a href="#use">Use</a>
+        <a href="https://github.com/umang-garg21/SG-SRAN">Code</a>
+      </nav>
+    </header>
+
+    <main id="main">
+      <section class="hero" id="top" aria-labelledby="hero-title">
+        <div class="hero-scrim" aria-hidden="true"></div>
+        <div class="hero-content">
+          <p class="eyebrow">Crystal orientation super-resolution</p>
+          <h1 id="hero-title">SG-SRAN</h1>
+          <p class="hero-subtitle">
+            Symmetry-aware super-resolution of EBSD orientation maps via
+            invariant latent-space learning.
+          </p>
+          <p class="hero-summary">
+            The model respects crystal symmetry before it learns spatial
+            reconstruction, then routes high-resolution predictions among
+            locally supported orientation branches.
+          </p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="#method">Read the method</a>
+            <a class="button button-secondary" href="https://github.com/umang-garg21/SG-SRAN">
+              View repository
+            </a>
+          </div>
+        </div>
+      </section>
+
+      <section class="facts" aria-label="Project summary">
+        <div class="section-inner fact-grid">
+          <div>
+            <strong>FCC</strong>
+            <span>proper cubic group O</span>
+          </div>
+          <div>
+            <strong>HCP</strong>
+            <span>proper hexagonal group D6</span>
+          </div>
+          <div>
+            <strong>4x4</strong>
+            <span>reported reconstruction setting</span>
+          </div>
+          <div>
+            <strong>27-49k</strong>
+            <span>trainable backbone parameters</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="method">
+        <div class="section-inner">
+          <div class="section-heading">
+            <p class="eyebrow">Method</p>
+            <h2>Work on orientations, not raw coordinates</h2>
+            <p>
+              A crystal orientation is an equivalence class in
+              <span class="math">SO(3)/G</span>. SG-SRAN encodes that quotient
+              structure explicitly and keeps the learned backbone compact.
+            </p>
+          </div>
+
+          <div class="method-steps">
+            <article>
+              <span class="step-index">01</span>
+              <h3>Encode</h3>
+              <p>
+                Direct Reynolds projection sends symmetry-equivalent
+                orientations to the same latent representation.
+              </p>
+            </article>
+            <article>
+              <span class="step-index">02</span>
+              <h3>Route</h3>
+              <p>
+                Feature-space clusters define local candidates. The router
+                selects a candidate for each high-resolution subpixel.
+              </p>
+            </article>
+            <article>
+              <span class="step-index">03</span>
+              <h3>Refine and decode</h3>
+              <p>
+                High-resolution convolutions refine the routed field before a
+                fixed dictionary returns unit quaternions.
+              </p>
+            </article>
+          </div>
+
+          <figure class="wide-figure">
+            <img
+              src="assets/sgsran-pipeline.webp"
+              alt="SG-SRAN pipeline from low-resolution EBSD orientations through invariant encoding, routed upsampling, refinement, and dictionary decoding"
+            >
+            <figcaption>
+              End-to-end SG-SRAN pipeline and the local support, proposal, and
+              routing operations inside the upsampler.
+            </figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section class="section representation">
+        <div class="section-inner representation-grid">
+          <div class="representation-copy">
+            <p class="eyebrow">Representation</p>
+            <h2>One construction, symmetry-specific harmonic content</h2>
+            <p>
+              The FCC encoder uses one degree-4 even block and produces a
+              9-dimensional feature. The HCP encoder retains degrees 2, 4,
+              and 6 and produces a 40-dimensional feature.
+            </p>
+            <p>
+              Fixed block scales calibrate the local latent metric so that
+              small feature distances track small misorientation angles.
+              The encoder-dictionary pair is then checked by round-trip
+              recovery on the experimental orientations.
+            </p>
+            <dl class="representation-spec">
+              <div>
+                <dt>FCC / O</dt>
+                <dd>1 x 4e, l = {4}</dd>
+              </div>
+              <div>
+                <dt>HCP / D6</dt>
+                <dd>1 x 2e + 1 x 4e + 2 x 6e</dd>
+              </div>
+            </dl>
+          </div>
+          <figure>
+            <img
+              src="assets/invariant-encoder.webp"
+              alt="FCC and HCP invariant encoder fields, local distance response, and symmetry-copy precision"
+            >
+            <figcaption>
+              Invariant fields, local metric response, and numerical
+              invariance for FCC and HCP.
+            </figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section class="section" id="evidence">
+        <div class="section-inner">
+          <div class="section-heading">
+            <p class="eyebrow">Evidence</p>
+            <h2>Evaluation across two crystal systems</h2>
+            <p>
+              The study compares four deterministic interpolants and seven
+              learned baselines over five seeds, with symmetry-aware
+              misorientation, IPF fidelity, and boundary metrics.
+            </p>
+          </div>
+
+          <div class="evidence-strip">
+            <div>
+              <strong>0.0076 rad</strong>
+              <span>FCC encoder-dictionary round trip</span>
+            </div>
+            <div>
+              <strong>0.0079 rad</strong>
+              <span>HCP encoder-dictionary round trip</span>
+            </div>
+            <div>
+              <strong>Zero-shot</strong>
+              <span>evaluation on unseen FCC and HCP alloys</span>
+            </div>
+          </div>
+
+          <div class="result-grid">
+            <figure>
+              <img
+                src="assets/in718-reconstruction.webp"
+                alt="IN718 FCC low-resolution input, SG-SRAN reconstruction, high-resolution target, residual, and IPF key"
+              >
+              <figcaption>
+                <strong>IN718, FCC.</strong> Low-resolution input, SG-SRAN
+                reconstruction, high-resolution target, and IPF-space residual.
+              </figcaption>
+            </figure>
+            <figure>
+              <img
+                src="assets/ti6al4v-reconstruction.webp"
+                alt="Ti-6Al-4V HCP low-resolution input, SG-SRAN reconstruction, high-resolution target, residual, and IPF key"
+              >
+              <figcaption>
+                <strong>Ti-6Al-4V, HCP.</strong> Low-resolution input, SG-SRAN
+                reconstruction, high-resolution target, and IPF-space residual.
+              </figcaption>
+            </figure>
+          </div>
+        </div>
+      </section>
+
+      <section class="section use-section" id="use">
+        <div class="section-inner">
+          <div class="section-heading">
+            <p class="eyebrow">Use</p>
+            <h2>Train, infer, and inspect</h2>
+            <p>
+              Reference configurations preserve the reported FCC and HCP
+              encoder, routing, and refinement settings.
+            </p>
+          </div>
+
+          <div class="use-grid">
+            <div>
+              <h3>Prepare data</h3>
+              <p>
+                Each dataset root contains <code>dataset_info.json</code> and
+                matched quaternion arrays under
+                <code>Train</code>, <code>Val</code>, and <code>Test</code>.
+              </p>
+            </div>
+            <div>
+              <h3>Select symmetry</h3>
+              <p>
+                Start from <code>configs/in718_fcc_4x4.json</code> or
+                <code>configs/ti6al4v_hcp_4x4.json</code>, then set
+                <code>dataset_root</code>.
+              </p>
+            </div>
+            <div>
+              <h3>Check outputs</h3>
+              <p>
+                Inference writes unit-quaternion arrays, IPF maps, and summary
+                metrics under the experiment directory.
+              </p>
+            </div>
+          </div>
+
+          <div class="commands" aria-label="Training and inference commands">
+            <div>
+              <p class="command-label">Train</p>
+              <pre><code>python -m training.train_iso_embedding_ocrp \
+  --exp_dir experiments/IN718/sgsran_4x4 \
+  --config config_new.json \
+  --gpu_ids 0</code></pre>
+            </div>
+            <div>
+              <p class="command-label">Infer</p>
+              <pre><code>python -m inference.infer_iso_embedding_sr_attn \
+  --exp_dir experiments/IN718/sgsran_4x4 \
+  --config config_new.json \
+  --checkpoint best_model.pt \
+  --split Test \
+  --gpu_ids 0</code></pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="repo-section">
+        <div class="section-inner repo-inner">
+          <div>
+            <p class="eyebrow">Repository</p>
+            <h2>Implementation and diagnostics</h2>
+            <p>
+              The repository includes the invariant encoders, routed backbone,
+              training and inference entry points, representation diagnostics,
+              and regression tests.
+            </p>
+          </div>
+          <a class="button button-dark" href="https://github.com/umang-garg21/SG-SRAN">
+            Open SG-SRAN on GitHub
+          </a>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="section-inner footer-inner">
+        <strong>SG-SRAN</strong>
+        <span>Symmetry-aware EBSD orientation super-resolution</span>
+      </div>
+    </footer>
+  </body>
+</html>

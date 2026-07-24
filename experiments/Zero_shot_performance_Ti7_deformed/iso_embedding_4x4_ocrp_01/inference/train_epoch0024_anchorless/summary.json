@@ -1,0 +1,349 @@
+{
+  "exp_dir": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01",
+  "config": "/tmp/zero_shot_cx250_4x4_anchorless_infer.json",
+  "checkpoint": "/data/home/umang/Materials/Reynolds-QSR_4x1_prev_git/experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/checkpoints/epoch_0024.pt",
+  "split": "Train",
+  "num_samples": 20,
+  "records": [
+    {
+      "sample_id": 0,
+      "batch_index": 0,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        64
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000000_sr.npy",
+      "lr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000000_lr.npy",
+      "hr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000000_hr.npy",
+      "ipf_png": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/ipf/sample_000000_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 1,
+      "batch_index": 0,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        64
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000001_sr.npy",
+      "lr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000001_lr.npy",
+      "hr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000001_hr.npy",
+      "ipf_png": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/ipf/sample_000001_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 2,
+      "batch_index": 1,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        64
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000002_sr.npy",
+      "lr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000002_lr.npy",
+      "hr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000002_hr.npy",
+      "ipf_png": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/ipf/sample_000002_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 3,
+      "batch_index": 1,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        64
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000003_sr.npy",
+      "lr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000003_lr.npy",
+      "hr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000003_hr.npy",
+      "ipf_png": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/ipf/sample_000003_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 4,
+      "batch_index": 2,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        64
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000004_sr.npy",
+      "lr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000004_lr.npy",
+      "hr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000004_hr.npy",
+      "ipf_png": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/ipf/sample_000004_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 5,
+      "batch_index": 2,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        64
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000005_sr.npy",
+      "lr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000005_lr.npy",
+      "hr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000005_hr.npy",
+      "ipf_png": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/ipf/sample_000005_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 6,
+      "batch_index": 3,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        64
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000006_sr.npy",
+      "lr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000006_lr.npy",
+      "hr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000006_hr.npy",
+      "ipf_png": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/ipf/sample_000006_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 7,
+      "batch_index": 3,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        64
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000007_sr.npy",
+      "lr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000007_lr.npy",
+      "hr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000007_hr.npy",
+      "ipf_png": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/ipf/sample_000007_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 8,
+      "batch_index": 4,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        64
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000008_sr.npy",
+      "lr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000008_lr.npy",
+      "hr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000008_hr.npy",
+      "ipf_png": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/ipf/sample_000008_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 9,
+      "batch_index": 4,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        64
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000009_sr.npy",
+      "lr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000009_lr.npy",
+      "hr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000009_hr.npy",
+      "ipf_png": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/ipf/sample_000009_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 10,
+      "batch_index": 5,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        64
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000010_sr.npy",
+      "lr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000010_lr.npy",
+      "hr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000010_hr.npy",
+      "ipf_png": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/ipf/sample_000010_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 11,
+      "batch_index": 5,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        64
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000011_sr.npy",
+      "lr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000011_lr.npy",
+      "hr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000011_hr.npy",
+      "ipf_png": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/ipf/sample_000011_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 12,
+      "batch_index": 6,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        64
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000012_sr.npy",
+      "lr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000012_lr.npy",
+      "hr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000012_hr.npy",
+      "ipf_png": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/ipf/sample_000012_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 13,
+      "batch_index": 6,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        64
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000013_sr.npy",
+      "lr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000013_lr.npy",
+      "hr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000013_hr.npy",
+      "ipf_png": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/ipf/sample_000013_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 14,
+      "batch_index": 7,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        64
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000014_sr.npy",
+      "lr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000014_lr.npy",
+      "hr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000014_hr.npy",
+      "ipf_png": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/ipf/sample_000014_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 15,
+      "batch_index": 7,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        64
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000015_sr.npy",
+      "lr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000015_lr.npy",
+      "hr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000015_hr.npy",
+      "ipf_png": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/ipf/sample_000015_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 16,
+      "batch_index": 8,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        64
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000016_sr.npy",
+      "lr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000016_lr.npy",
+      "hr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000016_hr.npy",
+      "ipf_png": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/ipf/sample_000016_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 17,
+      "batch_index": 8,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        64
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000017_sr.npy",
+      "lr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000017_lr.npy",
+      "hr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000017_hr.npy",
+      "ipf_png": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/ipf/sample_000017_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 18,
+      "batch_index": 9,
+      "in_batch_index": 0,
+      "lr_shape": [
+        64,
+        64
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000018_sr.npy",
+      "lr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000018_lr.npy",
+      "hr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000018_hr.npy",
+      "ipf_png": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/ipf/sample_000018_lr_sr_hr_ipf.png"
+    },
+    {
+      "sample_id": 19,
+      "batch_index": 9,
+      "in_batch_index": 1,
+      "lr_shape": [
+        64,
+        64
+      ],
+      "hr_shape": [
+        256,
+        256
+      ],
+      "sr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000019_sr.npy",
+      "lr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000019_lr.npy",
+      "hr_npy": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/sr_quaternions/sample_000019_hr.npy",
+      "ipf_png": "experiments/Zero_shot_performance_CoNi_x250/iso_embedding_4x4_ocrp_direct_routing_01/inference/train_epoch0024_anchorless/ipf/sample_000019_lr_sr_hr_ipf.png"
+    }
+  ]
+}

@@ -1,0 +1,3 @@
+variant_label,IN718 (FCC),Ti-6Al-4V (HCP)
+"LUT + local refinement (12 steps, 8 starts)",0.0118 +/- 0.0010,0.0183 +/- 0.0012
+LUT lookup only (no refinement),0.0076 +/- 0.0006,0.0079 +/- 0.0006

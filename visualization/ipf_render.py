@@ -26,6 +26,208 @@ _DIRS = {
 }
 
 
+def _expand_ipf_key_limits_for_labels(
+    ax,
+    texts,
+    *,
+    pad_frac: float = 0.04,
+) -> None:
+    """
+    Expand the IPF key axes so native crystallographic labels fit cleanly.
+
+    The default orix label anchors are material-aware, but they sit very close
+    to the boundary of the stereographic triangle. Expanding the view limits
+    slightly keeps the labels in the surrounding white space without forcing
+    hard-coded coordinates that only work for one symmetry family.
+    """
+    visible_texts = [txt for txt in texts if txt.get_visible() and str(txt.get_text()).strip()]
+    if not visible_texts:
+        return
+
+    canvas = getattr(getattr(ax, "figure", None), "canvas", None)
+    if canvas is None:
+        return
+
+    try:
+        canvas.draw()
+        renderer = canvas.get_renderer()
+    except Exception:
+        return
+
+    x0, x1 = ax.get_xlim()
+    y0, y1 = ax.get_ylim()
+    xmin, xmax = sorted((float(x0), float(x1)))
+    ymin, ymax = sorted((float(y0), float(y1)))
+
+    for txt in visible_texts:
+        try:
+            bbox_disp = txt.get_window_extent(renderer=renderer).expanded(1.06, 1.10)
+            bbox_data = ax.transData.inverted().transform(bbox_disp.get_points())
+        except Exception:
+            continue
+        xmin = min(xmin, float(np.min(bbox_data[:, 0])))
+        xmax = max(xmax, float(np.max(bbox_data[:, 0])))
+        ymin = min(ymin, float(np.min(bbox_data[:, 1])))
+        ymax = max(ymax, float(np.max(bbox_data[:, 1])))
+
+    span_x = max(abs(float(x1) - float(x0)), 1e-6)
+    span_y = max(abs(float(y1) - float(y0)), 1e-6)
+    pad_x = float(pad_frac) * span_x
+    pad_y = float(pad_frac) * span_y
+
+    if x0 <= x1:
+        ax.set_xlim(xmin - pad_x, xmax + pad_x)
+    else:
+        ax.set_xlim(xmax + pad_x, xmin - pad_x)
+    if y0 <= y1:
+        ax.set_ylim(ymin - pad_y, ymax + pad_y)
+    else:
+        ax.set_ylim(ymax + pad_y, ymin - pad_y)
+
+
+def style_ipf_key_axes(
+    ax,
+    *,
+    title: str | None = "IPF Key",
+    title_fontsize: float = 10.0,
+    label_fontsize: float = 8.0,
+    label_margin_frac: float = 0.04,
+) -> None:
+    """
+    Draw a clean IPF key while preserving the correct symmetry-specific labels.
+
+    Unlike the previous implementation, this does not hard-code cubic label
+    strings or positions. It keeps the native orix crystallographic labels so
+    the key stays correct for cubic, hexagonal, and other supported materials.
+    """
+    ax.plot_ipf_color_key(show_title=False)
+    if title:
+        ax.set_title(
+            title,
+            fontsize=title_fontsize,
+            fontweight="semibold",
+            pad=6,
+            color="#111111",
+        )
+    else:
+        ax.set_title("")
+
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_facecolor("white")
+
+    try:
+        ax.set_xticks([])
+        ax.set_yticks([])
+    except Exception:
+        pass
+
+    for spine in getattr(ax, "spines", {}).values():
+        try:
+            spine.set_visible(False)
+        except Exception:
+            pass
+
+    for line in getattr(ax, "lines", []):
+        try:
+            line.set_color("none")
+            line.set_linewidth(0.0)
+            line.set_clip_on(True)
+        except Exception:
+            pass
+
+    for patch in getattr(ax, "patches", []):
+        try:
+            patch.set_linewidth(0.0)
+            patch.set_edgecolor("none")
+            patch.set_joinstyle("round")
+            patch.set_clip_on(True)
+        except Exception:
+            pass
+
+    for coll in getattr(ax, "collections", []):
+        try:
+            coll.set_linewidths(0.0)
+        except Exception:
+            pass
+        try:
+            coll.set_edgecolor("face")
+        except Exception:
+            pass
+
+    label_texts = []
+    for txt in list(getattr(ax, "texts", [])):
+        label = str(txt.get_text()).strip()
+        if not label:
+            try:
+                txt.set_visible(False)
+            except Exception:
+                pass
+            continue
+        try:
+            txt.set_fontsize(label_fontsize)
+            txt.set_fontweight("normal")
+            txt.set_color("#111111")
+            txt.set_clip_on(False)
+            txt.set_zorder(5)
+        except Exception:
+            pass
+        label_texts.append(txt)
+
+    _expand_ipf_key_limits_for_labels(ax, label_texts, pad_frac=label_margin_frac)
+
+
+def add_ipf_key_panel(
+    fig,
+    subplot_spec,
+    sym_class,
+    *,
+    title: str | None = "IPF Key",
+    title_fontsize: float = 10.0,
+    label_fontsize: float = 8.0,
+    title_height_ratio: float = 0.28,
+):
+    """
+    Add a dedicated white IPF-key panel with a separate title band.
+
+    Splitting the title from the key itself keeps the crystallographic labels
+    from competing with the title, which makes the layout more robust across
+    different materials and figure sizes.
+    """
+    if title:
+        title_ratio = float(np.clip(title_height_ratio, 0.15, 0.45))
+        key_cell = subplot_spec.subgridspec(
+            2,
+            1,
+            height_ratios=[title_ratio, 1.0 - title_ratio],
+            hspace=0.0,
+        )
+        ax_title = fig.add_subplot(key_cell[0, 0])
+        ax_title.set_facecolor("white")
+        ax_title.axis("off")
+        ax_title.text(
+            0.5,
+            0.45,
+            title,
+            fontsize=title_fontsize,
+            fontweight="semibold",
+            color="#111111",
+            ha="center",
+            va="center",
+        )
+        key_spec = key_cell[1, 0]
+    else:
+        key_spec = subplot_spec
+
+    ax_key = fig.add_subplot(key_spec, projection="ipf", symmetry=sym_class.laue)
+    style_ipf_key_axes(
+        ax_key,
+        title=None,
+        title_fontsize=title_fontsize,
+        label_fontsize=label_fontsize,
+    )
+    return ax_key
+
+
 # ======================================================================
 # Core RGB rendering
 # ======================================================================
@@ -125,7 +327,7 @@ def render_ipf_image(
             hemisphere=True,
             reduce_fz=True,
             sym=sym_class,
-            quat_first=False,
+            to_quat_first=False,
         )
 
     # Render RGB map(s)
@@ -157,9 +359,14 @@ def render_ipf_image(
         axes[0].axis("off")
 
     if include_key:
-        ax_ipf = fig.add_subplot(gs[0, -1], projection="ipf", symmetry=sym_class.laue)
-        ax_ipf.plot_ipf_color_key()
-        ax_ipf.set_title("")
+        add_ipf_key_panel(
+            fig,
+            gs[0, -1],
+            sym_class,
+            title="IPF Key",
+            title_fontsize=10.0,
+            label_fontsize=8.0,
+        )
 
     if out_png:
         os.makedirs(os.path.dirname(out_png) or ".", exist_ok=True)

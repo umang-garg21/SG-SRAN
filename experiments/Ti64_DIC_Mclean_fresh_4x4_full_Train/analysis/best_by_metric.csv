@@ -1,0 +1,2 @@
+dataset,mean,tol1,interior,boundary_band,boundary_f1_tol1,grain_ratio_closest,grain_wasserstein,psnr_ipf_xyz_db,ssim_ipf_xyz
+Ti64_DIC_Mclean_fresh_4x4_full_Train,OCRP w5-local,OCRP w5-local,OCRP w5-local,OCRP w5-local,SAN,OCRP w5-local,OCRP w5-local,OCRP w5-local,OCRP w5-local

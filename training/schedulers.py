@@ -12,7 +12,7 @@ import torch
 def build_scheduler(optimizer, cfg):
     """Build LR scheduler based on config."""
     sched_cfg = getattr(cfg, "scheduler", {})
-    sched_type = getattr(sched_cfg, "type", "cosine")
+    sched_type = str(getattr(sched_cfg, "type", "cosine")).strip().lower()
 
     if sched_type == "cosine":
         warmup_epochs = getattr(sched_cfg, "warmup_epochs", 1)
@@ -34,6 +34,18 @@ def build_scheduler(optimizer, cfg):
             optimizer,
             step_size=getattr(sched_cfg, "step_size", 10),
             gamma=getattr(sched_cfg, "gamma", 0.5),
+        )
+
+    elif sched_type in {"plateau", "reduce_on_plateau", "reduce_lr_on_plateau"}:
+        return torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode=str(getattr(sched_cfg, "mode", "min")),
+            factor=float(getattr(sched_cfg, "factor", 0.5)),
+            patience=int(getattr(sched_cfg, "patience", 5)),
+            threshold=float(getattr(sched_cfg, "threshold", 1e-4)),
+            threshold_mode=str(getattr(sched_cfg, "threshold_mode", "rel")),
+            cooldown=int(getattr(sched_cfg, "cooldown", 0)),
+            min_lr=float(getattr(sched_cfg, "min_lr", 1e-6)),
         )
 
     else:

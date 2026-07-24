@@ -1,0 +1,22 @@
+{
+  "history_path": "experiments/IN718/so3_o_cubic_sr_4e6e_01/checkpoints_so3o_sr_4e6e/history.json",
+  "epochs_train": 50,
+  "epochs_val": 50,
+  "best_val_epoch": 48,
+  "best_val_loss": 0.006961754156682308,
+  "last_train": {
+    "loss": 0.007931791483877128,
+    "mse": 0.007931791483877128,
+    "shell": 1.7228784822735807e-15
+  },
+  "last_val": {
+    "loss": 0.006962628804589852,
+    "mse": 0.006962628804589852,
+    "shell": 1.7199045255405503e-15,
+    "desc_l2": 0.08575831975160848
+  },
+  "plots": {
+    "training_curves": "experiments/IN718/so3_o_cubic_sr_4e6e_01/checkpoints_so3o_sr_4e6e/training_curves.png",
+    "training_curves_log": "experiments/IN718/so3_o_cubic_sr_4e6e_01/checkpoints_so3o_sr_4e6e/training_curves_log.png"
+  }
+}
