@@ -110,6 +110,5 @@ Predicted quaternions, IPF maps, and summary metrics are written under
 
 ```bash
 pytest tests/test_dynamic_symmetry_evaluator.py \
-       tests/test_iso_embedding_sr_attn_model.py \
-       tests/test_sr_ocrp_model.py
+       tests/test_training_utils.py
 ```

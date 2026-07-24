@@ -3,7 +3,7 @@ name: Deploy project site
 on:
   push:
     branches:
-      - ocrp_finalized
+      - main
     paths:
       - "docs/**"
       - ".github/workflows/pages.yml"
