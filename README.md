@@ -1,187 +1,115 @@
-# Reynolds-QSR: OCRP 4x4 Repository
+# SG-SRAN
 
-![OCRP 4x4 task overview](assets/image.png)
+**Symmetry-Group-Aware Super-Resolution Attention Network for EBSD orientation maps**
 
+[Project page](https://umang-garg21.github.io/SG-SRAN/) | [Code](https://github.com/umang-garg21/SG-SRAN)
 
-**Task overview.** Recover high-resolution crystalline orientation fields from
-low-resolution EBSD quaternion maps. OCRP (Orientation-Cluster Routed Patches)
-addresses key failure modes in baseline SR:
-- Symmetry boundary crossings: interpolate across symmetry zones via irreps.
-- Grain boundary interpolation: preserve discontinuities with masking.
-- Limited learnability from local context: route slots to capture broader
-  material statistics.
-- Interpretability gaps in learned SR: expose slot usage and routing signals.
+SG-SRAN reconstructs high-resolution crystal orientations from sparsely sampled
+EBSD maps. It treats an orientation as a point in the quotient
+`SO(3)/G`, where `G` is the crystal symmetry group, and performs
+super-resolution in a symmetry-invariant latent space.
 
-![OCRP 4x4 qualitative results](Q-RBSA/images/qual_results.jpg)
-**Qualitative results.** LR, SR, and HR orientation reconstructions.
+![SG-SRAN pipeline](docs/assets/sgsran-pipeline.webp)
 
-![3D EBSD projection](Q-RBSA/images/3D_EBSD_framework.jpg)
-**3D EBSD projection.** Context for the super-resolution targets.
+## Method
 
-This repository focuses on OCRP 4x4 quaternion super-resolution for crystalline
-orientation fields. The core workflow is:
-- Train `IsoEmbeddingSROCRP` (OCRP 4x4).
-- Run inference from LR quaternion maps to SR quaternion maps.
-- Visualize LR/SR/HR with IPF maps and OCRP stage probes.
+1. **Invariant encoding.** Direct Reynolds projection maps
+   symmetry-equivalent orientations to the same feature vector. The retained
+   harmonic degrees are `l = 4` for FCC and `l = 2, 4, 6` for HCP.
+2. **Local-isometry calibration.** Fixed block scales make small latent
+   distances track small misorientation angles.
+3. **Routed upsampling.** Local feature clusters define candidate orientation
+   branches. A learned router assigns each high-resolution subpixel to one
+   candidate before convolutional refinement.
+4. **Dictionary decoding.** A fixed symmetry-specific dictionary maps the
+   refined latent field back to unit quaternions.
 
-Legacy code and generated artifacts are preserved under `archive/`.
+![FCC and HCP invariant encoders](docs/assets/invariant-encoder.webp)
 
-## Model Snapshot
+## Scope
 
-The OCRP pipeline encodes LR quaternions into symmetry-aware equivariant
-features, routes HR patch tokens through clustered orientation slots, and
-refines HR features with masked equivariant convolutions before decoding back
-to quaternions via cubochoric sampling.
+- `4x4` EBSD orientation-map super-resolution for FCC IN718 and HCP
+  Ti-6Al-4V.
+- Crystal-symmetry-aware training and evaluation under the proper cubic `O`
+  and hexagonal `D6` rotation groups.
+- Zero-shot evaluation on unseen FCC and HCP alloys.
+- Representation, routing, boundary, scaling, and round-trip diagnostics.
 
-## Architecture Diagram
+## Evidence
 
-![OCRP 4x4 Overview](assets/ocrp_4x4_architecture.svg)
+The paper compares SG-SRAN with four deterministic interpolants and seven
+learned baselines over five seeds. The trainable backbone contains about
+`49k` parameters for FCC and `27k` for HCP, compared with `15-16M` for the
+largest learned baselines. Encoder-dictionary round-trip errors are
+`0.0076 rad` for FCC and `0.0079 rad` for HCP.
 
-The diagram highlights the OCRP routing block: local patch banks form clustered
-orientation slots, the router assigns HR patch tokens, and the assembled HR
-features are refined before decoding back to quaternions.
+<p>
+  <img src="docs/assets/in718-reconstruction.webp" width="49%" alt="IN718 FCC 4x4 reconstruction">
+  <img src="docs/assets/ti6al4v-reconstruction.webp" width="49%" alt="Ti-6Al-4V HCP 4x4 reconstruction">
+</p>
 
-## Core Files
+## Repository
 
-- `models/SR_ocrp.py`
-- `models/local_iso_embedding.py`
-- `training/train_iso_embedding_ocrp.py`
-- `training/run_iso_embedding_ocrp_IN718.sh`
-- `inference/infer_iso_embedding_sr_attn.py`
-- `inference/run_infer_iso_embedding_sr_attn.sh`
-- `analysis/probe_ocrp_stages.py`
-- `analysis/probe_ocrp_macro_stages.py`
-- `experiments/IN718/iso_embedding_4x4_ocrp_01/config_new.json`
-- `experiments/IN718/iso_embedding_4x4_ocrp_01/config_smoke.json`
+| Path | Purpose |
+| --- | --- |
+| `models/local_iso_embedding.py` | Reynolds-projected FCC and HCP encoders |
+| `models/SR_4x4_from_4x1_ocrp_anchorless.py` | Routed `4x4` SG-SRAN backbone |
+| `training/train_iso_embedding_ocrp.py` | Training entry point |
+| `inference/infer_iso_embedding_sr_attn.py` | Quaternion and IPF-map inference |
+| `configs/` | Reference FCC and HCP configurations |
+| `analysis/Table1/encoder_roundtrip_table1.py` | Encoder-dictionary round-trip evaluation |
+| `tests/` | Symmetry, encoder, routing, and entry-point regression tests |
 
-## Install
+## Environment
+
+The current implementation is tested with Python 3.10, PyTorch 2.5,
+`e3nn 0.5.9`, and `orix 0.13.0`. A CUDA-capable PyTorch installation is
+recommended for training and dictionary decoding.
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install torch torchvision
+pip install e3nn==0.5.9 orix==0.13.0
+pip install numpy scipy scikit-image scikit-learn matplotlib einops imageio opencv-python pillow tqdm tensorboard
 ```
-
-## Test
-
-```bash
-pytest
-```
-
-The active test suite is scoped to `tests/` via `pytest.ini` and ignores `archive/`.
 
 ## Train
 
-IN718 OCRP 4x4 training:
+Choose one reference configuration, copy it into an experiment directory, and
+set `dataset_root` to the corresponding prepared dataset.
 
 ```bash
+mkdir -p experiments/IN718/sgsran_4x4
+cp configs/in718_fcc_4x4.json experiments/IN718/sgsran_4x4/config_new.json
+
 python -m training.train_iso_embedding_ocrp \
-  --exp_dir experiments/IN718/iso_embedding_4x4_ocrp_01 \
+  --exp_dir experiments/IN718/sgsran_4x4 \
   --config config_new.json \
   --gpu_ids 0
 ```
 
-Resume:
+Use `configs/ti6al4v_hcp_4x4.json` for the HCP configuration. Add `--resume`
+to continue from `checkpoints/last_checkpoint.pt`.
+
+## Infer
 
 ```bash
-python -m training.train_iso_embedding_ocrp \
-  --exp_dir experiments/IN718/iso_embedding_4x4_ocrp_01 \
+python -m inference.infer_iso_embedding_sr_attn \
+  --exp_dir experiments/IN718/sgsran_4x4 \
   --config config_new.json \
-  --gpu_ids 0 \
-  --resume
-```
-
-Smoke run:
-
-```bash
-python -m training.train_iso_embedding_ocrp \
-  --exp_dir experiments/IN718/iso_embedding_4x4_ocrp_01 \
-  --config config_smoke.json \
-  --gpu_ids 0
-```
-
-Scripted run:
-
-```bash
-./training/run_iso_embedding_ocrp_IN718.sh \
-  --exp_dir experiments/IN718/iso_embedding_4x4_ocrp_01 \
-  --config config_new.json
-```
-
-## Inference
-
-```bash
-./inference/run_infer_iso_embedding_sr_attn.sh \
-  --exp_dir experiments/IN718/iso_embedding_4x4_ocrp_01 \
-  --checkpoint best_model.pt \
-  --split Test
-```
-
-Inference outputs are written to:
-- `experiments/.../inference/<split>/sr_quaternions/*.npy`
-- `experiments/.../inference/<split>/ipf/*.png`
-- `experiments/.../inference/<split>/summary.json`
-
-## Atindama Hybrid-Inpainting Baseline
-
-The authors' partial-convolution model is imported unchanged from
-`third_party/Atindama-EBSD-Restoration`. The local adapter converts passive
-scalar-first quaternions to normalized intrinsic ZXZ Euler angles and places
-the LR observations on their exact HR-grid locations.
-
-Train the 4x1 and 4x4 models:
-
-```bash
-python training/train_atindama_inpainting.py \
-  --exp_dir experiments/IN718/atindama_inpainting_4x1_01 \
-  --config config.json \
-  --gpu 0
-
-python training/train_atindama_inpainting.py \
-  --exp_dir experiments/IN718/atindama_inpainting_4x4_01 \
-  --config config.json \
-  --gpu 1
-```
-
-Run test inference:
-
-```bash
-python inference/infer_atindama_inpainting.py \
-  --exp_dir experiments/IN718/atindama_inpainting_4x1_01 \
   --checkpoint best_model.pt \
   --split Test \
-  --gpu 0
+  --gpu_ids 0
 ```
 
-The published Criminisi refinement requires a fully known exemplar patch.
-Neither periodic sampling mask contains a fully known 3x3 patch, so the exact
-second stage is reported as incompatible rather than silently changing its
-candidate-patch rule.
+Predicted quaternions, IPF maps, and summary metrics are written under
+`<exp_dir>/inference/`.
 
-## Configuration Notes
-
-Key OCRP settings live in the experiment config:
-- `upsample_factor`: set to `4` for 4x4.
-- `window_size`, `kmax_slots`: local clustering and slot routing capacity.
-- `ocrp_router_*`, `ocrp_proposal_*`: router and proposal network sizes.
-- `use_hr_conv1/2`: HR refinement stack.
-
-## OCRP Stage Probes
-
-Run stage probes for a single sample:
+## Verify
 
 ```bash
-python analysis/probe_ocrp_stages.py \
-  --exp_dir experiments/IN718/iso_embedding_4x4_ocrp_01 \
-  --split Val \
-  --sample_idx 0
-```
-
-Macro-tile probes:
-
-```bash
-python analysis/probe_ocrp_macro_stages.py \
-  --exp_dir experiments/IN718/iso_embedding_4x4_ocrp_01 \
-  --split Val \
-  --sample_idx 0
+pytest tests/test_dynamic_symmetry_evaluator.py \
+       tests/test_iso_embedding_sr_attn_model.py \
+       tests/test_sr_ocrp_model.py
 ```
